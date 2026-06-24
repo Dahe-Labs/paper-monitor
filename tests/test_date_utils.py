@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from solid_battery_monitor.date_utils import display_article_date, first_iso_date
+from paper_monitor.date_utils import display_article_date, first_iso_date
 
 
 class DateUtilsTests(unittest.TestCase):

@@ -6,8 +6,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
 
-from solid_battery_monitor.models import Article
-from solid_battery_monitor.sources import (
+from paper_monitor.models import Article
+from paper_monitor.sources import (
     build_crossref_urls,
     fetch_all_sources,
     fetch_crossref,
@@ -241,8 +241,8 @@ class SourceParsingTests(unittest.TestCase):
             "openalex": {"enabled": False},
         }
 
-        with patch("solid_battery_monitor.sources.fetch_url", side_effect=RuntimeError("network failed")):
-            with patch("solid_battery_monitor.sources.fetch_crossref", return_value=[expected]):
+        with patch("paper_monitor.sources.fetch_url", side_effect=RuntimeError("network failed")):
+            with patch("paper_monitor.sources.fetch_crossref", return_value=[expected]):
                 articles = fetch_all_sources(source_config)
 
         self.assertEqual(articles, [expected])
@@ -257,9 +257,9 @@ class SourceParsingTests(unittest.TestCase):
         """
         rss = b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"></rdf:RDF>'
 
-        with patch("solid_battery_monitor.sources.urllib.request.urlopen", return_value=FakeHTTPResponse(challenge)):
-            with patch("solid_battery_monitor.sources.shutil.which", return_value="/usr/bin/curl"):
-                with patch("solid_battery_monitor.sources.subprocess.check_output", return_value=rss) as curl:
+        with patch("paper_monitor.sources.urllib.request.urlopen", return_value=FakeHTTPResponse(challenge)):
+            with patch("paper_monitor.sources.shutil.which", return_value="/usr/bin/curl"):
+                with patch("paper_monitor.sources.subprocess.check_output", return_value=rss) as curl:
                     result = fetch_url("https://feeds.nature.com/nenergy/rss/current")
 
         self.assertEqual(result, rss)
@@ -552,7 +552,7 @@ class SourceParsingTests(unittest.TestCase):
     def test_fetch_crossref_uses_configured_timeout(self):
         payload = {"message": {"items": []}}
 
-        with patch("solid_battery_monitor.sources.fetch_url", return_value=json.dumps(payload).encode("utf-8")) as fetch:
+        with patch("paper_monitor.sources.fetch_url", return_value=json.dumps(payload).encode("utf-8")) as fetch:
             fetch_crossref(
                 {
                     "days_back": 15,

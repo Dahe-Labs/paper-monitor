@@ -1,10 +1,10 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\SolidBatteryMonitor"
-$AppData = Join-Path $env:APPDATA "SolidBatteryMonitor"
-$BuiltExe = Join-Path $Root "dist\windows\SolidBatteryMonitor.exe"
-$InstalledExe = Join-Path $InstallDir "SolidBatteryMonitor.exe"
+$InstallDir = Join-Path $env:LOCALAPPDATA "Programs\PaperMonitor"
+$AppData = Join-Path $env:APPDATA "PaperMonitor"
+$BuiltExe = Join-Path $Root "dist\windows\PaperMonitor.exe"
+$InstalledExe = Join-Path $InstallDir "PaperMonitor.exe"
 
 & "$Root\scripts\build_windows_app.ps1"
 

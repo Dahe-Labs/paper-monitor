@@ -5,12 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solid_battery_monitor.dashboard import (
+from paper_monitor.dashboard import (
     _keyword_analysis_script,
     _matched_papers_script,
     render_dashboard,
 )
-from solid_battery_monitor.journal_metrics import load_journal_metrics
+from paper_monitor.journal_metrics import load_journal_metrics
 
 
 class DashboardAndMetricsTests(unittest.TestCase):

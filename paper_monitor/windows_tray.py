@@ -15,7 +15,7 @@ from .config import load_app_config, write_default_config
 
 
 APP_NAME = DISPLAY_NAME
-APP_DIR_NAME = "SolidBatteryMonitor"
+APP_DIR_NAME = "PaperMonitor"
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -31,7 +31,7 @@ def build_refresh_command(python_executable, config_path) -> List[str]:
     return [
         str(python_executable),
         "-m",
-        "solid_battery_monitor.cli",
+        "paper_monitor.cli",
         "app-refresh",
         "--config",
         str(config_path),
@@ -188,7 +188,7 @@ class WindowsTrayApp:
             while not self._stop_event.wait(app_config.interval_seconds):
                 self.refresh_now()
 
-        thread = threading.Thread(target=worker, name="SolidBatteryMonitorRefresh", daemon=True)
+        thread = threading.Thread(target=worker, name="PaperMonitorRefresh", daemon=True)
         thread.start()
 
     def _build_icon(self):
@@ -217,8 +217,8 @@ class WindowsTrayApp:
 
 def windows_icon_path() -> Optional[Path]:
     candidates = (
-        Path(sys.executable).resolve().parent / "SolidBatteryMonitor.ico",
-        Path(__file__).resolve().parents[1] / "windows" / "assets" / "SolidBatteryMonitor.ico",
+        Path(sys.executable).resolve().parent / "PaperMonitor.ico",
+        Path(__file__).resolve().parents[1] / "windows" / "assets" / "PaperMonitor.ico",
     )
     for candidate in candidates:
         if candidate.exists():
@@ -227,7 +227,7 @@ def windows_icon_path() -> Optional[Path]:
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="SolidBatteryMonitor")
+    parser = argparse.ArgumentParser(prog="PaperMonitor")
     parser.add_argument("command", nargs="?", choices=("run", "install-startup", "uninstall-startup"), default="run")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--app-dir", type=Path)

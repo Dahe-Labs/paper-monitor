@@ -2,10 +2,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solid_battery_monitor.filtering import FilterConfig
-from solid_battery_monitor.models import Article
-from solid_battery_monitor.monitor import MonitorConfig, run_once
-from solid_battery_monitor.storage import ArticleStore
+from paper_monitor.filtering import FilterConfig
+from paper_monitor.models import Article
+from paper_monitor.monitor import MonitorConfig, run_once
+from paper_monitor.storage import ArticleStore
 
 
 class MonitorPipelineTests(unittest.TestCase):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ASSET_DIR = ROOT / "macos" / "SolidBatteryMonitorApp" / "Assets"
+ASSET_DIR = ROOT / "macos" / "PaperMonitorApp" / "Assets"
 ICONSET_DIR = ASSET_DIR / "AppIcon.iconset"
 APP_ICON_SOURCE = ASSET_DIR / "AppIconSource.png"
 

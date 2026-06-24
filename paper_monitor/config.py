@@ -9,8 +9,8 @@ from .monitor import MonitorConfig
 
 
 DEFAULT_CONFIG = {
-    "database_path": "work/solid-battery-monitor/articles.sqlite3",
-    "dashboard_path": "work/solid-battery-monitor/dashboard/latest.html",
+    "database_path": "work/paper-monitor/articles.sqlite3",
+    "dashboard_path": "work/paper-monitor/dashboard/latest.html",
     "journal_metrics_path": "journal_metrics.json",
     "settings_schema_version": 1,
     "interval_seconds": 43200,

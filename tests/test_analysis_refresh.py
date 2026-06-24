@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solid_battery_monitor.analysis_refresh import run_crossref_keyword_analysis
-from solid_battery_monitor.config import write_default_config
-from solid_battery_monitor.models import Article
+from paper_monitor.analysis_refresh import run_crossref_keyword_analysis
+from paper_monitor.config import write_default_config
+from paper_monitor.models import Article
 
 
 class CrossrefKeywordAnalysisRefreshTests(unittest.TestCase):
@@ -75,7 +75,7 @@ class CrossrefKeywordAnalysisRefreshTests(unittest.TestCase):
             self.assertEqual(result["papers"][0]["title"], "Solid electrolyte interface")
             self.assertEqual(result["papers"][0]["impact_factor"], 60.1)
             self.assertEqual(result["papers"][0]["authors"], ["Ada Lovelace", "Grace Hopper"])
-            self.assertFalse((Path(temp_dir) / "work/solid-battery-monitor/articles.sqlite3").exists())
+            self.assertFalse((Path(temp_dir) / "work/paper-monitor/articles.sqlite3").exists())
 
     def test_run_crossref_keyword_analysis_does_not_fetch_when_all_journals_are_cleared(self):
         with tempfile.TemporaryDirectory() as temp_dir:

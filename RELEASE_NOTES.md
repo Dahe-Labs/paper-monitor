@@ -1,6 +1,6 @@
-# Paper Monitor 0.1.0
+# Paper Monitor 0.1.1
 
-Initial public macOS release.
+Internal naming cleanup release.
 
 ## Included
 
@@ -9,6 +9,10 @@ Initial public macOS release.
 - Dashboard with matched papers, date grouping, sorting, and keyword analysis.
 - Settings for journal scope, refresh frequency, search terms, and journal filtering.
 - Crossref/RSS retrieval and local SQLite deduplication.
+
+## Changed
+
+- Renamed source folders, Swift targets, Python package, Windows entrypoint, app support paths, and launch labels to Paper Monitor naming.
 
 ## Notes
 

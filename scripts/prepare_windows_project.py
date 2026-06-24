@@ -4,16 +4,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TARGET = ROOT / "windows_project" / "SolidBatteryMonitorWindows"
-README_WINDOWS = r"""# Solid Battery Monitor Windows
+DEFAULT_TARGET = ROOT / "windows_project" / "PaperMonitorWindows"
+README_WINDOWS = r"""# Paper Monitor Windows
 
-This folder is the copyable Windows project for Solid Battery Monitor.
+This folder is the copyable Windows project for Paper Monitor.
 
 ## What It Contains
 
-- `solid_battery_monitor/`: the existing literature search, filtering, storage, dashboard, and Windows tray code.
-- `windows/SolidBatteryMonitor.pyw`: quiet Windows tray entrypoint.
-- `windows/assets/SolidBatteryMonitor.ico`: Windows tray/app icon.
+- `paper_monitor/`: the existing literature search, filtering, storage, dashboard, and Windows tray code.
+- `windows/PaperMonitor.pyw`: quiet Windows tray entrypoint.
+- `windows/assets/PaperMonitor.ico`: Windows tray/app icon.
 - `scripts/build_windows_app.ps1`: builds a no-console `.exe` with PyInstaller.
 - `scripts/install_windows_app.ps1`: installs the app for the current Windows user and enables startup.
 - `requirements-windows.txt`: Windows packaging/runtime dependencies.
@@ -31,7 +31,7 @@ python -m pip install -r requirements-windows.txt
 The built executable will be created under:
 
 ```powershell
-.\dist\windows\SolidBatteryMonitor.exe
+.\dist\windows\PaperMonitor.exe
 ```
 
 ## Install On Windows
@@ -43,13 +43,13 @@ The built executable will be created under:
 The installer copies the app to:
 
 ```powershell
-$env:LOCALAPPDATA\Programs\SolidBatteryMonitor\SolidBatteryMonitor.exe
+$env:LOCALAPPDATA\Programs\PaperMonitor\PaperMonitor.exe
 ```
 
 Runtime files are stored under:
 
 ```powershell
-$env:APPDATA\SolidBatteryMonitor
+$env:APPDATA\PaperMonitor
 ```
 
 The app starts silently at login and runs in the Windows system tray. Windows may place it inside the hidden tray overflow. Right-click the tray icon to open the dashboard, refresh now, or quit.
@@ -57,7 +57,7 @@ The app starts silently at login and runs in the Windows system tray. Windows ma
 ## Disable Startup
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\SolidBatteryMonitor\SolidBatteryMonitor.exe" uninstall-startup
+& "$env:LOCALAPPDATA\Programs\PaperMonitor\PaperMonitor.exe" uninstall-startup
 ```
 """
 
@@ -74,7 +74,7 @@ def prepare_windows_project(target: Path = DEFAULT_TARGET) -> Path:
     _copy_file("README.md", target)
     (target / "README_WINDOWS.md").write_text(README_WINDOWS, encoding="utf-8")
 
-    _copy_tree(ROOT / "solid_battery_monitor", target / "solid_battery_monitor")
+    _copy_tree(ROOT / "paper_monitor", target / "paper_monitor")
     _copy_tree(ROOT / "windows", target / "windows")
 
     scripts_target = target / "scripts"

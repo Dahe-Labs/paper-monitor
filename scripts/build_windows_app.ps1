@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $DistDir = Join-Path $Root "dist\windows"
-$Launcher = Join-Path $Root "windows\SolidBatteryMonitor.pyw"
-$Icon = Join-Path $Root "windows\assets\SolidBatteryMonitor.ico"
+$Launcher = Join-Path $Root "windows\PaperMonitor.pyw"
+$Icon = Join-Path $Root "windows\assets\PaperMonitor.ico"
 
 Set-Location $Root
 python "$Root\scripts\generate_windows_icon.py" | Out-Null
@@ -12,7 +12,7 @@ python "$Root\scripts\generate_windows_icon.py" | Out-Null
 python -m PyInstaller `
   --noconsole `
   --onefile `
-  --name SolidBatteryMonitor `
+  --name PaperMonitor `
   --icon "$Icon" `
   --hidden-import pystray `
   --hidden-import PIL.Image `
@@ -23,4 +23,4 @@ python -m PyInstaller `
   --specpath "$Root\build\windows" `
   "$Launcher"
 
-Write-Host "Built $DistDir\SolidBatteryMonitor.exe"
+Write-Host "Built $DistDir\PaperMonitor.exe"

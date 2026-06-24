@@ -7,11 +7,11 @@ from generate_app_icons import draw_menu_icon, write_png
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "windows" / "assets"
-ICON_PATH = ASSET_DIR / "SolidBatteryMonitor.ico"
+ICON_PATH = ASSET_DIR / "PaperMonitor.ico"
 
 
 def png_bytes(size: int) -> bytes:
-    temp_path = ASSET_DIR / f"SolidBatteryMonitor-{size}.png"
+    temp_path = ASSET_DIR / f"PaperMonitor-{size}.png"
     write_png(temp_path, draw_menu_icon(size))
     payload = temp_path.read_bytes()
     temp_path.unlink()

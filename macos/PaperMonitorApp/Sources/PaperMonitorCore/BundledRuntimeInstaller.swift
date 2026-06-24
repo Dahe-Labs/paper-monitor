@@ -13,8 +13,8 @@ public enum BundledRuntimeInstaller {
         try fileManager.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
 
         try copyDirectoryIfPresent(
-            from: resourcesURL.appendingPathComponent("solid_battery_monitor"),
-            to: appSupportDirectory.appendingPathComponent("solid_battery_monitor"),
+            from: resourcesURL.appendingPathComponent("paper_monitor"),
+            to: appSupportDirectory.appendingPathComponent("paper_monitor"),
             fileManager: fileManager
         )
         try copyFileIfPresent(

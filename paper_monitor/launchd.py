@@ -10,11 +10,11 @@ def build_launch_agent_plist(
     config_path: Path,
     interval_seconds: int,
 ) -> bytes:
-    log_directory = working_directory / "work" / "solid-battery-monitor" / "logs"
+    log_directory = working_directory / "work" / "paper-monitor" / "logs"
     launch_code = (
         "import sys; "
         "sys.path.insert(0, %r); "
-        "from solid_battery_monitor.cli import main; "
+        "from paper_monitor.cli import main; "
         "raise SystemExit(main())"
     ) % str(working_directory)
     payload = {
@@ -33,7 +33,7 @@ def build_launch_agent_plist(
         },
         "StartInterval": int(interval_seconds),
         "RunAtLoad": True,
-        "StandardOutPath": str(log_directory / "solid-battery-monitor.out.log"),
-        "StandardErrorPath": str(log_directory / "solid-battery-monitor.err.log"),
+        "StandardOutPath": str(log_directory / "paper-monitor.out.log"),
+        "StandardErrorPath": str(log_directory / "paper-monitor.err.log"),
     }
     return plistlib.dumps(payload, sort_keys=False)

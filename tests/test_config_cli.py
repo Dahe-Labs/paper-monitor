@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from solid_battery_monitor.cli import _open_dashboard, _python_for_launch_agent, _write_launch_agent, build_arg_parser
-from solid_battery_monitor.config import DEFAULT_CONFIG, load_app_config, write_default_config
-from solid_battery_monitor.models import Article
-from solid_battery_monitor.storage import ArticleStore
+from paper_monitor.cli import _open_dashboard, _python_for_launch_agent, _write_launch_agent, build_arg_parser
+from paper_monitor.config import DEFAULT_CONFIG, load_app_config, write_default_config
+from paper_monitor.models import Article
+from paper_monitor.storage import ArticleStore
 
 
 def _contains_han(value: str) -> bool:
@@ -125,8 +125,8 @@ class ConfigAndCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.json"
             payload = {
-                "database_path": "work/solid-battery-monitor/articles.sqlite3",
-                "dashboard_path": "work/solid-battery-monitor/dashboard/latest.html",
+                "database_path": "work/paper-monitor/articles.sqlite3",
+                "dashboard_path": "work/paper-monitor/dashboard/latest.html",
                 "journal_metrics_path": "journal_metrics.json",
                 "settings_schema_version": 1,
                 "journal_scope": {
@@ -266,7 +266,7 @@ class ConfigAndCliTests(unittest.TestCase):
             config.dashboard_path.parent.mkdir(parents=True, exist_ok=True)
             config.dashboard_path.write_text("<html>old dashboard</html>", encoding="utf-8")
 
-            with patch("solid_battery_monitor.cli.webbrowser.open") as open_dashboard:
+            with patch("paper_monitor.cli.webbrowser.open") as open_dashboard:
                 result = _open_dashboard(config_path)
 
             html = config.dashboard_path.read_text(encoding="utf-8")
@@ -278,7 +278,7 @@ class ConfigAndCliTests(unittest.TestCase):
             self.assertIn("Solid electrolyte dashboard article", html)
 
     def test_launch_agent_prefers_current_interpreter_over_shell_path_lookup(self):
-        with patch("solid_battery_monitor.cli.sys.executable", "/usr/bin/python3"):
+        with patch("paper_monitor.cli.sys.executable", "/usr/bin/python3"):
             self.assertEqual(_python_for_launch_agent(), Path("/usr/bin/python3"))
 
     def test_launch_agent_uses_config_directory_as_working_directory(self):

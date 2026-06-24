@@ -3,8 +3,8 @@ import unittest
 import sqlite3
 from pathlib import Path
 
-from solid_battery_monitor.models import Article
-from solid_battery_monitor.storage import ArticleStore
+from paper_monitor.models import Article
+from paper_monitor.storage import ArticleStore
 
 
 class StorageTests(unittest.TestCase):

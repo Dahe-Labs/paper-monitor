@@ -19,7 +19,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 from .models import Article, normalize_doi
 
 
-USER_AGENT = "solid-battery-monitor/0.1 (local personal research monitor)"
+USER_AGENT = "paper-monitor/0.1 (local personal research monitor)"
 
 
 def fetch_url(url: str, timeout: int = 30) -> bytes:

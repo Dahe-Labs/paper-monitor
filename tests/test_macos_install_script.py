@@ -7,7 +7,7 @@ class MacOSInstallScriptTests(unittest.TestCase):
     def test_install_script_restarts_running_app_before_opening_bundle(self):
         script = Path("scripts/install_macos_app.sh").read_text(encoding="utf-8")
 
-        restart_index = script.find('pkill -x "SolidBatteryMonitorApp"')
+        restart_index = script.find('pkill -x "PaperMonitorApp"')
         open_index = script.find('open "$APP_TARGET"')
 
         self.assertGreaterEqual(restart_index, 0)
@@ -16,14 +16,14 @@ class MacOSInstallScriptTests(unittest.TestCase):
     def test_install_script_syncs_manual_command_entrypoints_and_example_config(self):
         script = Path("scripts/install_macos_app.sh").read_text(encoding="utf-8")
 
-        self.assertIn('if [ -f "$ROOT_DIR/SolidBatteryMonitor.command" ]; then', script)
-        self.assertIn('cp "$ROOT_DIR/SolidBatteryMonitor.command" "$APP_SUPPORT/SolidBatteryMonitor.command"', script)
+        self.assertIn('if [ -f "$ROOT_DIR/PaperMonitor.command" ]; then', script)
+        self.assertIn('cp "$ROOT_DIR/PaperMonitor.command" "$APP_SUPPORT/PaperMonitor.command"', script)
         self.assertIn(
-            'if [ -f "$ROOT_DIR/SolidBatteryMonitorDashboard.command" ]; then',
+            'if [ -f "$ROOT_DIR/PaperMonitorDashboard.command" ]; then',
             script,
         )
         self.assertIn(
-            'cp "$ROOT_DIR/SolidBatteryMonitorDashboard.command" "$APP_SUPPORT/SolidBatteryMonitorDashboard.command"',
+            'cp "$ROOT_DIR/PaperMonitorDashboard.command" "$APP_SUPPORT/PaperMonitorDashboard.command"',
             script,
         )
         self.assertIn('CONFIG_SOURCE="$ROOT_DIR/config.example.json"', script)
@@ -33,15 +33,15 @@ class MacOSInstallScriptTests(unittest.TestCase):
     def test_macos_app_uses_paper_monitor_display_name(self):
         build_script = Path("scripts/build_macos_app.sh").read_text(encoding="utf-8")
         install_script = Path("scripts/install_macos_app.sh").read_text(encoding="utf-8")
-        plist = Path("macos/SolidBatteryMonitorApp/Info.plist").read_text(encoding="utf-8")
+        plist = Path("macos/PaperMonitorApp/Info.plist").read_text(encoding="utf-8")
 
         self.assertIn('APP_NAME="Paper Monitor"', build_script)
         self.assertIn('APP_NAME="Paper Monitor.app"', install_script)
         self.assertIn("<string>Paper Monitor</string>", plist)
 
     def test_macos_app_runs_as_regular_dock_app_with_visible_app_menu(self):
-        plist = Path("macos/SolidBatteryMonitorApp/Info.plist").read_text(encoding="utf-8")
-        main = Path("macos/SolidBatteryMonitorApp/Sources/SolidBatteryMonitorApp/main.swift").read_text(encoding="utf-8")
+        plist = Path("macos/PaperMonitorApp/Info.plist").read_text(encoding="utf-8")
+        main = Path("macos/PaperMonitorApp/Sources/PaperMonitorApp/main.swift").read_text(encoding="utf-8")
 
         self.assertNotIn("<key>LSUIElement</key>", plist)
         self.assertIn("app.setActivationPolicy(.regular)", main)
@@ -60,7 +60,7 @@ class MacOSInstallScriptTests(unittest.TestCase):
     def test_install_script_removes_old_named_app_bundle(self):
         script = Path("scripts/install_macos_app.sh").read_text(encoding="utf-8")
 
-        self.assertIn('OLD_APP_NAME="Solid Battery Monitor.app"', script)
+        self.assertIn('OLD_APP_NAME="Paper Monitor.app"', script)
         self.assertIn('rm -rf "$APP_TARGET" "$OLD_APP_TARGET"', script)
 
     def test_icon_generator_uses_final_source_art_not_battery_drawing(self):

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Paper Monitor"
-PACKAGE_DIR="$ROOT_DIR/macos/SolidBatteryMonitorApp"
+PACKAGE_DIR="$ROOT_DIR/macos/PaperMonitorApp"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -18,15 +18,15 @@ swift build -c release
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
-cp "$PACKAGE_DIR/.build/release/SolidBatteryMonitorApp" "$MACOS_DIR/SolidBatteryMonitorApp"
+cp "$PACKAGE_DIR/.build/release/PaperMonitorApp" "$MACOS_DIR/PaperMonitorApp"
 cp "$PACKAGE_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PACKAGE_DIR/Assets/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 cp "$PACKAGE_DIR/Assets/MenuBarIcon.png" "$RESOURCES_DIR/MenuBarIcon.png"
-rsync -a --exclude '__pycache__' --exclude '.DS_Store' "$ROOT_DIR/solid_battery_monitor/" "$RESOURCES_DIR/solid_battery_monitor/"
+rsync -a --exclude '__pycache__' --exclude '.DS_Store' "$ROOT_DIR/paper_monitor/" "$RESOURCES_DIR/paper_monitor/"
 cp "$ROOT_DIR/config.example.json" "$RESOURCES_DIR/config.example.json"
 cp "$ROOT_DIR/journal_metrics.json" "$RESOURCES_DIR/journal_metrics.json"
 cp "$ROOT_DIR/README.md" "$RESOURCES_DIR/README.md"
-chmod +x "$MACOS_DIR/SolidBatteryMonitorApp"
+chmod +x "$MACOS_DIR/PaperMonitorApp"
 codesign --force --deep --sign - "$APP_DIR"
 
 echo "$APP_DIR"

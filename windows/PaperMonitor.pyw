@@ -1,4 +1,4 @@
-from solid_battery_monitor import windows_tray
+from paper_monitor import windows_tray
 
 
 if __name__ == "__main__":

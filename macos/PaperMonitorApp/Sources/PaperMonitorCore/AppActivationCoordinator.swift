@@ -3,15 +3,15 @@ import Foundation
 
 @MainActor
 public final class AppActivationCoordinator {
-    public nonisolated static let openDashboardNotificationName = Notification.Name("com.local.solid-battery-monitor.open-dashboard")
-    public nonisolated static let testNotificationName = Notification.Name("com.local.solid-battery-monitor.test-notification")
+    public nonisolated static let openDashboardNotificationName = Notification.Name("com.local.paper-monitor.open-dashboard")
+    public nonisolated static let testNotificationName = Notification.Name("com.local.paper-monitor.test-notification")
 
     private let bundleIdentifier: String
     private let processIdentifier: pid_t
     private let notificationCenter: DistributedNotificationCenter
 
     public init(
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.local.solid-battery-monitor.app",
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.local.paper-monitor.app",
         processIdentifier: pid_t = ProcessInfo.processInfo.processIdentifier,
         notificationCenter: DistributedNotificationCenter = .default()
     ) {

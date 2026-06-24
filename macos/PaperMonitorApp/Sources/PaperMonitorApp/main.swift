@@ -1,5 +1,5 @@
 import AppKit
-import SolidBatteryMonitorCore
+import PaperMonitorCore
 
 let app = NSApplication.shared
 let delegate = AppDelegate(launchOptions: AppLaunchOptions())

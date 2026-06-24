@@ -1,8 +1,8 @@
 import json
 import unittest
 
-from solid_battery_monitor.journal_metrics import JournalMetric, JournalMetrics
-from solid_battery_monitor.keyword_analysis import (
+from paper_monitor.journal_metrics import JournalMetric, JournalMetrics
+from paper_monitor.keyword_analysis import (
     DEFAULT_BLOCKLIST,
     DEFAULT_TAXONOMY,
     MAX_CANDIDATE_TERMS,

@@ -39,7 +39,7 @@ python3 -m pytest
 Run the native macOS tests:
 
 ```bash
-cd macos/SolidBatteryMonitorApp
+cd macos/PaperMonitorApp
 swift test
 ```
 
@@ -60,7 +60,7 @@ dist/Paper Monitor.app
 The app bundles `config.example.json` and creates a user-writable runtime copy on first launch. Runtime files are stored under:
 
 ```text
-$HOME/Library/Application Support/SolidBatteryMonitor
+$HOME/Library/Application Support/PaperMonitor
 ```
 
 Useful settings include:
@@ -78,8 +78,8 @@ The personal `config.json`, runtime database, logs, and Crossref cache are inten
 ## Repository Layout
 
 ```text
-solid_battery_monitor/          Python retrieval, filtering, storage, dashboard, and analysis logic
-macos/SolidBatteryMonitorApp/   Native macOS menu bar wrapper
+paper_monitor/          Python retrieval, filtering, storage, dashboard, and analysis logic
+macos/PaperMonitorApp/   Native macOS menu bar wrapper
 tests/                          Python tests
 scripts/                        Build and install helpers
 windows/                        Early Windows tray entry point

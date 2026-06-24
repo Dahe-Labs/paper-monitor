@@ -1,7 +1,7 @@
 import unittest
 
-from solid_battery_monitor.filtering import FilterConfig, match_article
-from solid_battery_monitor.models import Article
+from paper_monitor.filtering import FilterConfig, match_article
+from paper_monitor.models import Article
 
 
 class FilteringTests(unittest.TestCase):

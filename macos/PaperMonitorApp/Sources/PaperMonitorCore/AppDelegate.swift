@@ -5,7 +5,7 @@ import UserNotifications
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appSupportDirectory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/SolidBatteryMonitor")
+        .appendingPathComponent("Library/Application Support/PaperMonitor")
     private lazy var bridge = PythonBridge(appSupportDirectory: appSupportDirectory)
     private lazy var settingsStore = SettingsStore(configURL: bridge.configURL)
     private let activationCoordinator = AppActivationCoordinator()
@@ -264,13 +264,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func postTestNotification() {
         let dashboardURL = lastDashboardURL ?? appSupportDirectory
-            .appendingPathComponent("work/solid-battery-monitor/dashboard/latest.html")
+            .appendingPathComponent("work/paper-monitor/dashboard/latest.html")
         notifications.post(article: NotificationController.testArticle(), dashboardURL: dashboardURL)
     }
 
     private func openDashboard() {
         let dashboardURL = lastDashboardURL ?? appSupportDirectory
-            .appendingPathComponent("work/solid-battery-monitor/dashboard/latest.html")
+            .appendingPathComponent("work/paper-monitor/dashboard/latest.html")
         dashboardWindow.load(fileURL: dashboardURL)
     }
 }

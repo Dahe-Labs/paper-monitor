@@ -22,7 +22,7 @@ from .storage import ArticleStore
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="solid-battery-monitor",
+        prog="paper-monitor",
         description="Local macOS monitor for solid-state battery papers.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -59,7 +59,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     launchd_parser = subparsers.add_parser("write-launch-agent", help="Write a LaunchAgent plist.")
     launchd_parser.add_argument("--config", required=True, type=Path)
     launchd_parser.add_argument("--output", required=True, type=Path)
-    launchd_parser.add_argument("--label", default="com.local.solid-battery-monitor")
+    launchd_parser.add_argument("--label", default="com.local.paper-monitor")
 
     test_parser = subparsers.add_parser("test-notification", help="Send one local macOS test notification.")
     test_parser.add_argument("--title", default=f"{DISPLAY_NAME} test")
@@ -176,11 +176,11 @@ def _write_launch_agent(config_path: Path, output: Path, label: str) -> int:
     working_directory = config_path.parent
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    (working_directory / "work" / "solid-battery-monitor" / "logs").mkdir(parents=True, exist_ok=True)
+    (working_directory / "work" / "paper-monitor" / "logs").mkdir(parents=True, exist_ok=True)
     plist_bytes = build_launch_agent_plist(
         label=label,
         python_path=python_path,
-        module_name="solid_battery_monitor.cli",
+        module_name="paper_monitor.cli",
         working_directory=working_directory,
         config_path=config_path,
         interval_seconds=app_config.interval_seconds,

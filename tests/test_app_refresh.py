@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from solid_battery_monitor.app_refresh import run_app_refresh
-from solid_battery_monitor.config import write_default_config
-from solid_battery_monitor.models import Article
+from paper_monitor.app_refresh import run_app_refresh
+from paper_monitor.config import write_default_config
+from paper_monitor.models import Article
 
 
 class AppRefreshTests(unittest.TestCase):

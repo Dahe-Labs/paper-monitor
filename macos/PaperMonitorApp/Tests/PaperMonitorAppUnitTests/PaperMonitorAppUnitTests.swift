@@ -2,9 +2,9 @@ import Foundation
 import AppKit
 import UserNotifications
 import XCTest
-@testable import SolidBatteryMonitorCore
+@testable import PaperMonitorCore
 
-final class SolidBatteryMonitorAppUnitTests: XCTestCase {
+final class PaperMonitorAppUnitTests: XCTestCase {
     func testParsesRefreshResultJSON() throws {
         let json = """
         {
@@ -39,23 +39,23 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
 
     func testBuildsPythonArguments() {
         let bridge = PythonBridge(
-            appSupportDirectory: URL(fileURLWithPath: "/Users/example/Library/Application Support/SolidBatteryMonitor"),
+            appSupportDirectory: URL(fileURLWithPath: "/Users/example/Library/Application Support/PaperMonitor"),
             pythonPath: "/usr/bin/python3"
         )
 
         XCTAssertEqual(bridge.pythonPath, "/usr/bin/python3")
         XCTAssertEqual(bridge.arguments, [
             "-m",
-            "solid_battery_monitor.cli",
+            "paper_monitor.cli",
             "app-refresh",
             "--config",
-            "/Users/example/Library/Application Support/SolidBatteryMonitor/config.json",
+            "/Users/example/Library/Application Support/PaperMonitor/config.json",
         ])
     }
 
     func testBuildsKeywordAnalysisPythonArguments() {
         let bridge = PythonBridge(
-            appSupportDirectory: URL(fileURLWithPath: "/Users/example/Library/Application Support/SolidBatteryMonitor"),
+            appSupportDirectory: URL(fileURLWithPath: "/Users/example/Library/Application Support/PaperMonitor"),
             pythonPath: "/usr/bin/python3"
         )
         let request = KeywordAnalysisRequest(
@@ -69,10 +69,10 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
 
         XCTAssertEqual(bridge.analyzeArguments(request: request), [
             "-m",
-            "solid_battery_monitor.cli",
+            "paper_monitor.cli",
             "analyze-keywords",
             "--config",
-            "/Users/example/Library/Application Support/SolidBatteryMonitor/config.json",
+            "/Users/example/Library/Application Support/PaperMonitor/config.json",
             "--date-from",
             "2026-06-01",
             "--date-to",
@@ -169,7 +169,7 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(controller.statusItemSnapshotForTesting.title, "")
         XCTAssertTrue(controller.statusItemSnapshotForTesting.hasImage)
         XCTAssertTrue(controller.statusItemSnapshotForTesting.isVisible)
-        XCTAssertEqual(controller.statusItemAutosaveNameForTesting, "com.local.solid-battery-monitor.app.status-item")
+        XCTAssertEqual(controller.statusItemAutosaveNameForTesting, "com.local.paper-monitor.app.status-item")
     }
 
     func testMenuBarIconLoaderReadsPNGFromAppBundleResources() throws {
@@ -302,20 +302,20 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
     func testActivationNotificationNameIsStable() {
         XCTAssertEqual(
             AppActivationCoordinator.openDashboardNotificationName.rawValue,
-            "com.local.solid-battery-monitor.open-dashboard"
+            "com.local.paper-monitor.open-dashboard"
         )
         XCTAssertEqual(
             AppActivationCoordinator.testNotificationName.rawValue,
-            "com.local.solid-battery-monitor.test-notification"
+            "com.local.paper-monitor.test-notification"
         )
     }
 
     func testLaunchOptionsParseTestNotificationFlag() {
         XCTAssertTrue(
-            AppLaunchOptions(arguments: ["SolidBatteryMonitorApp", "--test-notification"]).postTestNotificationOnLaunch
+            AppLaunchOptions(arguments: ["PaperMonitorApp", "--test-notification"]).postTestNotificationOnLaunch
         )
         XCTAssertFalse(
-            AppLaunchOptions(arguments: ["SolidBatteryMonitorApp"]).postTestNotificationOnLaunch
+            AppLaunchOptions(arguments: ["PaperMonitorApp"]).postTestNotificationOnLaunch
         )
     }
 
@@ -675,7 +675,7 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
     func testBundledRuntimeInstallerCopiesRuntimeResourcesAndPreservesUserConfig() throws {
         let directory = try makeTemporaryDirectory()
         let resourcesURL = directory.appendingPathComponent("Resources")
-        let packageURL = resourcesURL.appendingPathComponent("solid_battery_monitor")
+        let packageURL = resourcesURL.appendingPathComponent("paper_monitor")
         let appSupportURL = directory.appendingPathComponent("Application Support")
         try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
         try "print('cli')".write(to: packageURL.appendingPathComponent("cli.py"), atomically: true, encoding: .utf8)
@@ -699,7 +699,7 @@ final class SolidBatteryMonitorAppUnitTests: XCTestCase {
 
         try BundledRuntimeInstaller.install(resourcesURL: resourcesURL, appSupportDirectory: appSupportURL)
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: appSupportURL.appendingPathComponent("solid_battery_monitor/cli.py").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: appSupportURL.appendingPathComponent("paper_monitor/cli.py").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: appSupportURL.appendingPathComponent("journal_metrics.json").path))
         XCTAssertEqual(
             try String(contentsOf: appSupportURL.appendingPathComponent("config.json"), encoding: .utf8),

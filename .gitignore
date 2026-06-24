@@ -18,7 +18,7 @@ public_release/
 *.log
 *.tmp
 
-macos/SolidBatteryMonitorApp/.build/
+macos/PaperMonitorApp/.build/
 DerivedData/
 *.xcuserdata/
 *.app

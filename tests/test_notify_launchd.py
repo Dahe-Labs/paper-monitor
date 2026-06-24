@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from solid_battery_monitor.launchd import build_launch_agent_plist
-from solid_battery_monitor.models import Article
-from solid_battery_monitor.notify import (
+from paper_monitor.launchd import build_launch_agent_plist
+from paper_monitor.models import Article
+from paper_monitor.notify import (
     article_open_target,
     build_osascript_command,
     build_terminal_notifier_command,
@@ -129,16 +129,16 @@ class NotificationAndLaunchdTests(unittest.TestCase):
             candidate = Path(temp_dir) / "terminal-notifier"
             candidate.write_text("#!/bin/sh\n", encoding="utf-8")
 
-            with patch("solid_battery_monitor.notify.shutil.which", return_value=None):
+            with patch("paper_monitor.notify.shutil.which", return_value=None):
                 found = find_terminal_notifier(candidates=[candidate])
 
         self.assertEqual(found, candidate)
 
     def test_builds_launch_agent_plist_for_periodic_runs(self):
         plist_bytes = build_launch_agent_plist(
-            label="com.example.solid-battery-monitor",
+            label="com.example.paper-monitor",
             python_path=Path("/usr/bin/python3"),
-            module_name="solid_battery_monitor.cli",
+            module_name="paper_monitor.cli",
             working_directory=Path("/tmp/solid-monitor"),
             config_path=Path("/tmp/solid-monitor/config.json"),
             interval_seconds=7200,
@@ -146,18 +146,18 @@ class NotificationAndLaunchdTests(unittest.TestCase):
 
         payload = plistlib.loads(plist_bytes)
 
-        self.assertEqual(payload["Label"], "com.example.solid-battery-monitor")
+        self.assertEqual(payload["Label"], "com.example.paper-monitor")
         self.assertEqual(payload["StartInterval"], 7200)
         self.assertIn("-c", payload["ProgramArguments"])
         launch_code = payload["ProgramArguments"][2]
         self.assertIn("sys.path.insert(0, '/tmp/solid-monitor')", launch_code)
-        self.assertIn("solid_battery_monitor.cli", launch_code)
+        self.assertIn("paper_monitor.cli", launch_code)
         self.assertIn("run", payload["ProgramArguments"])
         self.assertEqual(payload["WorkingDirectory"], "/tmp/solid-monitor")
         self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], "/tmp/solid-monitor")
         self.assertEqual(
             payload["StandardOutPath"],
-            "/tmp/solid-monitor/work/solid-battery-monitor/logs/solid-battery-monitor.out.log",
+            "/tmp/solid-monitor/work/paper-monitor/logs/paper-monitor.out.log",
         )
 
 

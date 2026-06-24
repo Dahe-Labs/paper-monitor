@@ -33,21 +33,21 @@ class FakeWinReg:
 
 class WindowsTrayTests(unittest.TestCase):
     def test_default_windows_app_dir_uses_appdata(self):
-        from solid_battery_monitor.windows_tray import default_windows_app_dir
+        from paper_monitor.windows_tray import default_windows_app_dir
 
         env = {"APPDATA": r"C:\Users\Example\AppData\Roaming"}
 
         self.assertEqual(
             default_windows_app_dir(env=env),
-            PureWindowsPath(r"C:\Users\Example\AppData\Roaming\SolidBatteryMonitor"),
+            PureWindowsPath(r"C:\Users\Example\AppData\Roaming\PaperMonitor"),
         )
 
     def test_builds_refresh_command_for_existing_app_refresh_entrypoint(self):
-        from solid_battery_monitor.windows_tray import build_refresh_command
+        from paper_monitor.windows_tray import build_refresh_command
 
         command = build_refresh_command(
             python_executable=PureWindowsPath(r"C:\Python313\python.exe"),
-            config_path=PureWindowsPath(r"C:\Users\Example\AppData\Roaming\SolidBatteryMonitor\config.json"),
+            config_path=PureWindowsPath(r"C:\Users\Example\AppData\Roaming\PaperMonitor\config.json"),
         )
 
         self.assertEqual(
@@ -55,17 +55,17 @@ class WindowsTrayTests(unittest.TestCase):
             [
                 r"C:\Python313\python.exe",
                 "-m",
-                "solid_battery_monitor.cli",
+                "paper_monitor.cli",
                 "app-refresh",
                 "--config",
-                r"C:\Users\Example\AppData\Roaming\SolidBatteryMonitor\config.json",
+                r"C:\Users\Example\AppData\Roaming\PaperMonitor\config.json",
             ],
         )
 
     def test_notification_target_prefers_article_url_then_doi_then_dashboard(self):
-        from solid_battery_monitor.windows_tray import notification_target
+        from paper_monitor.windows_tray import notification_target
 
-        dashboard = Path("/tmp/solid-battery-monitor/latest.html")
+        dashboard = Path("/tmp/paper-monitor/latest.html")
 
         self.assertEqual(
             notification_target({"url": "https://example.org/article", "doi": "10.1000/example"}, dashboard),
@@ -78,7 +78,7 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertTrue(notification_target({"url": "", "doi": ""}, dashboard).startswith("file://"))
 
     def test_windows_toast_notifier_passes_click_target_to_win11toast(self):
-        from solid_battery_monitor.windows_tray import WindowsToastNotifier
+        from paper_monitor.windows_tray import WindowsToastNotifier
 
         calls = []
         fake_module = types.SimpleNamespace(
@@ -102,21 +102,21 @@ class WindowsTrayTests(unittest.TestCase):
         self.assertNotIn("app_id", calls[0][2])
 
     def test_startup_registry_value_quotes_executable_and_uses_quiet_flag(self):
-        from solid_battery_monitor.windows_tray import build_startup_registry_value
+        from paper_monitor.windows_tray import build_startup_registry_value
 
         self.assertEqual(
-            build_startup_registry_value(PureWindowsPath(r"C:\Program Files\SolidBatteryMonitor\SolidBatteryMonitor.exe")),
-            r'"C:\Program Files\SolidBatteryMonitor\SolidBatteryMonitor.exe" --quiet',
+            build_startup_registry_value(PureWindowsPath(r"C:\Program Files\PaperMonitor\PaperMonitor.exe")),
+            r'"C:\Program Files\PaperMonitor\PaperMonitor.exe" --quiet',
         )
 
     def test_set_startup_enabled_writes_current_user_run_key(self):
-        from solid_battery_monitor.windows_tray import set_startup_enabled
+        from paper_monitor.windows_tray import set_startup_enabled
 
         fake = FakeWinReg()
 
         set_startup_enabled(
             True,
-            PureWindowsPath(r"C:\Apps\SolidBatteryMonitor.exe"),
+            PureWindowsPath(r"C:\Apps\PaperMonitor.exe"),
             registry_module=fake,
         )
 
@@ -131,22 +131,22 @@ class WindowsTrayTests(unittest.TestCase):
                     "Paper Monitor",
                     0,
                     fake.REG_SZ,
-                    r'"C:\Apps\SolidBatteryMonitor.exe" --quiet',
+                    r'"C:\Apps\PaperMonitor.exe" --quiet',
                 )
             ],
         )
 
     def test_set_startup_disabled_deletes_current_user_run_key(self):
-        from solid_battery_monitor.windows_tray import set_startup_enabled
+        from paper_monitor.windows_tray import set_startup_enabled
 
         fake = FakeWinReg()
 
-        set_startup_enabled(False, PureWindowsPath(r"C:\Apps\SolidBatteryMonitor.exe"), registry_module=fake)
+        set_startup_enabled(False, PureWindowsPath(r"C:\Apps\PaperMonitor.exe"), registry_module=fake)
 
         self.assertEqual(fake.deleted, ["Paper Monitor"])
 
     def test_windows_launcher_is_quiet_entrypoint(self):
-        launcher = Path("windows/SolidBatteryMonitor.pyw").read_text(encoding="utf-8")
+        launcher = Path("windows/PaperMonitor.pyw").read_text(encoding="utf-8")
 
         self.assertIn("windows_tray", launcher)
         self.assertIn("main(", launcher)
@@ -158,7 +158,7 @@ class WindowsTrayTests(unittest.TestCase):
 
         self.assertIn("--noconsole", build_script)
         self.assertIn("PyInstaller", build_script)
-        self.assertIn("SolidBatteryMonitor.pyw", build_script)
+        self.assertIn("PaperMonitor.pyw", build_script)
         self.assertIn("install-startup", install_script)
         self.assertIn("$env:APPDATA", install_script)
 
@@ -166,7 +166,7 @@ class WindowsTrayTests(unittest.TestCase):
         from scripts.prepare_windows_project import prepare_windows_project
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            target = Path(temp_dir) / "SolidBatteryMonitorWindows"
+            target = Path(temp_dir) / "PaperMonitorWindows"
 
             prepare_windows_project(target)
 
@@ -175,10 +175,10 @@ class WindowsTrayTests(unittest.TestCase):
                 "requirements-windows.txt",
                 "config.example.json",
                 "journal_metrics.json",
-                "solid_battery_monitor/windows_tray.py",
-                "solid_battery_monitor/cli.py",
-                "windows/SolidBatteryMonitor.pyw",
-                "windows/assets/SolidBatteryMonitor.ico",
+                "paper_monitor/windows_tray.py",
+                "paper_monitor/cli.py",
+                "windows/PaperMonitor.pyw",
+                "windows/assets/PaperMonitor.ico",
                 "scripts/build_windows_app.ps1",
                 "scripts/install_windows_app.ps1",
                 "scripts/generate_windows_icon.py",
@@ -193,21 +193,21 @@ class WindowsTrayTests(unittest.TestCase):
             self.assertFalse(any(path.endswith(".DS_Store") for path in copied_paths))
 
     def test_windows_cli_open_dashboard_uses_cross_platform_webbrowser(self):
-        windows_project = Path("windows_project/SolidBatteryMonitorWindows").resolve()
+        windows_project = Path("windows_project/PaperMonitorWindows").resolve()
         original_path = list(sys.path)
         removed_modules = {
             name: module
             for name, module in list(sys.modules.items())
-            if name == "solid_battery_monitor" or name.startswith("solid_battery_monitor.")
+            if name == "paper_monitor" or name.startswith("paper_monitor.")
         }
         for name in removed_modules:
             sys.modules.pop(name, None)
         sys.path.insert(0, str(windows_project))
         try:
-            cli = importlib.import_module("solid_battery_monitor.cli")
-            config_module = importlib.import_module("solid_battery_monitor.config")
-            storage_module = importlib.import_module("solid_battery_monitor.storage")
-            models_module = importlib.import_module("solid_battery_monitor.models")
+            cli = importlib.import_module("paper_monitor.cli")
+            config_module = importlib.import_module("paper_monitor.config")
+            storage_module = importlib.import_module("paper_monitor.storage")
+            models_module = importlib.import_module("paper_monitor.models")
 
             with tempfile.TemporaryDirectory() as temp_dir:
                 config_path = Path(temp_dir) / "config.json"
@@ -245,7 +245,7 @@ class WindowsTrayTests(unittest.TestCase):
         finally:
             sys.path[:] = original_path
             for name in list(sys.modules):
-                if name == "solid_battery_monitor" or name.startswith("solid_battery_monitor."):
+                if name == "paper_monitor" or name.startswith("paper_monitor."):
                     sys.modules.pop(name, None)
             sys.modules.update(removed_modules)
 

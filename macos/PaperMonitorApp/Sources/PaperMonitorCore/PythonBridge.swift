@@ -143,7 +143,7 @@ public final class PythonBridge: @unchecked Sendable {
     public var arguments: [String] {
         [
             "-m",
-            "solid_battery_monitor.cli",
+            "paper_monitor.cli",
             "app-refresh",
             "--config",
             configURL.path,
@@ -153,7 +153,7 @@ public final class PythonBridge: @unchecked Sendable {
     public func analyzeArguments(request: KeywordAnalysisRequest) -> [String] {
         var arguments = [
             "-m",
-            "solid_battery_monitor.cli",
+            "paper_monitor.cli",
             "analyze-keywords",
             "--config",
             configURL.path,
