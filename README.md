@@ -2,16 +2,17 @@
 
 [中文说明](README.zh-CN.md)
 
-Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS retrieval, local deduplication, keyword analysis, and a native macOS menu bar app.
+Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, and a native macOS menu bar app.
 
-The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default.
+The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default. arXiv is available as an optional preprint source, but it is not selected by default.
 
 ## Features
 
 - Native macOS menu bar app with manual refresh, settings, dashboard access, and notification testing.
 - Local notifications for newly matched papers.
-- Crossref and RSS retrieval with journal scope controls.
+- Crossref, RSS, and optional arXiv retrieval with journal scope controls.
 - Local SQLite deduplication so repeated papers are not notified again.
+- Settings Apply workflow with visible unsaved/saved state.
 - HTML dashboard grouped by detected date, with sorting by time, impact factor, and relevance.
 - Keyword analysis with date range, journal scope, candidate term filtering, block terms, taxonomy editing, and compact analysis paper list.
 - Configurable search terms, excluded terms, journal scope, refresh interval, and Top N journal selection.
@@ -70,10 +71,11 @@ Useful settings include:
 - `interval_seconds`: refresh interval while the app is running.
 - `max_notifications`: maximum notifications sent per refresh.
 - `journal_scope.top_n`: default Top N journal scope.
-- `journal_scope.selected_journals`: manually selected journals.
+- `journal_scope.selected_journals`: manually selected journals, including `arXiv` when the optional preprint source is enabled.
 - `include_terms`: search and matching terms.
 - `exclude_terms`: terms used to suppress irrelevant matches.
 - `sources.crossref`: Crossref retrieval settings.
+- `sources.arxiv`: optional arXiv preprint retrieval settings.
 
 The personal `config.json`, runtime database, logs, and Crossref cache are intentionally excluded from this repository.
 

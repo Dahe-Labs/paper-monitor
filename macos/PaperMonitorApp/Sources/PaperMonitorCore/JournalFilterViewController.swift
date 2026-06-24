@@ -17,7 +17,9 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "")
+    private let preprintSourceStack = NSStackView()
     private var filteredEntries: [JournalCatalogEntry] = []
+    private var preprintEntries: [JournalCatalogEntry] = []
     private var isReloadingFromEditingState = false
 
     convenience init(
@@ -43,7 +45,8 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         self.catalog = catalog
         self.onJournalChange = onJournalChange
         self.settingsChangeDebouncer = changeDebouncer ?? SearchSettingsChangeDebouncer(onChange: onChange)
-        self.filteredEntries = catalog.entriesByImpactFactor
+        self.filteredEntries = Self.formalJournalEntries(in: catalog)
+        self.preprintEntries = Self.preprintSourceEntries(in: catalog)
         super.init(nibName: nil, bundle: nil)
         title = "Journal Filter"
     }
@@ -67,10 +70,14 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         configureSearchField()
         configureTable()
         configureEmptyLabel()
+        configurePreprintSources()
 
         stack.addArrangedSubview(topRow())
         stack.addArrangedSubview(searchField)
         stack.addArrangedSubview(scrollView())
+        if !preprintEntries.isEmpty {
+            stack.addArrangedSubview(preprintSection())
+        }
         stack.addArrangedSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
@@ -180,12 +187,67 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         return scroll
     }
 
+    private func configurePreprintSources() {
+        preprintSourceStack.orientation = .vertical
+        preprintSourceStack.alignment = .leading
+        preprintSourceStack.spacing = 6
+        preprintSourceStack.translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    private func preprintSection() -> NSView {
+        let section = NSStackView()
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 8
+        section.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        section.wantsLayer = true
+        section.layer?.borderColor = NSColor.separatorColor.cgColor
+        section.layer?.borderWidth = 1
+        section.layer?.cornerRadius = 8
+
+        let title = NSTextField(labelWithString: "Preprint Sources")
+        title.font = .preferredFont(forTextStyle: .headline)
+        let note = NSTextField(labelWithString: "Optional preprint feeds are excluded from Top N and remain off unless selected.")
+        note.textColor = .secondaryLabelColor
+        note.lineBreakMode = .byWordWrapping
+        note.maximumNumberOfLines = 2
+
+        preprintEntries.forEach { entry in
+            let button = NSButton(
+                checkboxWithTitle: entry.journal,
+                target: self,
+                action: #selector(togglePreprintSource(_:))
+            )
+            button.identifier = NSUserInterfaceItemIdentifier(entry.journal)
+            button.toolTip = entry.level.isEmpty ? nil : entry.level
+            preprintSourceStack.addArrangedSubview(button)
+        }
+
+        section.addArrangedSubview(title)
+        section.addArrangedSubview(note)
+        section.addArrangedSubview(preprintSourceStack)
+        return section
+    }
+
+    private func refreshPreprintSources() {
+        for arrangedSubview in preprintSourceStack.arrangedSubviews {
+            guard
+                let button = arrangedSubview as? NSButton,
+                let journal = button.identifier?.rawValue
+            else {
+                continue
+            }
+            button.state = settings.journalScope.selectedJournals.contains(journal) ? .on : .off
+        }
+    }
+
     private func applyFilter() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let entries = Self.formalJournalEntries(in: catalog)
         if query.isEmpty {
-            filteredEntries = catalog.entriesByImpactFactor
+            filteredEntries = entries
         } else {
-            filteredEntries = catalog.entriesByImpactFactor.filter { entry in
+            filteredEntries = entries.filter { entry in
                 entry.journal.lowercased().contains(query)
                     || entry.level.lowercased().contains(query)
                     || entry.aliases.contains { $0.lowercased().contains(query) }
@@ -227,6 +289,7 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         let topN = SettingsNormalizer.clampedTopN(settings.journalScope.topN)
         topNField.integerValue = topN
         topNStepper.integerValue = topN
+        refreshPreprintSources()
         if catalog.entries.isEmpty {
             selectedCountLabel.stringValue = "Selected \(settings.journalScope.selectedJournals.count)"
         } else {
@@ -293,6 +356,13 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         updateTopN(topNField.integerValue)
     }
 
+    @objc private func togglePreprintSource(_ sender: NSButton) {
+        guard let journal = sender.identifier?.rawValue else {
+            return
+        }
+        setSelected(sender.state == .on, journal: journal)
+    }
+
     var selectedCountForTesting: Int {
         settings.journalScope.selectedJournals.count
     }
@@ -306,6 +376,18 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         return filteredEntries.map(\.journal)
     }
 
+    var preprintSourceNamesForTesting: [String] {
+        _ = view
+        return preprintEntries.map(\.journal)
+    }
+
+    var preprintSourceSelectionForTesting: [String: Bool] {
+        _ = view
+        return Dictionary(uniqueKeysWithValues: preprintEntries.map { entry in
+            (entry.journal, settings.journalScope.selectedJournals.contains(entry.journal))
+        })
+    }
+
     func applyTopNForTesting(_ value: Int) {
         _ = view
         updateTopN(value)
@@ -316,10 +398,23 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         setSelected(selected, journal: journal)
     }
 
+    func togglePreprintSourceForTesting(_ journal: String, selected: Bool) {
+        _ = view
+        setSelected(selected, journal: journal)
+    }
+
     func filterForTesting(_ query: String) {
         _ = view
         searchField.stringValue = query
         applyFilter()
+    }
+
+    private static func formalJournalEntries(in catalog: JournalCatalog) -> [JournalCatalogEntry] {
+        catalog.entriesByImpactFactor.filter(\.defaultSelected)
+    }
+
+    private static func preprintSourceEntries(in catalog: JournalCatalog) -> [JournalCatalogEntry] {
+        catalog.entriesByImpactFactor.filter { !$0.defaultSelected }
     }
 }
 

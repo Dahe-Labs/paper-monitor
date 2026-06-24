@@ -198,9 +198,13 @@ enum SearchSettingsPolicy {
             return
         }
 
-        let selectedJournals = catalog.topJournals(topN).map(\.journal)
-        if !selectedJournals.isEmpty {
-            settings.journalScope.selectedJournals = selectedJournals
+        var selection = JournalSelection(
+            topN: topN,
+            selectedJournals: settings.journalScope.selectedJournals
+        )
+        selection.applyTopN(catalog)
+        if !selection.selectedJournals.isEmpty {
+            settings.journalScope.selectedJournals = selection.selectedJournals
         }
     }
 
@@ -223,7 +227,12 @@ public struct JournalSelection: Equatable {
     }
 
     public mutating func applyTopN(_ catalog: JournalCatalog) {
-        selectedJournals = catalog.topJournals(topN).map(\.journal)
+        let preservedSources = selectedJournals.filter { journal in
+            catalog.entry(named: journal)?.defaultSelected == false
+        }
+        selectedJournals = SettingsNormalizer.dedupeNonEmpty(
+            catalog.topJournals(topN).map(\.journal) + preservedSources
+        )
     }
 
     public mutating func setSelected(_ selected: Bool, journal: String) {
@@ -273,6 +282,7 @@ final class SearchSettingsChangeDebouncer {
 
     private let delay: TimeInterval
     private let scheduler: Scheduler
+    private let onPending: (@MainActor @Sendable (AppSettings) -> Void)?
     private let onChange: @MainActor @Sendable (AppSettings) -> Bool
     private var generation = 0
     private var token: SearchSettingsDebounceToken?
@@ -281,10 +291,12 @@ final class SearchSettingsChangeDebouncer {
     init(
         delay: TimeInterval = 0.6,
         scheduler: @escaping Scheduler = SearchSettingsChangeDebouncer.defaultScheduler,
+        onPending: (@MainActor @Sendable (AppSettings) -> Void)? = nil,
         onChange: @escaping @MainActor @Sendable (AppSettings) -> Bool
     ) {
         self.delay = delay
         self.scheduler = scheduler
+        self.onPending = onPending
         self.onChange = onChange
     }
 
@@ -296,6 +308,7 @@ final class SearchSettingsChangeDebouncer {
         generation += 1
         let scheduledGeneration = generation
         pendingSettingsProvider = latestSettings
+        onPending?(latestSettings())
         token?.cancel()
         token = scheduler(delay) { [weak self] in
             guard let self, scheduledGeneration == self.generation else {

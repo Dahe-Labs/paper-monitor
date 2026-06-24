@@ -8,6 +8,9 @@ from .filtering import MatchResult
 from .models import Article
 
 
+NOTIFICATION_TIMEOUT_SECONDS = 5
+
+
 def build_osascript_command(article: Article) -> List[str]:
     title = _truncate(article.title, 120)
     subtitle = _truncate(article.journal or article.source, 80)
@@ -72,15 +75,27 @@ def find_terminal_notifier(candidates: Iterable[Path] = None) -> Optional[Path]:
     return None
 
 
-def notify_article(article: Article, match: MatchResult, dashboard_path: Path = None) -> None:
+def run_notification_command(command: List[str]) -> bool:
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=NOTIFICATION_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    return result.returncode == 0
+
+
+def notify_article(article: Article, match: MatchResult, dashboard_path: Path = None) -> bool:
     terminal_notifier = find_terminal_notifier()
     if terminal_notifier and dashboard_path is not None:
-        subprocess.run(
-            build_terminal_notifier_command(terminal_notifier, article, dashboard_path),
-            check=False,
+        return run_notification_command(
+            build_terminal_notifier_command(terminal_notifier, article, dashboard_path)
         )
-        return
-    subprocess.run(build_osascript_command(article), check=False)
+    return run_notification_command(build_osascript_command(article))
 
 
 def _truncate(value: str, limit: int) -> str:

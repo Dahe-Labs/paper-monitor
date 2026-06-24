@@ -1,4 +1,5 @@
 import plistlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,8 @@ from paper_monitor.notify import (
     build_osascript_command,
     build_terminal_notifier_command,
     find_terminal_notifier,
+    notify_article,
+    run_notification_command,
 )
 
 
@@ -133,6 +136,43 @@ class NotificationAndLaunchdTests(unittest.TestCase):
                 found = find_terminal_notifier(candidates=[candidate])
 
         self.assertEqual(found, candidate)
+
+    def test_notification_command_failure_returns_false_without_raising(self):
+        with patch("paper_monitor.notify.subprocess.run") as run:
+            run.return_value.returncode = 1
+            run.return_value.stderr = "notification denied"
+
+            delivered = run_notification_command(["osascript", "-e", "display notification \"x\""])
+
+        self.assertFalse(delivered)
+        self.assertEqual(run.call_args.kwargs["timeout"], 5)
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+
+    def test_notification_command_timeout_returns_false_without_raising(self):
+        with patch(
+            "paper_monitor.notify.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["osascript"], timeout=5),
+        ):
+            delivered = run_notification_command(["osascript", "-e", "display notification \"x\""])
+
+        self.assertFalse(delivered)
+
+    def test_notify_article_is_best_effort_when_helpers_fail(self):
+        article = Article(
+            title="Solid electrolyte breakthrough",
+            journal="Nature Energy",
+            url="https://example.org/article",
+            doi="10.1000/example",
+            published="2026-06-20",
+            abstract="",
+            source="fixture",
+        )
+
+        with patch("paper_monitor.notify.find_terminal_notifier", return_value=None):
+            with patch("paper_monitor.notify.run_notification_command", return_value=False):
+                delivered = notify_article(article, None, dashboard_path=Path("/tmp/paper-monitor/latest.html"))
+
+        self.assertFalse(delivered)
 
     def test_builds_launch_agent_plist_for_periodic_runs(self):
         plist_bytes = build_launch_agent_plist(

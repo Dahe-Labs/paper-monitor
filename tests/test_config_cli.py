@@ -92,8 +92,14 @@ class ConfigAndCliTests(unittest.TestCase):
         self.assertEqual(example["journals"], expected)
         metric_names = [item["journal"] for item in metrics["journals"]]
         self.assertEqual(metric_names[:30], expected)
-        self.assertEqual(len(metric_names), 50)
-        self.assertEqual([item["rank"] for item in metrics["journals"]], list(range(1, 51)))
+        self.assertEqual(len(metric_names), 51)
+        self.assertIn("arXiv", metric_names)
+        arxiv_metric = next(item for item in metrics["journals"] if item["journal"] == "arXiv")
+        self.assertIsNone(arxiv_metric["impact_factor"])
+        self.assertFalse(arxiv_metric["default_selected"])
+        self.assertNotIn("arXiv", example["journals"])
+        self.assertNotIn("arXiv", example["journal_scope"]["selected_journals"])
+        self.assertEqual([item["rank"] for item in metrics["journals"][:50]], list(range(1, 51)))
         self.assertEqual(example["journal_scope"]["top_n"], 15)
         self.assertEqual(example["journal_scope"]["selected_journals"], default_selected)
         if active is not None:
@@ -131,7 +137,7 @@ class ConfigAndCliTests(unittest.TestCase):
                 "settings_schema_version": 1,
                 "journal_scope": {
                     "top_n": 2,
-                    "selected_journals": ["Nature Energy", "Advanced Materials"],
+                    "selected_journals": ["Nature Energy", "Advanced Materials", "arXiv"],
                 },
                 "interval_seconds": 3600,
                 "include_terms": ["solid electrolyte", "", "solid electrolyte", "LLZO"],
@@ -154,7 +160,7 @@ class ConfigAndCliTests(unittest.TestCase):
             config = load_app_config(config_path)
 
             filter_config = config.monitor_config.filter_config
-            self.assertEqual(filter_config.journals, ["Nature Energy", "Advanced Materials"])
+            self.assertEqual(filter_config.journals, ["Nature Energy", "Advanced Materials", "arXiv"])
             self.assertEqual(config.journal_scope_top_n, 2)
             self.assertEqual(filter_config.include_terms, ["solid electrolyte", "LLZO"])
             self.assertEqual(filter_config.exclude_terms, ["solid-state laser"])
@@ -162,6 +168,7 @@ class ConfigAndCliTests(unittest.TestCase):
                 config.source_config["crossref"]["journal_titles"],
                 ["Nature Energy", "Advanced Materials"],
             )
+            self.assertTrue(config.source_config["arxiv"]["enabled"])
             self.assertEqual(config.source_config["crossref"]["query"], "solid electrolyte OR LLZO")
             self.assertEqual(config.source_config["openalex"]["query"], "solid electrolyte LLZO")
 

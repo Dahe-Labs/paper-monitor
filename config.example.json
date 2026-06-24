@@ -130,6 +130,14 @@
       "per_page": 100,
       "query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
       "api_key": ""
+    },
+    "arxiv": {
+      "enabled": false,
+      "days_back": 15,
+      "max_results": 100,
+      "query": "solid electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZO OR LLZTO",
+      "search_field": "title",
+      "timeout_seconds": 20
     }
   }
 }

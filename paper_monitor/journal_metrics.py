@@ -14,6 +14,7 @@ class JournalMetric:
     level: str
     source_url: str
     rank: Optional[int] = None
+    default_selected: bool = True
 
 
 class JournalMetrics:
@@ -44,6 +45,7 @@ def load_journal_metrics(path: Path) -> JournalMetrics:
             level=str(item.get("level", "")),
             source_url=str(item.get("source_url", "")),
             rank=_optional_int(item.get("rank")),
+            default_selected=bool(item.get("default_selected", True)),
         )
         for item in payload.get("journals", [])
         if item.get("journal")

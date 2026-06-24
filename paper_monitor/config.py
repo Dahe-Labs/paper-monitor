@@ -8,6 +8,9 @@ from .filtering import FilterConfig
 from .monitor import MonitorConfig
 
 
+SOURCE_ONLY_JOURNAL_KEYS = {"arxiv"}
+
+
 DEFAULT_CONFIG = {
     "database_path": "work/paper-monitor/articles.sqlite3",
     "dashboard_path": "work/paper-monitor/dashboard/latest.html",
@@ -141,6 +144,14 @@ DEFAULT_CONFIG = {
             "query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
             "api_key": "",
         },
+        "arxiv": {
+            "enabled": False,
+            "days_back": 15,
+            "max_results": 100,
+            "query": "solid electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZO OR LLZTO",
+            "search_field": "title",
+            "timeout_seconds": 20,
+        },
     },
 }
 
@@ -183,13 +194,17 @@ def load_app_config(path: Path) -> AppConfig:
     source_config = copy.deepcopy(raw.get("sources", DEFAULT_CONFIG["sources"]))
     crossref_query, openalex_query = _search_direction_queries(raw)
     crossref_config = source_config.get("crossref")
-    if isinstance(crossref_config, dict) and not crossref_config.get("journal_titles"):
-        crossref_config["journal_titles"] = list(journals)
-    if isinstance(crossref_config, dict) and crossref_query:
-        crossref_config["query"] = crossref_query
+    if isinstance(crossref_config, dict):
+        journal_titles = crossref_config.get("journal_titles") or journals
+        crossref_config["journal_titles"] = _formal_journals(journal_titles)
+        if crossref_query:
+            crossref_config["query"] = crossref_query
     openalex_config = source_config.get("openalex")
     if isinstance(openalex_config, dict) and openalex_query:
         openalex_config["query"] = openalex_query
+    arxiv_config = source_config.setdefault("arxiv", copy.deepcopy(DEFAULT_CONFIG["sources"]["arxiv"]))
+    if isinstance(arxiv_config, dict):
+        arxiv_config["enabled"] = _contains_source_candidate(journals, "arxiv")
 
     return AppConfig(
         database_path=database_path,
@@ -221,6 +236,23 @@ def _selected_journals(raw):
         if selected:
             return selected
     return _dedupe_nonempty(raw.get("journals", DEFAULT_CONFIG["journals"]))
+
+
+def _formal_journals(values):
+    return [
+        journal
+        for journal in _dedupe_nonempty(values)
+        if _normalize_key(journal) not in SOURCE_ONLY_JOURNAL_KEYS
+    ]
+
+
+def _contains_source_candidate(values, source_key: str) -> bool:
+    normalized = _normalize_key(source_key)
+    return any(_normalize_key(value) == normalized for value in values)
+
+
+def _normalize_key(value) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
 def _journal_scope_top_n(raw, fallback: int) -> int:

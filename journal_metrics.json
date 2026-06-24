@@ -499,6 +499,17 @@
       "five_year_impact_factor": null,
       "level": "Elsevier electric transportation journal relevant to battery systems; local metric needs manual review",
       "source_url": "https://www.sciencedirect.com/journal/etransportation"
+    },
+    {
+      "rank": 51,
+      "journal": "arXiv",
+      "aliases": ["Arxiv", "arxiv.org"],
+      "impact_factor": null,
+      "impact_factor_year": null,
+      "five_year_impact_factor": null,
+      "level": "Preprint server; optional source, disabled by default",
+      "source_url": "https://arxiv.org",
+      "default_selected": false
     }
   ]
 }

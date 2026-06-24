@@ -19,6 +19,7 @@ def render_dashboard(
     run = run or {}
     matched = [candidate for candidate in candidates if candidate.get("matched")]
     rejected = [candidate for candidate in candidates if not candidate.get("matched")]
+    selected_journal_count = len(analysis_scope.selected_journals) if analysis_scope else 0
     return """<!doctype html>
 <html lang="en">
 <head>
@@ -141,6 +142,7 @@ def render_dashboard(
       <div class="pill">Matched: %s</div>
       <div class="pill">New notifications: %s</div>
       <div class="pill">Skipped: %s</div>
+      <div class="pill">Selected journals: %s</div>
     </section>
     <div class="section-title-row">
       <h2>Matched Papers</h2>
@@ -197,6 +199,7 @@ def render_dashboard(
         escape(str(run.get("matched", 0))),
         escape(str(run.get("new_matches", 0))),
         escape(str(run.get("skipped", 0))),
+        escape(str(selected_journal_count)),
         _render_candidate_groups(matched, metrics, empty_text="No matched papers in this run."),
         _matched_papers_payload_json(matched, metrics, empty_text="No matched papers in this run."),
         _render_candidates(rejected[:100], metrics, empty_text="No rejected candidates in this run."),

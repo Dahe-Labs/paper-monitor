@@ -976,6 +976,45 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(catalog.topJournals(2).map(\.journal), ["High IF Journal", "Low IF Journal"])
     }
 
+    func testJournalCatalogTopJournalsSkipsDefaultDisabledEntries() {
+        let catalog = JournalCatalog(entries: [
+            JournalCatalogEntry(
+                rank: 1,
+                journal: "arXiv",
+                aliases: ["arxiv"],
+                impactFactor: nil,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Preprint server",
+                sourceURL: "https://arxiv.org",
+                defaultSelected: false
+            ),
+            JournalCatalogEntry(
+                rank: 2,
+                journal: "Nature Energy",
+                aliases: [],
+                impactFactor: 60.1,
+                impactFactorYear: 2024,
+                fiveYearImpactFactor: nil,
+                level: "Energy",
+                sourceURL: "https://example.org/nature-energy"
+            ),
+            JournalCatalogEntry(
+                rank: 3,
+                journal: "Advanced Materials",
+                aliases: [],
+                impactFactor: 29.1,
+                impactFactorYear: 2025,
+                fiveYearImpactFactor: nil,
+                level: "Materials",
+                sourceURL: "https://example.org/advanced-materials"
+            ),
+        ])
+
+        XCTAssertEqual(catalog.topJournals(2).map(\.journal), ["Nature Energy", "Advanced Materials"])
+        XCTAssertEqual(catalog.entriesByImpactFactor.map(\.journal), ["Nature Energy", "Advanced Materials", "arXiv"])
+    }
+
     @MainActor
     func testJournalFilterAppliesTopNAndAutoSaves() throws {
         var settings = AppSettings.default
@@ -1128,6 +1167,85 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             controller.visibleJournalNamesForTesting,
             ["High IF Journal", "Middle IF Journal", "Low IF Journal", "No IF Journal"]
         )
+    }
+
+    @MainActor
+    func testJournalFilterSeparatesArxivFromFormalJournalTable() {
+        var settings = AppSettings.default
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy"])
+        let catalog = JournalCatalog(entries: [
+            JournalCatalogEntry(
+                rank: 1,
+                journal: "Nature Energy",
+                aliases: [],
+                impactFactor: 60.1,
+                impactFactorYear: 2024,
+                fiveYearImpactFactor: nil,
+                level: "Energy",
+                sourceURL: "https://example.org/nature-energy"
+            ),
+            JournalCatalogEntry(
+                rank: 51,
+                journal: "arXiv",
+                aliases: ["arxiv"],
+                impactFactor: nil,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Preprint server",
+                sourceURL: "https://arxiv.org",
+                defaultSelected: false
+            ),
+        ])
+        let controller = JournalFilterViewController(settings: settings, catalog: catalog) { _ in true }
+
+        XCTAssertEqual(controller.visibleJournalNamesForTesting, ["Nature Energy"])
+        XCTAssertEqual(controller.preprintSourceNamesForTesting, ["arXiv"])
+        XCTAssertEqual(controller.preprintSourceSelectionForTesting, ["arXiv": false])
+    }
+
+    @MainActor
+    func testJournalFilterTopNPreservesManuallySelectedArxiv() {
+        var settings = AppSettings.default
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy", "arXiv"])
+        let catalog = JournalCatalog(entries: [
+            JournalCatalogEntry(
+                rank: 1,
+                journal: "Nature Energy",
+                aliases: [],
+                impactFactor: 60.1,
+                impactFactorYear: 2024,
+                fiveYearImpactFactor: nil,
+                level: "Energy",
+                sourceURL: "https://example.org/nature-energy"
+            ),
+            JournalCatalogEntry(
+                rank: 2,
+                journal: "Joule",
+                aliases: [],
+                impactFactor: 37.1,
+                impactFactorYear: 2025,
+                fiveYearImpactFactor: nil,
+                level: "Energy",
+                sourceURL: "https://example.org/joule"
+            ),
+            JournalCatalogEntry(
+                rank: 51,
+                journal: "arXiv",
+                aliases: ["arxiv"],
+                impactFactor: nil,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Preprint server",
+                sourceURL: "https://arxiv.org",
+                defaultSelected: false
+            ),
+        ])
+        let controller = JournalFilterViewController(settings: settings, catalog: catalog) { _ in true }
+
+        controller.applyTopNForTesting(2)
+
+        XCTAssertEqual(controller.selectedJournalNamesForTesting, ["Nature Energy", "Joule", "arXiv"])
+        XCTAssertEqual(controller.preprintSourceSelectionForTesting, ["arXiv": true])
     }
 
     func testRefreshSchedulePolicyOnlyReschedulesWhenIntervalChanges() {
@@ -1283,10 +1401,36 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         searchController.updateQueries(crossrefQuery: "pending crossref", openalexQuery: "pending openalex", debounced: true)
         XCTAssertTrue(emitted.isEmpty)
+        XCTAssertTrue(controller.isApplyButtonEnabledForTesting)
 
         controller.flushPendingChanges()
 
         XCTAssertEqual(emitted.map(\.searchDirection.crossrefQuery), ["pending crossref"])
+        XCTAssertFalse(controller.isApplyButtonEnabledForTesting)
+        XCTAssertEqual(controller.applyStatusTextForTesting, "Settings saved")
+    }
+
+    @MainActor
+    func testSettingsWindowApplyButtonSavesWithoutClosingAndResetsDirtyState() throws {
+        var emitted: [AppSettings] = []
+        let controller = SettingsWindowController(settings: .default, journalCatalog: nil) { settings in
+            emitted.append(settings)
+            return true
+        }
+        let window = try XCTUnwrap(controller.window)
+        let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
+        let searchController = try XCTUnwrap(tabViewController.tabViewItems.first?.viewController as? SearchSettingsViewController)
+
+        XCTAssertFalse(controller.isApplyButtonEnabledForTesting)
+        searchController.updateQueries(crossrefQuery: "pending crossref", openalexQuery: "pending openalex", debounced: false)
+
+        XCTAssertTrue(controller.isApplyButtonEnabledForTesting)
+        XCTAssertTrue(controller.triggerApplyForTesting())
+
+        XCTAssertEqual(emitted.map(\.searchDirection.crossrefQuery), ["pending crossref"])
+        XCTAssertFalse(controller.isApplyButtonEnabledForTesting)
+        XCTAssertEqual(controller.applyStatusTextForTesting, "Settings saved")
+        XCTAssertTrue(window === controller.window)
     }
 
     @MainActor
@@ -1441,6 +1585,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         searchController.applyPresetForTesting(.solidElectrolyte)
 
         termsController.appendIncludeTermForTesting("argyrodite", debounced: false)
+        XCTAssertTrue(controller.triggerApplyForTesting())
 
         let saved = try XCTUnwrap(emitted.last)
         XCTAssertEqual(
@@ -1471,6 +1616,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         )
 
         searchController.editCrossrefQueryForTesting("custom crossref", debounced: false)
+        XCTAssertTrue(controller.triggerApplyForTesting())
 
         let saved = try XCTUnwrap(emitted.last)
         XCTAssertEqual(saved.searchDirection.crossrefQuery, "custom crossref")
@@ -1685,6 +1831,27 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(crossref?["query"] as? String, "solid electrolyte")
         let openalex = sources?["openalex"] as? [String: Any]
         XCTAssertEqual(openalex?["query"] as? String, "solid electrolyte LLZO")
+    }
+
+    func testSettingsStoreEnablesArxivWithoutAddingItToCrossrefJournalTitles() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try #"{"sources":{"crossref":{"enabled":true},"arxiv":{"enabled":false}}}"#
+            .write(to: configURL, atomically: true, encoding: .utf8)
+        var settings = AppSettings.default
+        settings.journalScope = JournalScope(topN: 2, selectedJournals: ["Nature Energy", "arXiv"])
+        settings.searchDirection.crossrefQuery = "solid electrolyte"
+        settings.searchDirection.openalexQuery = "solid electrolyte"
+
+        try SettingsStore(configURL: configURL).save(settings)
+
+        let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any]
+        XCTAssertEqual(payload?["journals"] as? [String], ["Nature Energy", "arXiv"])
+        let sources = payload?["sources"] as? [String: Any]
+        let crossref = sources?["crossref"] as? [String: Any]
+        XCTAssertEqual(crossref?["journal_titles"] as? [String], ["Nature Energy"])
+        let arxiv = sources?["arxiv"] as? [String: Any]
+        XCTAssertEqual(arxiv?["enabled"] as? Bool, true)
     }
 
     func testSettingsStoreTopNFallsBackToSelectedJournalCount() throws {

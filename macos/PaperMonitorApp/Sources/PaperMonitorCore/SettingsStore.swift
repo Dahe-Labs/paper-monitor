@@ -103,13 +103,16 @@ public final class SettingsStore {
 
         var sources = Self.dictionary(payload["sources"]) ?? [:]
         var crossref = Self.dictionary(sources["crossref"]) ?? [:]
-        crossref["journal_titles"] = selectedJournals
+        crossref["journal_titles"] = Self.formalJournalTitles(selectedJournals)
         crossref["query"] = settings.searchDirection.crossrefQuery
         sources["crossref"] = crossref
 
         var openalex = Self.dictionary(sources["openalex"]) ?? [:]
         openalex["query"] = settings.searchDirection.openalexQuery
         sources["openalex"] = openalex
+        var arxiv = Self.dictionary(sources["arxiv"]) ?? [:]
+        arxiv["enabled"] = Self.containsSourceCandidate(selectedJournals, sourceKey: "arxiv")
+        sources["arxiv"] = arxiv
         payload["sources"] = sources
 
         try writePayloadAtomically(payload)
@@ -173,6 +176,19 @@ public final class SettingsStore {
             return selectedJournals
         }
         return SettingsNormalizer.dedupeNonEmpty(stringArray(fallback) ?? [])
+    }
+
+    private static func formalJournalTitles(_ values: [String]) -> [String] {
+        values.filter { normalizedKey($0) != "arxiv" }
+    }
+
+    private static func containsSourceCandidate(_ values: [String], sourceKey: String) -> Bool {
+        let normalized = normalizedKey(sourceKey)
+        return values.contains { normalizedKey($0) == normalized }
+    }
+
+    private static func normalizedKey(_ value: String) -> String {
+        value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func dictionary(_ value: Any?) -> [String: Any]? {

@@ -8,9 +8,12 @@ class MacOSInstallScriptTests(unittest.TestCase):
         script = Path("scripts/install_macos_app.sh").read_text(encoding="utf-8")
 
         restart_index = script.find('pkill -x "PaperMonitorApp"')
+        legacy_restart_index = script.find('pkill -x "SolidBatteryMonitorApp"')
         open_index = script.find('open "$APP_TARGET"')
 
         self.assertGreaterEqual(restart_index, 0)
+        self.assertGreater(legacy_restart_index, restart_index)
+        self.assertGreater(open_index, legacy_restart_index)
         self.assertGreater(open_index, restart_index)
 
     def test_install_script_syncs_manual_command_entrypoints_and_example_config(self):
@@ -39,13 +42,14 @@ class MacOSInstallScriptTests(unittest.TestCase):
         self.assertIn('APP_NAME="Paper Monitor.app"', install_script)
         self.assertIn("<string>Paper Monitor</string>", plist)
 
-    def test_macos_app_runs_as_regular_dock_app_with_visible_app_menu(self):
+    def test_macos_app_runs_as_menu_bar_agent_without_dock_icon(self):
         plist = Path("macos/PaperMonitorApp/Info.plist").read_text(encoding="utf-8")
         main = Path("macos/PaperMonitorApp/Sources/PaperMonitorApp/main.swift").read_text(encoding="utf-8")
 
-        self.assertNotIn("<key>LSUIElement</key>", plist)
-        self.assertIn("app.setActivationPolicy(.regular)", main)
-        self.assertNotIn("app.setActivationPolicy(.accessory)", main)
+        self.assertIn("<key>LSUIElement</key>", plist)
+        self.assertIn("<true/>", plist)
+        self.assertIn("app.setActivationPolicy(.accessory)", main)
+        self.assertNotIn("app.setActivationPolicy(.regular)", main)
 
     def test_build_script_codesigns_final_app_bundle(self):
         script = Path("scripts/build_macos_app.sh").read_text(encoding="utf-8")

@@ -16,6 +16,7 @@ OLD_LAUNCH_AGENT="$HOME/Library/LaunchAgents/com.local.paper-monitor.plist"
 
 mkdir -p "$APP_SUPPORT" "$USER_APPS" "$HOME/Library/LaunchAgents"
 pkill -x "PaperMonitorApp" 2>/dev/null || true
+pkill -x "SolidBatteryMonitorApp" 2>/dev/null || true
 sleep 1
 rm -rf "$APP_TARGET" "$OLD_APP_TARGET"
 cp -R "$APP_SOURCE" "$APP_TARGET"

@@ -11,6 +11,7 @@ from paper_monitor.dashboard import (
     render_dashboard,
 )
 from paper_monitor.journal_metrics import load_journal_metrics
+from paper_monitor.keyword_analysis import AnalysisScope
 
 
 class DashboardAndMetricsTests(unittest.TestCase):
@@ -141,6 +142,16 @@ class DashboardAndMetricsTests(unittest.TestCase):
             self.assertIn("excluded-term", html)
             self.assertIn('<details class="rejected-candidates">', html)
             self.assertIn("<summary>Show rejected candidates", html)
+
+    def test_dashboard_summary_shows_selected_journal_count(self):
+        html = render_dashboard(
+            {"id": 1, "started_at": "2026-06-24", "fetched": 5, "matched": 2, "new_matches": 1, "skipped": 3},
+            [],
+            load_journal_metrics(Path("/does/not/exist.json")),
+            AnalysisScope(selected_journals=("Nature Energy", "Joule", "arXiv"), top_n=15),
+        )
+
+        self.assertIn('<div class="pill">Selected journals: 3</div>', html)
 
     def test_dashboard_uses_journal_match_for_metrics_when_raw_journal_is_noisy(self):
         with tempfile.TemporaryDirectory() as temp_dir:

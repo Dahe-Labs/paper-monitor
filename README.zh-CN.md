@@ -19,12 +19,13 @@ Paper Monitor 是一个本地运行的文献监控工具。它会按照设定的
 
 ### 2. 文献检索
 
-Paper Monitor 使用 Crossref 和 RSS 进行文献检索。OpenAlex 默认关闭，公开版本不要求用户配置 API Key。
+Paper Monitor 使用 Crossref、RSS 和可选的 arXiv 进行文献检索。OpenAlex 默认关闭，公开版本不要求用户配置 API Key。arXiv 属于预发表来源，默认不勾选，需要用户在期刊筛选中手动启用。
 
 检索范围可以通过以下方式控制：
 
 - 选择 Top N 期刊范围。
 - 手动勾选或取消特定期刊。
+- 手动启用 arXiv 预发表来源。
 - 修改检索词和查询语句。
 - 调整刷新频率。
 - 设置排除词，过滤明显无关的结果。
@@ -85,7 +86,7 @@ https://github.com/Stephendahe/paper-monitor/releases
 下载最新的 macOS ZIP 文件，例如：
 
 ```text
-Paper-Monitor-macOS-0.1.1.zip
+Paper-Monitor-macOS-0.1.2.zip
 ```
 
 解压后会得到：
@@ -127,7 +128,7 @@ $HOME/Applications
 - 刷新频率：控制应用运行时多久自动检索一次。
 - 文献检索方向：选择或修改当前研究方向的检索语句。
 
-设置会自动保存，无需手动点击保存按钮。
+修改设置后，点击窗口右上角的 `Apply` 生效。没有修改时，`Apply` 会保持不可点击；修改后会变亮，点击后窗口不会关闭，用户可以继续调整其他设置。
 
 ### 检索词管理
 
@@ -147,8 +148,10 @@ $HOME/Applications
 
 - 按 Top N 自动选择期刊。
 - 手动勾选或取消具体期刊。
+- 在底部单独启用 arXiv 预发表来源。
 - 按影响因子排序显示。
 - 使用 Top 50 期刊元数据。
+- arXiv 会显示在候选列表中，但不会被 Top N 自动勾选。
 
 如果用户只想监控少数期刊，可以先选择一个 Top N 范围，再手动取消不需要的期刊。
 

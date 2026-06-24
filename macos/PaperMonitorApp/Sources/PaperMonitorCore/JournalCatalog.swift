@@ -9,6 +9,29 @@ public struct JournalCatalogEntry: Equatable, Decodable {
     public let fiveYearImpactFactor: Double?
     public let level: String
     public let sourceURL: String
+    public let defaultSelected: Bool
+
+    public init(
+        rank: Int,
+        journal: String,
+        aliases: [String],
+        impactFactor: Double?,
+        impactFactorYear: Int?,
+        fiveYearImpactFactor: Double?,
+        level: String,
+        sourceURL: String,
+        defaultSelected: Bool = true
+    ) {
+        self.rank = rank
+        self.journal = journal
+        self.aliases = aliases
+        self.impactFactor = impactFactor
+        self.impactFactorYear = impactFactorYear
+        self.fiveYearImpactFactor = fiveYearImpactFactor
+        self.level = level
+        self.sourceURL = sourceURL
+        self.defaultSelected = defaultSelected
+    }
 
     enum CodingKeys: String, CodingKey {
         case rank
@@ -19,6 +42,22 @@ public struct JournalCatalogEntry: Equatable, Decodable {
         case fiveYearImpactFactor = "five_year_impact_factor"
         case level
         case sourceURL = "source_url"
+        case defaultSelected = "default_selected"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            rank: try container.decode(Int.self, forKey: .rank),
+            journal: try container.decode(String.self, forKey: .journal),
+            aliases: try container.decodeIfPresent([String].self, forKey: .aliases) ?? [],
+            impactFactor: try container.decodeIfPresent(Double.self, forKey: .impactFactor),
+            impactFactorYear: try container.decodeIfPresent(Int.self, forKey: .impactFactorYear),
+            fiveYearImpactFactor: try container.decodeIfPresent(Double.self, forKey: .fiveYearImpactFactor),
+            level: try container.decodeIfPresent(String.self, forKey: .level) ?? "",
+            sourceURL: try container.decodeIfPresent(String.self, forKey: .sourceURL) ?? "",
+            defaultSelected: try container.decodeIfPresent(Bool.self, forKey: .defaultSelected) ?? true
+        )
     }
 }
 
@@ -36,7 +75,19 @@ public struct JournalCatalog: Equatable {
     }
 
     public func topJournals(_ count: Int) -> [JournalCatalogEntry] {
-        Array(entriesByImpactFactor.prefix(SettingsNormalizer.clampedTopN(count)))
+        Array(entriesByImpactFactor.filter(\.defaultSelected).prefix(SettingsNormalizer.clampedTopN(count)))
+    }
+
+    public func entry(named journal: String) -> JournalCatalogEntry? {
+        let key = Self.normalizedName(journal)
+        guard !key.isEmpty else {
+            return nil
+        }
+
+        return entries.first { entry in
+            Self.normalizedName(entry.journal) == key
+                || entry.aliases.contains { Self.normalizedName($0) == key }
+        }
     }
 
     public static func entriesSortedByImpactFactor(_ entries: [JournalCatalogEntry]) -> [JournalCatalogEntry] {
@@ -59,6 +110,13 @@ public struct JournalCatalog: Equatable {
             }
             return lhs.journal.localizedCaseInsensitiveCompare(rhs.journal) == .orderedAscending
         }
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .split(separator: " ")
+            .joined(separator: " ")
     }
 
     private struct Payload: Decodable {

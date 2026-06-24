@@ -1,3 +1,29 @@
+# Paper Monitor 0.1.2
+
+Journal source and settings workflow release.
+
+## Included
+
+- Optional arXiv preprint retrieval, disabled by default.
+- Separate Preprint Sources section in Journal Filter for arXiv.
+- Dashboard summary now reports the actual selected journal/source count.
+- Settings window now has an Apply button with unsaved and saved state feedback.
+- More stable macOS notification dispatch with a local fallback path.
+- Native macOS menu bar app remains hidden from the Dock and runs as a status item.
+
+## Changed
+
+- Top N only applies to formal journals; manually selected arXiv is preserved.
+- Crossref journal title filters exclude arXiv while the arXiv source handles preprints.
+- The public default journal scope remains Top 15 to keep routine scans smaller.
+- Chinese and English documentation now describe the optional arXiv source and Apply workflow.
+
+## Notes
+
+- This release is ad-hoc signed and not notarized.
+- macOS may require right-click Open or approval from System Settings on first launch.
+- Runtime data, logs, caches, and personal configuration are not included in the source repository.
+
 # Paper Monitor 0.1.1
 
 Internal naming cleanup release.

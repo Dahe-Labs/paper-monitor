@@ -68,6 +68,13 @@ def fetch_all_sources(source_config: Dict[str, object]) -> List[Article]:
             except Exception as error:
                 _warn("OpenAlex source failed: %s" % error)
 
+    arxiv = source_config.get("arxiv", {})
+    if isinstance(arxiv, dict) and arxiv.get("enabled", False):
+        try:
+            articles.extend(fetch_arxiv(arxiv))
+        except Exception as error:
+            _warn("arXiv source failed: %s" % error)
+
     return articles
 
 
@@ -281,6 +288,39 @@ def build_crossref_urls(config: Dict[str, object]) -> List[str]:
             params["cursor"] = "*"
         urls.append("https://api.crossref.org/works?" + urllib.parse.urlencode(params))
     return urls
+
+
+def fetch_arxiv(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> List[Article]:
+    timeout = int(config.get("timeout_seconds", 20))
+    fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
+    return parse_arxiv_response(fetch_one(build_arxiv_url(config)))
+
+
+def build_arxiv_url(config: Dict[str, object]) -> str:
+    query = str(config.get("query") or "solid electrolyte").strip()
+    search_field = str(config.get("search_field") or "title").strip().lower()
+    if search_field in {"title", "ti"}:
+        search_query = "ti:(%s)" % query
+    elif search_field in {"abstract", "abs"}:
+        search_query = "abs:(%s)" % query
+    else:
+        search_query = "all:(%s)" % query
+    params = {
+        "search_query": search_query,
+        "start": "0",
+        "max_results": str(_bounded_arxiv_results(config.get("max_results", 100))),
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+    }
+    return "https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params)
+
+
+def _bounded_arxiv_results(value: object) -> int:
+    try:
+        rows = int(value)
+    except (TypeError, ValueError):
+        rows = 100
+    return min(2000, max(1, rows))
 
 
 def _crossref_params(
@@ -517,6 +557,39 @@ def parse_openalex_response(data: bytes, source_name: str = "OpenAlex") -> List[
     return [article for article in articles if article.title]
 
 
+def parse_arxiv_response(data: bytes, source_name: str = "arXiv") -> List[Article]:
+    root = ET.fromstring(data)
+    articles: List[Article] = []
+    for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
+        published = _child_text(entry, "published")
+        updated = _child_text(entry, "updated")
+        url = _atom_link(entry) or _child_text(entry, "id")
+        doi = normalize_doi(_child_text(entry, "doi") or _extract_doi(" ".join(_all_text(entry))))
+        articles.append(
+            Article(
+                title=_strip_markup(_child_text(entry, "title")),
+                journal="arXiv",
+                url=url,
+                doi=doi,
+                published=_normalize_publication_date(published),
+                abstract=_strip_markup(_child_text(entry, "summary")),
+                source=source_name,
+                detected=_normalize_publication_date(updated or published),
+                authors=_atom_authors(entry),
+            )
+        )
+    return [article for article in articles if article.title and article.url]
+
+
+def _atom_authors(entry: ET.Element) -> tuple:
+    names = []
+    for author in entry.findall("{http://www.w3.org/2005/Atom}author"):
+        name = _strip_markup(_child_text(author, "name"))
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
 def _first_list_value(value: object) -> str:
     if isinstance(value, list) and value:
         return str(value[0])
@@ -582,7 +655,7 @@ def _normalize_publication_date(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", text)
+    match = re.search(r"\b\d{4}-\d{2}-\d{2}(?=\D|$)", text)
     if match is not None:
         return match.group(0)
     try:

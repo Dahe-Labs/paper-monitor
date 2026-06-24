@@ -8,10 +8,13 @@ from unittest.mock import patch
 
 from paper_monitor.models import Article
 from paper_monitor.sources import (
+    build_arxiv_url,
     build_crossref_urls,
     fetch_all_sources,
+    fetch_arxiv,
     fetch_crossref,
     fetch_url,
+    parse_arxiv_response,
     parse_crossref_response,
     parse_openalex_response,
     parse_rss_feed,
@@ -224,6 +227,81 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(articles[0].doi, "10.1234/openalex")
         self.assertEqual(articles[0].journal, "Nature Materials")
         self.assertEqual(articles[0].abstract, "Garnet solid electrolytes")
+
+    def test_builds_arxiv_url_with_title_query_and_submitted_sort(self):
+        url = build_arxiv_url(
+            {
+                "query": "solid electrolyte OR all-solid-state battery",
+                "max_results": 50,
+                "search_field": "title",
+            }
+        )
+
+        query = parse_qs(urlsplit(url).query)
+        self.assertEqual(urlsplit(url).netloc, "export.arxiv.org")
+        self.assertEqual(query["search_query"], ["ti:(solid electrolyte OR all-solid-state battery)"])
+        self.assertEqual(query["max_results"], ["50"])
+        self.assertEqual(query["sortBy"], ["submittedDate"])
+        self.assertEqual(query["sortOrder"], ["descending"])
+
+    def test_parses_arxiv_atom_response_into_articles(self):
+        xml = """<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"
+              xmlns:arxiv="http://arxiv.org/schemas/atom">
+          <entry>
+            <id>http://arxiv.org/abs/2606.12345v1</id>
+            <updated>2026-06-24T12:00:00Z</updated>
+            <published>2026-06-23T08:00:00Z</published>
+            <title>Solid electrolyte interfaces for all-solid-state batteries</title>
+            <summary>Halide solid electrolyte interphase design.</summary>
+            <author><name>Ada Lovelace</name></author>
+            <author><name>Grace Hopper</name></author>
+            <arxiv:doi>10.48550/arXiv.2606.12345</arxiv:doi>
+          </entry>
+        </feed>
+        """
+
+        articles = parse_arxiv_response(xml.encode("utf-8"))
+
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0].journal, "arXiv")
+        self.assertEqual(articles[0].source, "arXiv")
+        self.assertEqual(articles[0].published, "2026-06-23")
+        self.assertEqual(articles[0].detected, "2026-06-24")
+        self.assertEqual(articles[0].doi, "10.48550/arxiv.2606.12345")
+        self.assertEqual(articles[0].authors, ("Ada Lovelace", "Grace Hopper"))
+
+    def test_fetch_all_sources_queries_arxiv_only_when_enabled(self):
+        expected = Article(
+            title="Solid electrolyte preprint",
+            journal="arXiv",
+            url="https://arxiv.org/abs/2606.12345",
+            doi="",
+            published="2026-06-23",
+            abstract="",
+            source="arXiv",
+        )
+        disabled = {"rss": [], "crossref": {"enabled": False}, "openalex": {"enabled": False}}
+        enabled = {
+            "rss": [],
+            "crossref": {"enabled": False},
+            "openalex": {"enabled": False},
+            "arxiv": {"enabled": True},
+        }
+
+        with patch("paper_monitor.sources.fetch_arxiv", return_value=[expected]) as arxiv:
+            self.assertEqual(fetch_all_sources(disabled), [])
+            self.assertEqual(fetch_all_sources(enabled), [expected])
+
+        self.assertEqual(arxiv.call_count, 1)
+
+    def test_fetch_arxiv_uses_configured_timeout(self):
+        xml = b"""<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>"""
+
+        with patch("paper_monitor.sources.fetch_url", return_value=xml) as fetch:
+            fetch_arxiv({"query": "solid electrolyte", "timeout_seconds": 9})
+
+        self.assertEqual(fetch.call_args.kwargs["timeout"], 9)
 
     def test_fetch_all_sources_continues_when_one_source_fails(self):
         expected = Article(
