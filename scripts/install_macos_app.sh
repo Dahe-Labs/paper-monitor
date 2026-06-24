@@ -5,10 +5,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_SUPPORT="$HOME/Library/Application Support/PaperMonitor"
 USER_APPS="$HOME/Applications"
 APP_NAME="Paper Monitor.app"
-OLD_APP_NAME="Paper Monitor.app"
 APP_SOURCE="$ROOT_DIR/dist/$APP_NAME"
 APP_TARGET="$USER_APPS/$APP_NAME"
-OLD_APP_TARGET="$USER_APPS/$OLD_APP_NAME"
 LAUNCH_AGENT="$HOME/Library/LaunchAgents/com.local.paper-monitor.app.plist"
 OLD_LAUNCH_AGENT="$HOME/Library/LaunchAgents/com.local.paper-monitor.plist"
 
@@ -16,9 +14,8 @@ OLD_LAUNCH_AGENT="$HOME/Library/LaunchAgents/com.local.paper-monitor.plist"
 
 mkdir -p "$APP_SUPPORT" "$USER_APPS" "$HOME/Library/LaunchAgents"
 pkill -x "PaperMonitorApp" 2>/dev/null || true
-pkill -x "SolidBatteryMonitorApp" 2>/dev/null || true
 sleep 1
-rm -rf "$APP_TARGET" "$OLD_APP_TARGET"
+rm -rf "$APP_TARGET"
 cp -R "$APP_SOURCE" "$APP_TARGET"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_TARGET" 2>/dev/null || true
 

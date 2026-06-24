@@ -9,6 +9,10 @@ final class AppMainMenuController: NSObject {
 
     private let mainMenu = NSMenu()
     private let appMenu = NSMenu()
+    private let lastRunItem = NSMenuItem(title: "Last Run: never", action: nil, keyEquivalent: "")
+    private let lastResultItem = NSMenuItem(title: "Last Result: none", action: nil, keyEquivalent: "")
+    private let permissionItem = NSMenuItem(title: "Notification Permission: unknown", action: nil, keyEquivalent: "")
+    private let refreshItem = NSMenuItem(title: "Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "r")
 
     var onOpenDashboard: (() -> Void)?
     var onOpenSettings: (() -> Void)?
@@ -49,8 +53,13 @@ final class AppMainMenuController: NSObject {
 
         addItem("Open Dashboard", action: #selector(openDashboardAction), keyEquivalent: "o")
         addItem("Settings...", action: #selector(openSettingsAction), keyEquivalent: ",")
-        addItem("Refresh Now", action: #selector(refreshNowAction), keyEquivalent: "r")
+        refreshItem.target = self
+        appMenu.addItem(refreshItem)
         addItem("Test Notification", action: #selector(testNotificationAction), keyEquivalent: "t")
+        appMenu.addItem(.separator())
+        appMenu.addItem(lastRunItem)
+        appMenu.addItem(lastResultItem)
+        appMenu.addItem(permissionItem)
         appMenu.addItem(.separator())
         addItem("Quit \(AppIdentity.displayName)", action: #selector(quitAction), keyEquivalent: "q")
     }
@@ -79,5 +88,25 @@ final class AppMainMenuController: NSObject {
 
     @objc private func quitAction() {
         onQuit?()
+    }
+
+    func update(result: RefreshResult) {
+        lastRunItem.title = "Last Run: \(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short))"
+        lastResultItem.title = RefreshPresentation.resultTitle(for: result)
+        refreshItem.isEnabled = true
+    }
+
+    func updateRefreshStarted() {
+        lastResultItem.title = RefreshPresentation.refreshingResultTitle
+        refreshItem.isEnabled = false
+    }
+
+    func updateRefreshFailed() {
+        lastResultItem.title = RefreshPresentation.failedResultTitle
+        refreshItem.isEnabled = true
+    }
+
+    func updatePermission(_ text: String) {
+        permissionItem.title = RefreshPresentation.permissionTitle(text)
     }
 }

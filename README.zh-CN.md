@@ -6,9 +6,11 @@ Paper Monitor 是一个本地运行的文献监控工具。它会按照设定的
 
 ## 主要功能
 
-### 1. 菜单栏应用
+### 1. macOS 应用
 
-安装后，Paper Monitor 会作为 macOS 应用运行。打开应用后，可以从应用菜单或窗口中进入 Dashboard、设置页面、手动刷新和通知测试。
+安装后，Paper Monitor 会作为普通 macOS 应用运行，并显示在 Dock。打开应用后，可以从左上角应用菜单或窗口中进入 Dashboard、设置页面、手动刷新和通知测试。
+
+关闭 Dashboard 或设置窗口不会退出应用；只要没有选择 `Quit Paper Monitor`，应用会继续在后台按设置的刷新频率监控并发送通知。
 
 常用操作包括：
 
@@ -86,7 +88,7 @@ https://github.com/Stephendahe/paper-monitor/releases
 下载最新的 macOS ZIP 文件，例如：
 
 ```text
-Paper-Monitor-macOS-0.1.2.zip
+Paper-Monitor-macOS-0.1.3.zip
 ```
 
 解压后会得到：

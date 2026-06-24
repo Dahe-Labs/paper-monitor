@@ -10,7 +10,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var settingsStore = SettingsStore(configURL: bridge.configURL)
     private let activationCoordinator = AppActivationCoordinator()
     private let notifications = NotificationController()
-    private let menuController = MenuController()
     private let appMainMenuController = AppMainMenuController()
     private lazy var dashboardWindow = DashboardWindowController(commandController: dashboardCommandController)
     private lazy var dashboardCommandController = DashboardCommandController(
@@ -54,7 +53,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         configureMainApplicationMenu()
-        configureMenu()
         scheduleTimer()
         requestNotificationAuthorizationThenRefresh(
             postTestNotificationAfterAuthorization: launchOptions.postTestNotificationOnLaunch
@@ -62,8 +60,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        openDashboard()
+        if flag {
+            dashboardWindow.show()
+        } else {
+            openDashboard()
+        }
         return true
+    }
+
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        AppLifecyclePolicy.shouldTerminateAfterLastWindowClosed
     }
 
     private func configureMainApplicationMenu() {
@@ -85,30 +91,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         appMainMenuController.install()
     }
 
-    private func configureMenu() {
-        menuController.onOpenDashboard = { [weak self] in
-            self?.openDashboard()
-        }
-        menuController.onOpenSettings = { [weak self] in
-            self?.openSettings()
-        }
-        menuController.onRefreshNow = { [weak self] in
-            self?.refreshNow()
-        }
-        menuController.onTestNotification = { [weak self] in
-            self?.postTestNotification()
-        }
-        menuController.onQuit = {
-            NSApp.terminate(nil)
-        }
-        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
-            let status = settings.authorizationStatus
-            DispatchQueue.main.async {
-                self?.updateNotificationPermission(status)
-            }
-        }
-    }
-
     private func requestNotificationAuthorizationThenRefresh(postTestNotificationAfterAuthorization: Bool = false) {
         notifications.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
@@ -122,7 +104,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateNotificationPermission(_ status: UNAuthorizationStatus) {
-        menuController.updatePermission(Self.permissionText(status))
+        appMainMenuController.updatePermission(Self.permissionText(status))
     }
 
     private static func permissionText(_ status: UNAuthorizationStatus) -> String {
@@ -165,7 +147,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return true
         } catch {
-            menuController.updateRefreshFailed()
+            appMainMenuController.updateRefreshFailed()
             return false
         }
     }
@@ -178,7 +160,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let existingController = settingsWindow {
             guard existingController.flushPendingChanges() else {
-                menuController.updateRefreshFailed()
+                appMainMenuController.updateRefreshFailed()
                 return
             }
             existingController.close()
@@ -192,7 +174,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 catalog: journalCatalog
             )
         } catch {
-            menuController.updateRefreshFailed()
+            appMainMenuController.updateRefreshFailed()
             return
         }
 
@@ -227,7 +209,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         guard refreshGate.begin() else {
             return
         }
-        menuController.updateRefreshStarted()
+        appMainMenuController.updateRefreshStarted()
         let bridge = self.bridge
         DispatchQueue.global(qos: .background).async { [weak self] in
             do {
@@ -250,11 +232,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleRefreshFailure() {
         refreshGate.finish()
-        menuController.updateRefreshFailed()
+        appMainMenuController.updateRefreshFailed()
     }
 
     private func handle(result: RefreshResult) {
-        menuController.update(result: result)
+        appMainMenuController.update(result: result)
         let dashboardURL = URL(fileURLWithPath: result.dashboardPath)
         lastDashboardURL = dashboardURL
         for article in result.articles {
@@ -273,4 +255,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             .appendingPathComponent("work/paper-monitor/dashboard/latest.html")
         dashboardWindow.load(fileURL: dashboardURL)
     }
+}
+
+enum AppLifecyclePolicy {
+    static let shouldTerminateAfterLastWindowClosed = false
 }

@@ -1,3 +1,27 @@
+# Paper Monitor 0.1.3
+
+macOS lifecycle and cleanup release.
+
+## Included
+
+- Paper Monitor now runs as a regular macOS Dock app with a normal application menu.
+- Settings, Dashboard, Refresh Now, and Test Notification are available from the left-side macOS app menu.
+- Background monitoring continues after closing the Dashboard or Settings windows.
+- Reopening the app from the Dock no longer reloads the same Dashboard file, so the current Keyword Analysis view is preserved.
+- Menu bar status item code and menu bar-only icon assets were removed.
+
+## Changed
+
+- Removed the `LSUIElement` hidden-agent configuration.
+- Removed the right-side menu bar status item path.
+- Kept refresh status and notification permission status in the application menu.
+
+## Notes
+
+- This release is ad-hoc signed and not notarized.
+- macOS may require right-click Open or approval from System Settings on first launch.
+- Runtime data, logs, caches, and personal configuration are not included in the source repository.
+
 # Paper Monitor 0.1.2
 
 Journal source and settings workflow release.

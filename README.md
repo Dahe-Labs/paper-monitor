@@ -2,14 +2,15 @@
 
 [中文说明](README.zh-CN.md)
 
-Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, and a native macOS menu bar app.
+Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, and a native macOS app.
 
 The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default. arXiv is available as an optional preprint source, but it is not selected by default.
 
 ## Features
 
-- Native macOS menu bar app with manual refresh, settings, dashboard access, and notification testing.
+- Native macOS Dock app with an application menu for manual refresh, settings, dashboard access, and notification testing.
 - Local notifications for newly matched papers.
+- Background monitoring continues while windows are closed, until the app is quit.
 - Crossref, RSS, and optional arXiv retrieval with journal scope controls.
 - Local SQLite deduplication so repeated papers are not notified again.
 - Settings Apply workflow with visible unsaved/saved state.
@@ -83,7 +84,7 @@ The personal `config.json`, runtime database, logs, and Crossref cache are inten
 
 ```text
 paper_monitor/          Python retrieval, filtering, storage, dashboard, and analysis logic
-macos/PaperMonitorApp/   Native macOS menu bar wrapper
+macos/PaperMonitorApp/   Native macOS wrapper
 tests/                          Python tests
 scripts/                        Build and install helpers
 windows/                        Early Windows tray entry point

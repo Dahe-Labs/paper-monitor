@@ -151,108 +151,16 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         )
     }
 
-    func testMenuBarUsesIconPresentation() {
-        let presentation = MenuBarPresentation.default
-
-        XCTAssertEqual(presentation.length, NSStatusItem.squareLength)
-        XCTAssertEqual(presentation.title, "")
-        XCTAssertEqual(presentation.toolTip, "Paper Monitor")
-        XCTAssertEqual(presentation.iconName, "MenuBarIcon")
-        XCTAssertEqual(presentation.iconPointSize, 20)
-        XCTAssertTrue(presentation.isTemplate)
-    }
-
-    @MainActor
-    func testMenuControllerDefaultStatusItemUsesReadablePaperMonitorLabel() {
-        let controller = MenuController()
-
-        XCTAssertEqual(controller.statusItemSnapshotForTesting.title, "")
-        XCTAssertTrue(controller.statusItemSnapshotForTesting.hasImage)
-        XCTAssertTrue(controller.statusItemSnapshotForTesting.isVisible)
-        XCTAssertEqual(controller.statusItemAutosaveNameForTesting, "com.local.paper-monitor.app.status-item")
-    }
-
-    func testMenuBarIconLoaderReadsPNGFromAppBundleResources() throws {
-        let bundleURL = try makeTemporaryDirectory().appendingPathComponent("Test.app", isDirectory: true)
-        let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
-        let resourcesURL = contentsURL.appendingPathComponent("Resources", isDirectory: true)
-        try FileManager.default.createDirectory(at: resourcesURL, withIntermediateDirectories: true)
-        try """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-          "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>CFBundleIdentifier</key>
-          <string>local.test.bundle</string>
-          <key>CFBundlePackageType</key>
-          <string>APPL</string>
-        </dict>
-        </plist>
-        """.write(to: contentsURL.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
-        try makeTestPNGData().write(to: resourcesURL.appendingPathComponent("MenuBarIcon.png"))
-
-        let bundle = try XCTUnwrap(Bundle(url: bundleURL))
-        let image = try XCTUnwrap(MenuBarIconLoader(bundle: bundle).image(for: .default))
-
-        XCTAssertEqual(image.size, NSSize(width: 20, height: 20))
-        XCTAssertTrue(image.isTemplate)
-    }
-
-    @MainActor
-    func testMenuControllerUsesFallbackIconWhenResourceIsMissing() {
-        let presentation = MenuBarPresentation(
-            length: NSStatusItem.squareLength,
-            title: "",
-            toolTip: "Paper Monitor",
-            iconName: "DefinitelyMissingMenuBarIcon",
-            isTemplate: true,
-            iconPointSize: 18
+    func testMacOSAppRunsAsRegularDockAppWithApplicationMenu() throws {
+        let plist = try String(contentsOfFile: "Info.plist", encoding: .utf8)
+        let main = try String(
+            contentsOfFile: "Sources/PaperMonitorApp/main.swift",
+            encoding: .utf8
         )
-        let controller = MenuController(presentation: presentation)
 
-        XCTAssertTrue(controller.statusItemSnapshotForTesting.isVisible)
-        XCTAssertTrue(controller.statusItemSnapshotForTesting.hasImage)
-        XCTAssertEqual(controller.statusItemSnapshotForTesting.title, "")
-    }
-
-    @MainActor
-    func testMenuControllerContainsSettingsMenuItem() {
-        let controller = MenuController()
-
-        XCTAssertEqual(controller.menuItemsForTesting, [
-            MenuController.MenuItemSnapshot(title: "Paper Monitor", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "Last Run: never", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "Last Result: none", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "Notification Permission: unknown", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "Open Dashboard", keyEquivalent: "o", actionName: "openDashboardAction"),
-            MenuController.MenuItemSnapshot(title: "Settings...", keyEquivalent: ",", actionName: "openSettingsAction"),
-            MenuController.MenuItemSnapshot(title: "Refresh Now", keyEquivalent: "r", actionName: "refreshNowAction"),
-            MenuController.MenuItemSnapshot(title: "Test Notification", keyEquivalent: "t", actionName: "testNotificationAction"),
-            MenuController.MenuItemSnapshot(title: "", keyEquivalent: "", actionName: nil),
-            MenuController.MenuItemSnapshot(title: "Quit", keyEquivalent: "q", actionName: "quitAction"),
-        ])
-    }
-
-    @MainActor
-    func testMenuControllerInvokesDashboardAndSettingsCallbacks() {
-        let controller = MenuController()
-        var didOpenDashboard = false
-        var didOpenSettings = false
-        controller.onOpenDashboard = {
-            didOpenDashboard = true
-        }
-        controller.onOpenSettings = {
-            didOpenSettings = true
-        }
-
-        controller.triggerMenuItemForTesting(title: "Open Dashboard")
-        controller.triggerMenuItemForTesting(title: "Settings...")
-
-        XCTAssertTrue(didOpenDashboard)
-        XCTAssertTrue(didOpenSettings)
+        XCTAssertFalse(plist.contains("<key>LSUIElement</key>"))
+        XCTAssertTrue(main.contains("app.setActivationPolicy(.regular)"))
+        XCTAssertFalse(main.contains("app.setActivationPolicy(.accessory)"))
     }
 
     @MainActor
@@ -265,6 +173,9 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             AppMainMenuController.MenuItemSnapshot(title: "Settings...", actionName: "openSettingsAction"),
             AppMainMenuController.MenuItemSnapshot(title: "Refresh Now", actionName: "refreshNowAction"),
             AppMainMenuController.MenuItemSnapshot(title: "Test Notification", actionName: "testNotificationAction"),
+            AppMainMenuController.MenuItemSnapshot(title: "Last Run: never", actionName: nil),
+            AppMainMenuController.MenuItemSnapshot(title: "Last Result: none", actionName: nil),
+            AppMainMenuController.MenuItemSnapshot(title: "Notification Permission: unknown", actionName: nil),
             AppMainMenuController.MenuItemSnapshot(title: "Quit Paper Monitor", actionName: "quitAction"),
         ])
     }
@@ -363,6 +274,25 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let controller = DashboardWindowController()
 
         XCTAssertEqual(try XCTUnwrap(controller.window).title, "Paper Monitor")
+    }
+
+    @MainActor
+    func testDashboardWindowKeepsLoadedPageWhenReopenedWithSameFile() throws {
+        let controller = DashboardWindowController()
+        let dashboardURL = try makeTemporaryDirectory().appendingPathComponent("latest.html")
+        try "<html><body>Dashboard</body></html>".write(to: dashboardURL, atomically: true, encoding: .utf8)
+
+        controller.load(fileURL: dashboardURL)
+        controller.load(fileURL: dashboardURL)
+
+        XCTAssertEqual(controller.loadedFileURLForTesting, dashboardURL)
+        XCTAssertEqual(controller.loadCountForTesting, 1)
+        XCTAssertFalse(try XCTUnwrap(controller.window).isReleasedWhenClosed)
+    }
+
+    @MainActor
+    func testAppContinuesRunningAfterDashboardWindowCloses() {
+        XCTAssertFalse(AppLifecyclePolicy.shouldTerminateAfterLastWindowClosed)
     }
 
     @MainActor

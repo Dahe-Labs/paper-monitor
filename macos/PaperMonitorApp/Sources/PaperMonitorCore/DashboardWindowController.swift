@@ -5,6 +5,8 @@ import WebKit
 public final class DashboardWindowController: NSWindowController {
     private let webView: WKWebView
     private let commandController: DashboardCommandController?
+    private var loadedFileURL: URL?
+    private var loadCount = 0
 
     public init(commandController: DashboardCommandController? = nil) {
         self.commandController = commandController
@@ -21,6 +23,7 @@ public final class DashboardWindowController: NSWindowController {
             defer: false
         )
         window.title = AppIdentity.displayName
+        window.isReleasedWhenClosed = false
         window.center()
         window.contentView = webView
         super.init(window: window)
@@ -36,9 +39,25 @@ public final class DashboardWindowController: NSWindowController {
     }
 
     public func load(fileURL: URL) {
-        webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        if loadedFileURL != fileURL {
+            webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+            loadedFileURL = fileURL
+            loadCount += 1
+        }
+        show()
+    }
+
+    public func show() {
         showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    var loadedFileURLForTesting: URL? {
+        loadedFileURL
+    }
+
+    var loadCountForTesting: Int {
+        loadCount
     }
 }
 
