@@ -1,12 +1,23 @@
 name: Build Windows executable
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version without the v prefix"
+        description: "Release version, with or without the v prefix"
         required: true
         default: "0.1.5"
+      upload_release:
+        description: "Upload the executable to the matching GitHub Release"
+        required: false
+        type: boolean
+        default: false
+  release:
+    types:
+      - published
   push:
     tags:
       - "v*"
@@ -38,16 +49,23 @@ jobs:
         shell: pwsh
         env:
           REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           $version = $env:REQUESTED_VERSION
           if (-not $version) {
+            $version = $env:RELEASE_TAG
+          }
+          if (-not $version) {
             $version = $env:REF_NAME.TrimStart("v")
           }
+          $version = $version.TrimStart("v")
+          $tagName = "v$version"
           $assetName = "Paper-Monitor-Windows-$version.exe"
           New-Item -ItemType Directory -Force -Path "dist\release" | Out-Null
           Copy-Item "dist\windows\PaperMonitor.exe" "dist\release\$assetName"
           "asset_name=$assetName" >> $env:GITHUB_OUTPUT
+          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
@@ -55,3 +73,11 @@ jobs:
           name: ${{ steps.package.outputs.asset_name }}
           path: dist/release/${{ steps.package.outputs.asset_name }}
           if-no-files-found: error
+
+      - name: Upload executable to GitHub Release
+        if: ${{ github.event_name == 'release' || github.event.inputs.upload_release == 'true' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.package.outputs.tag_name }}" "dist\release\${{ steps.package.outputs.asset_name }}#${{ steps.package.outputs.asset_name }}" --clobber
