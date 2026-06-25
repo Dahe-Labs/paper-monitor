@@ -85,15 +85,18 @@ Keyword Analysis 用于统计指定时间范围内的研究热点。它会根据
 https://github.com/Stephendahe/paper-monitor/releases
 ```
 
-下载最新的 macOS PKG 安装包，例如：
+最新 Release 会把 macOS 和 Windows 下载文件放在同一个版本下，并保持版本号一致，例如：
 
 ```text
 Paper-Monitor-macOS-0.1.5.pkg
+Paper-Monitor-Windows-0.1.5.exe
 ```
 
-双击安装包后按系统提示安装。安装完成后会得到 `/Applications/Paper Monitor.app`。
+macOS 用户下载 `.pkg` 安装包，双击后按系统提示安装。安装完成后会得到 `/Applications/Paper Monitor.app`。
 
 首次打开时，macOS 可能会提示应用来自互联网或未公证。可以右键点击 `Paper Monitor.app`，选择 `Open`，再确认打开。也可以在系统设置的安全性页面中允许打开。
+
+Windows 用户下载同版本号的 `.exe` 文件。Windows 包由仓库里的 GitHub Actions Windows 构建流程生成。
 
 ## 首次使用
 

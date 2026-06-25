@@ -10,7 +10,8 @@ Settings workflow release.
 - Added `1 day` and `2 days` refresh frequency options.
 - Replaced the old `24h` label with `1 day`.
 - Added optional `Start Time` scheduling in `HH:mm` format. Scheduled refreshes wait until the next matching start time, then continue by the selected interval.
-- GitHub Release assets now use a macOS `.pkg` installer only; GitHub may still show its automatic source-code archive links.
+- GitHub Release assets now list macOS `.pkg` and Windows `.exe` downloads under the same version when both builds are available.
+- Added a Windows GitHub Actions build workflow so Windows release assets can be generated with the same visible version number as macOS assets.
 
 ## Notes
 

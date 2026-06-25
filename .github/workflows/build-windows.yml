@@ -1,0 +1,57 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without the v prefix"
+        required: true
+        default: "0.1.5"
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-windows.txt
+
+      - name: Build executable
+        shell: pwsh
+        run: .\scripts\build_windows_app.ps1
+
+      - name: Package release asset
+        id: package
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = $env:REQUESTED_VERSION
+          if (-not $version) {
+            $version = $env:REF_NAME.TrimStart("v")
+          }
+          $assetName = "Paper-Monitor-Windows-$version.exe"
+          New-Item -ItemType Directory -Force -Path "dist\release" | Out-Null
+          Copy-Item "dist\windows\PaperMonitor.exe" "dist\release\$assetName"
+          "asset_name=$assetName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.asset_name }}
+          path: dist/release/${{ steps.package.outputs.asset_name }}
+          if-no-files-found: error
