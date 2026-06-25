@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from io import BytesIO
 import struct
 from pathlib import Path
 
@@ -11,11 +12,9 @@ ICON_PATH = ASSET_DIR / "PaperMonitor.ico"
 
 
 def png_bytes(size: int) -> bytes:
-    temp_path = ASSET_DIR / f"PaperMonitor-{size}.png"
-    write_png(temp_path, draw_menu_icon(size))
-    payload = temp_path.read_bytes()
-    temp_path.unlink()
-    return payload
+    output = BytesIO()
+    write_png(output, draw_menu_icon(size))
+    return output.getvalue()
 
 
 def build_ico(sizes=(16, 32, 48, 64, 128, 256)) -> bytes:

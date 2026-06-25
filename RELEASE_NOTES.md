@@ -1,3 +1,26 @@
+# Paper Monitor 0.1.4
+
+Windows tray release.
+
+## Included
+
+- Windows system tray app with Open Dashboard, Settings, Refresh Now, Test Notification, and Quit actions.
+- Local Windows dashboard bridge for keyword-analysis actions, bound to `127.0.0.1` with a per-session token.
+- PowerShell build and install scripts for creating a no-console PyInstaller executable and enabling startup for the current user.
+- Windows release package documentation in `README_WINDOWS.md`.
+
+## Changed
+
+- Windows builds now embed `config.example.json`, `journal_metrics.json`, and the application icon so a downloaded executable has the default runtime resources available on first launch.
+- Windows build scripts detect real Python installations and avoid the Microsoft Store Python alias.
+- Documentation now describes both macOS and Windows downloads.
+
+## Notes
+
+- This release is not code-signed.
+- Windows may show a SmartScreen warning the first time the executable is downloaded or opened.
+- Runtime data, logs, caches, and personal configuration are not included in the source repository.
+
 # Paper Monitor 0.1.3
 
 macOS lifecycle and cleanup release.

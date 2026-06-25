@@ -948,6 +948,9 @@ function addSearchTerm(term) {
     bridge.postMessage({ type: "addSearchTerm", term: clean });
     return;
   }
+  if (postToPaperMonitorBridge("/api/add-search-term", { term: clean }, function () {})) {
+    return;
+  }
   if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
     try {
       const writeResult = navigator.clipboard.writeText(clean);
@@ -993,18 +996,62 @@ function requestKeywordAnalysis() {
   }
 
   const bridge = typeof window !== "undefined" && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperMonitor;
-  if (!bridge) {
-    keywordAnalysisState.analysisStatus = "error";
-    keywordAnalysisState.analysisError = "Open Paper Monitor to run Crossref analysis.";
-    renderKeywordAnalysis();
-    return;
-  }
-
   keywordAnalysisState.analysisStatus = "loading";
   keywordAnalysisState.analysisError = "";
   renderKeywordAnalysis();
   startAnalysisProgress();
+  if (!bridge) {
+    if (postToPaperMonitorBridge(
+      "/api/analyze-keywords",
+      request,
+      function (payload) {
+        receiveKeywordAnalysisPayload(payload);
+      },
+      function (message) {
+        receiveKeywordAnalysisPayload({ error: message || "Crossref analysis failed." });
+      }
+    )) {
+      return;
+    }
+    receiveKeywordAnalysisPayload({ error: "Open Paper Monitor to run Crossref analysis." });
+    return;
+  }
   bridge.postMessage(request);
+}
+
+function getPaperMonitorBridgeBaseURL() {
+  if (typeof window === "undefined") return "";
+  return String(window.paperMonitorBridgeBaseURL || "").replace(/\/+$/, "");
+}
+
+function getPaperMonitorBridgeToken() {
+  if (typeof window === "undefined") return "";
+  return String(window.paperMonitorBridgeToken || "");
+}
+
+function postToPaperMonitorBridge(path, payload, onSuccess, onError) {
+  const baseURL = getPaperMonitorBridgeBaseURL();
+  if (!baseURL || typeof fetch !== "function") return false;
+  const headers = { "Content-Type": "application/json" };
+  const token = getPaperMonitorBridgeToken();
+  if (token) headers["X-Paper-Monitor-Token"] = token;
+  fetch(baseURL + path, {
+    method: "POST",
+    headers: headers,
+    body: JSON.stringify(payload || {})
+  }).then(function (response) {
+    return response.json().then(function (data) {
+      if (!response.ok || data.error) {
+        throw new Error(data.error || "Paper Monitor bridge request failed.");
+      }
+      return data;
+    });
+  }).then(function (data) {
+    if (typeof onSuccess === "function") onSuccess(data);
+  }).catch(function (error) {
+    if (typeof onError === "function") onError(String(error && error.message || error));
+  });
+  return true;
 }
 
 function syncAnalysisDateControlsBeforeRequest() {

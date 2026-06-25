@@ -85,13 +85,14 @@ Keyword Analysis 用于统计指定时间范围内的研究热点。它会根据
 https://github.com/Stephendahe/paper-monitor/releases
 ```
 
-下载最新的 macOS ZIP 文件，例如：
+下载最新的 macOS 或 Windows ZIP 文件，例如：
 
 ```text
 Paper-Monitor-macOS-0.1.3.zip
+Paper-Monitor-Windows-0.1.4.zip
 ```
 
-解压后会得到：
+macOS ZIP 解压后会得到：
 
 ```text
 Paper Monitor.app
@@ -110,6 +111,14 @@ $HOME/Applications
 ```
 
 首次打开时，macOS 可能会提示应用来自互联网或未公证。可以右键点击 `Paper Monitor.app`，选择 `Open`，再确认打开。也可以在系统设置的安全性页面中允许打开。
+
+Windows ZIP 解压后会得到：
+
+```text
+PaperMonitor.exe
+```
+
+双击运行后，应用会出现在 Windows 系统托盘中。右键托盘图标可以打开 Dashboard、设置文件、手动刷新、发送测试通知或退出。更多 Windows 构建和安装说明见 `README_WINDOWS.md`。
 
 ## 首次使用
 
@@ -165,6 +174,7 @@ $HOME/Applications
 - Xcode Command Line Tools
 - Swift Package Manager
 - Python 3
+- Windows 构建需要 PowerShell 和 Python 3
 
 运行 Python 测试：
 
@@ -191,6 +201,19 @@ scripts/build_macos_app.sh
 dist/Paper Monitor.app
 ```
 
+构建 Windows 应用：
+
+```powershell
+python -m pip install -r requirements-windows.txt
+.\scripts\build_windows_app.ps1
+```
+
+构建结果会出现在：
+
+```text
+dist/windows/PaperMonitor.exe
+```
+
 ## 项目结构
 
 ```text
@@ -198,7 +221,7 @@ paper_monitor/          Python 检索、筛选、存储、Dashboard 和关键词
 macos/PaperMonitorApp/  macOS 原生应用工程
 tests/                  Python 测试
 scripts/                构建和安装脚本
-windows/                Windows 托盘版本的早期入口代码
+windows/                Windows 托盘入口和资源文件
 journal_metrics.json    期刊影响因子和元数据
 config.example.json     默认公开配置模板
 ```
