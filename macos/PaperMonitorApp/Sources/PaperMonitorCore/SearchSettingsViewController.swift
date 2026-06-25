@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate {
+final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate, NSTextViewDelegate {
     var settings: AppSettings {
         get { editingState.settings }
         set { editingState.settings = newValue }
@@ -14,7 +14,11 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
     private let topNStepper = NSStepper()
     private let topNField = NSTextField()
     private let intervalPopup = NSPopUpButton()
+    private let refreshStartField = NSTextField()
     private let presetPopup = NSPopUpButton()
+    private let directionNameField = NSTextField()
+    private let keywordsTextView = NSTextView()
+    private let keywordsScrollView = NSScrollView()
     private let crossrefField = NSTextField()
     private let openalexField = NSTextField()
     private let settingsChangeDebouncer: SearchSettingsChangeDebouncer
@@ -24,8 +28,10 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         ("3h", 10_800),
         ("6h", 21_600),
         ("12h", 43_200),
-        ("24h", 86_400),
+        ("1 day", 86_400),
+        ("2 days", 172_800),
     ]
+    private let customPresetTitle = "Custom..."
 
     convenience init(
         settings: AppSettings,
@@ -93,12 +99,22 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         intervalPopup.action = #selector(intervalChanged)
         stack.addArrangedSubview(row("Refresh Frequency", intervalPopup))
 
+        configureRefreshStartField()
+        stack.addArrangedSubview(row("Start Time", refreshStartField))
+
         presetPopup.addItems(withTitles: SearchPreset.allCases.map(\.label))
+        presetPopup.addItem(withTitle: customPresetTitle)
         addCustomPresetIfNeeded()
         selectPreset()
         presetPopup.target = self
         presetPopup.action = #selector(presetChanged)
         stack.addArrangedSubview(row("Search Direction", presetPopup))
+
+        configureDirectionNameField()
+        stack.addArrangedSubview(row("Direction Name", directionNameField))
+
+        configureKeywordsTextView()
+        stack.addArrangedSubview(row("Keywords", keywordsScrollView))
 
         configureQueryField(crossrefField, value: settings.searchDirection.crossrefQuery)
         stack.addArrangedSubview(row("Crossref Query", crossrefField))
@@ -123,6 +139,38 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         field.action = #selector(queryChanged)
         field.lineBreakMode = .byTruncatingTail
         field.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+    }
+
+    private func configureRefreshStartField() {
+        refreshStartField.stringValue = settings.refreshStartTime
+        refreshStartField.placeholderString = "HH:mm"
+        refreshStartField.delegate = self
+        refreshStartField.target = self
+        refreshStartField.action = #selector(refreshStartChanged)
+        refreshStartField.widthAnchor.constraint(equalToConstant: 96).isActive = true
+    }
+
+    private func configureDirectionNameField() {
+        directionNameField.stringValue = settings.searchDirection.label
+        directionNameField.delegate = self
+        directionNameField.target = self
+        directionNameField.action = #selector(customDirectionChanged)
+        directionNameField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+    }
+
+    private func configureKeywordsTextView() {
+        keywordsTextView.string = keywordText(for: settings)
+        keywordsTextView.delegate = self
+        keywordsTextView.font = .systemFont(ofSize: NSFont.systemFontSize)
+        keywordsTextView.isRichText = false
+        keywordsTextView.isAutomaticQuoteSubstitutionEnabled = false
+        keywordsTextView.isAutomaticDashSubstitutionEnabled = false
+
+        keywordsScrollView.documentView = keywordsTextView
+        keywordsScrollView.hasVerticalScroller = true
+        keywordsScrollView.borderType = .bezelBorder
+        keywordsScrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+        keywordsScrollView.heightAnchor.constraint(equalToConstant: 74).isActive = true
     }
 
     private func row(_ label: String, _ views: NSView...) -> NSStackView {
@@ -159,17 +207,40 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         if let preset = SearchPreset(rawValue: settings.searchDirection.preset),
            let index = SearchPreset.allCases.firstIndex(of: preset) {
             presetPopup.selectItem(at: index)
-        } else if presetPopup.numberOfItems > SearchPreset.allCases.count {
+        } else {
+            refreshCustomPresetMenuItem()
             presetPopup.selectItem(at: SearchPreset.allCases.count)
         }
+        updateCustomControls()
     }
 
     private func addCustomPresetIfNeeded() {
-        guard SearchPreset(rawValue: settings.searchDirection.preset) == nil else {
+        guard SearchPreset(rawValue: settings.searchDirection.preset) == nil,
+              presetPopup.numberOfItems == SearchPreset.allCases.count
+        else {
+            return
+        }
+        presetPopup.addItem(withTitle: customPresetTitle)
+    }
+
+    private func refreshCustomPresetMenuItem() {
+        guard presetPopup.numberOfItems > SearchPreset.allCases.count else {
             return
         }
         let label = settings.searchDirection.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        presetPopup.addItem(withTitle: label.isEmpty ? "Custom" : "Custom: \(label)")
+        presetPopup.item(at: SearchPreset.allCases.count)?.title = label.isEmpty ? "Custom" : "Custom: \(label)"
+    }
+
+    private func updateCustomControls() {
+        let isCustom = SearchPreset(rawValue: settings.searchDirection.preset) == nil
+        directionNameField.isEnabled = isCustom
+        keywordsTextView.isEditable = isCustom
+        keywordsTextView.textColor = isCustom ? .labelColor : .secondaryLabelColor
+    }
+
+    private func keywordText(for settings: AppSettings) -> String {
+        let keywords = settings.searchDirection.keywords.isEmpty ? settings.includeTerms : settings.searchDirection.keywords
+        return keywords.joined(separator: "\n")
     }
 
     @discardableResult
@@ -215,19 +286,59 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         emitChange()
     }
 
+    @objc private func refreshStartChanged() {
+        settings.refreshStartTime = AppRefreshSettings.normalizedStartTime(refreshStartField.stringValue)
+            ?? refreshStartField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        emitDebouncedChange()
+    }
+
     @objc private func presetChanged() {
         let index = presetPopup.indexOfSelectedItem
-        guard SearchPreset.allCases.indices.contains(index) else {
+        if SearchPreset.allCases.indices.contains(index) {
+            applyPreset(SearchPreset.allCases[index])
             return
         }
-        applyPreset(SearchPreset.allCases[index])
+        applyCustomDirection(
+            label: directionNameField.stringValue.isEmpty ? "Custom" : directionNameField.stringValue,
+            keywordsText: keywordsTextView.string,
+            debounced: false
+        )
     }
 
     private func applyPreset(_ preset: SearchPreset) {
         preset.apply(to: &settings)
+        directionNameField.stringValue = settings.searchDirection.label
+        keywordsTextView.string = keywordText(for: settings)
+        selectPreset()
         crossrefField.stringValue = settings.searchDirection.crossrefQuery
         openalexField.stringValue = settings.searchDirection.openalexQuery
         emitChange()
+    }
+
+    @objc private func customDirectionChanged() {
+        applyCustomDirection(
+            label: directionNameField.stringValue,
+            keywordsText: keywordsTextView.string,
+            debounced: true
+        )
+    }
+
+    private func applyCustomDirection(label: String, keywordsText: String, debounced: Bool) {
+        SearchDirectionEditor.applyCustomDirection(
+            label: label,
+            keywords: SearchDirectionEditor.keywords(from: keywordsText),
+            to: &settings
+        )
+        refreshCustomPresetMenuItem()
+        presetPopup.selectItem(at: SearchPreset.allCases.count)
+        updateCustomControls()
+        crossrefField.stringValue = settings.searchDirection.crossrefQuery
+        openalexField.stringValue = settings.searchDirection.openalexQuery
+        if debounced {
+            emitDebouncedChange()
+        } else {
+            emitChange()
+        }
     }
 
     @objc private func queryChanged() {
@@ -258,7 +369,21 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         }
         if field === crossrefField || field === openalexField {
             queryChanged()
+        } else if field === refreshStartField {
+            refreshStartChanged()
+        } else if field === directionNameField {
+            customDirectionChanged()
         }
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard !isReloadingFromEditingState else {
+            return
+        }
+        guard notification.object as? NSTextView === keywordsTextView else {
+            return
+        }
+        customDirectionChanged()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -283,6 +408,9 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
         }
         if firstResponder == nil || firstResponder !== openalexField.currentEditor() {
             openalexField.stringValue = settings.searchDirection.openalexQuery
+        }
+        if firstResponder == nil || firstResponder !== keywordsTextView {
+            keywordsTextView.string = keywordText(for: settings)
         }
         isReloadingFromEditingState = false
     }
@@ -321,5 +449,27 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate 
             openalexQuery: openalexField.stringValue,
             debounced: debounced
         )
+    }
+
+    func applyCustomDirectionForTesting(label: String, keywordsText: String, debounced: Bool) {
+        _ = view
+        directionNameField.stringValue = label
+        keywordsTextView.string = keywordsText
+        applyCustomDirection(label: label, keywordsText: keywordsText, debounced: debounced)
+    }
+
+    var intervalTitlesForTesting: [String] {
+        _ = view
+        return intervalPopup.itemTitles
+    }
+
+    var selectedIntervalTitleForTesting: String? {
+        _ = view
+        return intervalPopup.selectedItem?.title
+    }
+
+    var refreshStartTimeForTesting: String {
+        _ = view
+        return refreshStartField.stringValue
     }
 }

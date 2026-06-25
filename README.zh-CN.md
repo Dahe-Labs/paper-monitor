@@ -85,29 +85,13 @@ Keyword Analysis 用于统计指定时间范围内的研究热点。它会根据
 https://github.com/Stephendahe/paper-monitor/releases
 ```
 
-下载最新的 macOS ZIP 文件，例如：
+下载最新的 macOS PKG 安装包，例如：
 
 ```text
-Paper-Monitor-macOS-0.1.3.zip
+Paper-Monitor-macOS-0.1.5.pkg
 ```
 
-解压后会得到：
-
-```text
-Paper Monitor.app
-```
-
-建议把它移动到：
-
-```text
-/Applications
-```
-
-或：
-
-```text
-$HOME/Applications
-```
+双击安装包后按系统提示安装。安装完成后会得到 `/Applications/Paper Monitor.app`。
 
 首次打开时，macOS 可能会提示应用来自互联网或未公证。可以右键点击 `Paper Monitor.app`，选择 `Open`，再确认打开。也可以在系统设置的安全性页面中允许打开。
 

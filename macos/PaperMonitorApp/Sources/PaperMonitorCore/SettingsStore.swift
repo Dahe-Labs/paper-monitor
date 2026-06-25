@@ -37,6 +37,7 @@ public final class SettingsStore {
         if let intervalSeconds = Self.intValue(payload["interval_seconds"]), intervalSeconds > 0 {
             settings.intervalSeconds = intervalSeconds
         }
+        settings.refreshStartTime = AppRefreshSettings.normalizedStartTime(Self.stringValue(payload["refresh_start_time"])) ?? ""
 
         if let includeTerms = Self.stringArray(payload["include_terms"]) {
             settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(includeTerms)
@@ -53,6 +54,17 @@ public final class SettingsStore {
         var searchDirection = settings.searchDirection
         searchDirection.preset = Self.nonEmptyString(searchDirectionPayload["preset"]) ?? searchDirection.preset
         searchDirection.label = Self.nonEmptyString(searchDirectionPayload["label"]) ?? searchDirection.label
+        let directionKeywords = SettingsNormalizer.dedupeNonEmpty(
+            Self.stringArray(searchDirectionPayload["keywords"]) ?? []
+        )
+        if !directionKeywords.isEmpty {
+            searchDirection.keywords = directionKeywords
+            if searchDirection.preset == SearchDirectionEditor.customPresetIdentifier {
+                settings.includeTerms = directionKeywords
+            }
+        } else {
+            searchDirection.keywords = settings.includeTerms
+        }
         searchDirection.crossrefQuery = Self.nonEmptyString(searchDirectionPayload["crossref_query"])
             ?? Self.nonEmptyString(crossrefPayload["query"])
             ?? searchDirection.crossrefQuery
@@ -90,12 +102,14 @@ public final class SettingsStore {
         journalScope["selected_journals"] = selectedJournals
         payload["journal_scope"] = journalScope
         payload["interval_seconds"] = settings.intervalSeconds
+        payload["refresh_start_time"] = AppRefreshSettings.normalizedStartTime(settings.refreshStartTime) ?? ""
         payload["include_terms"] = SettingsNormalizer.dedupeNonEmpty(settings.includeTerms)
         payload["exclude_terms"] = SettingsNormalizer.dedupeNonEmpty(settings.excludeTerms)
         payload["journals"] = selectedJournals
         var searchDirection = Self.dictionary(payload["search_direction"]) ?? [:]
         searchDirection["preset"] = settings.searchDirection.preset
         searchDirection["label"] = settings.searchDirection.label
+        searchDirection["keywords"] = SettingsNormalizer.dedupeNonEmpty(settings.searchDirection.keywords)
         searchDirection["crossref_query"] = settings.searchDirection.crossrefQuery
         searchDirection["openalex_query"] = settings.searchDirection.openalexQuery
         searchDirection["query_manually_edited"] = settings.searchDirection.queryManuallyEdited
@@ -244,5 +258,9 @@ public final class SettingsStore {
         }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

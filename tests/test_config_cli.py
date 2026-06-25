@@ -34,6 +34,7 @@ class ConfigAndCliTests(unittest.TestCase):
             self.assertIn("solid electrolyte", config.monitor_config.filter_config.include_terms)
             self.assertIn("Nature Energy", config.monitor_config.filter_config.journals)
             self.assertEqual(config.interval_seconds, 43200)
+            self.assertEqual(config.refresh_start_time, "")
             self.assertEqual(config.journal_scope_top_n, 15)
 
     def test_test_notification_defaults_to_paper_monitor_title(self):
@@ -140,11 +141,13 @@ class ConfigAndCliTests(unittest.TestCase):
                     "selected_journals": ["Nature Energy", "Advanced Materials", "arXiv"],
                 },
                 "interval_seconds": 3600,
+                "refresh_start_time": "09:00",
                 "include_terms": ["solid electrolyte", "", "solid electrolyte", "LLZO"],
                 "exclude_terms": ["solid-state laser", "", "solid-state laser"],
                 "search_direction": {
                     "preset": "solid_electrolyte",
                     "label": "Solid electrolyte",
+                    "keywords": ["solid electrolyte", "", "LLZO", "LLZO"],
                     "crossref_query": "solid electrolyte OR LLZO",
                     "openalex_query": "solid electrolyte LLZO",
                     "query_manually_edited": True,
@@ -162,6 +165,7 @@ class ConfigAndCliTests(unittest.TestCase):
             filter_config = config.monitor_config.filter_config
             self.assertEqual(filter_config.journals, ["Nature Energy", "Advanced Materials", "arXiv"])
             self.assertEqual(config.journal_scope_top_n, 2)
+            self.assertEqual(config.refresh_start_time, "09:00")
             self.assertEqual(filter_config.include_terms, ["solid electrolyte", "LLZO"])
             self.assertEqual(filter_config.exclude_terms, ["solid-state laser"])
             self.assertEqual(
@@ -171,6 +175,33 @@ class ConfigAndCliTests(unittest.TestCase):
             self.assertTrue(config.source_config["arxiv"]["enabled"])
             self.assertEqual(config.source_config["crossref"]["query"], "solid electrolyte OR LLZO")
             self.assertEqual(config.source_config["openalex"]["query"], "solid electrolyte LLZO")
+
+    def test_custom_search_direction_keywords_drive_terms_and_queries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            payload = {
+                "journals": ["Nature Energy"],
+                "include_terms": ["old term"],
+                "exclude_terms": [],
+                "search_direction": {
+                    "preset": "custom",
+                    "label": "Cathode interface",
+                    "keywords": ["cathode", "", "space charge", "cathode"],
+                    "query_manually_edited": False,
+                },
+                "sources": {
+                    "rss": [],
+                    "crossref": {"enabled": True, "journal_titles": [], "query": ""},
+                    "openalex": {"enabled": False, "query": ""},
+                },
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            config = load_app_config(config_path)
+
+            self.assertEqual(config.monitor_config.filter_config.include_terms, ["cathode", "space charge"])
+            self.assertEqual(config.source_config["crossref"]["query"], "cathode OR space charge")
+            self.assertEqual(config.source_config["openalex"]["query"], "cathode space charge")
 
     def test_settings_schema_falls_back_to_journals_when_selected_journals_missing(self):
         with tempfile.TemporaryDirectory() as temp_dir:

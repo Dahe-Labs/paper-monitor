@@ -18,6 +18,7 @@ public struct JournalScope: Equatable, Codable, Sendable {
 public struct SearchDirection: Equatable, Codable, Sendable {
     public var preset: String
     public var label: String
+    public var keywords: [String]
     public var crossrefQuery: String
     public var openalexQuery: String
     public var queryManuallyEdited: Bool
@@ -25,12 +26,14 @@ public struct SearchDirection: Equatable, Codable, Sendable {
     public init(
         preset: String,
         label: String,
+        keywords: [String],
         crossrefQuery: String,
         openalexQuery: String,
         queryManuallyEdited: Bool
     ) {
         self.preset = preset
         self.label = label
+        self.keywords = keywords
         self.crossrefQuery = crossrefQuery
         self.openalexQuery = openalexQuery
         self.queryManuallyEdited = queryManuallyEdited
@@ -39,6 +42,7 @@ public struct SearchDirection: Equatable, Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case preset
         case label
+        case keywords
         case crossrefQuery = "crossref_query"
         case openalexQuery = "openalex_query"
         case queryManuallyEdited = "query_manually_edited"
@@ -49,6 +53,7 @@ public struct AppSettings: Equatable, Sendable {
     public var schemaVersion: Int
     public var journalScope: JournalScope
     public var intervalSeconds: Int
+    public var refreshStartTime: String
     public var includeTerms: [String]
     public var excludeTerms: [String]
     public var searchDirection: SearchDirection
@@ -57,6 +62,7 @@ public struct AppSettings: Equatable, Sendable {
         schemaVersion: Int,
         journalScope: JournalScope,
         intervalSeconds: Int,
+        refreshStartTime: String,
         includeTerms: [String],
         excludeTerms: [String],
         searchDirection: SearchDirection
@@ -64,6 +70,7 @@ public struct AppSettings: Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.journalScope = journalScope
         self.intervalSeconds = intervalSeconds
+        self.refreshStartTime = refreshStartTime
         self.includeTerms = includeTerms
         self.excludeTerms = excludeTerms
         self.searchDirection = searchDirection
@@ -73,11 +80,13 @@ public struct AppSettings: Equatable, Sendable {
         schemaVersion: 1,
         journalScope: JournalScope(topN: 15, selectedJournals: []),
         intervalSeconds: 43_200,
+        refreshStartTime: "",
         includeTerms: [],
         excludeTerms: [],
         searchDirection: SearchDirection(
             preset: "solid_state_battery_general",
             label: "Solid-state battery general",
+            keywords: ["solid electrolyte", "all-solid-state battery", "solid-state battery"],
             crossrefQuery: "solid electrolyte OR all-solid-state battery OR solid-state battery",
             openalexQuery: "solid electrolyte all-solid-state battery solid-state battery",
             queryManuallyEdited: false
@@ -122,6 +131,7 @@ public enum SettingsNormalizer {
 public enum SearchTermEditor {
     public static func updateIncludeTerms(_ terms: [String], in settings: inout AppSettings) {
         settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(terms)
+        settings.searchDirection.keywords = settings.includeTerms
         SearchPreset.regenerateQueriesIfAllowed(for: &settings)
     }
 
@@ -175,6 +185,7 @@ public enum SearchPreset: String, CaseIterable {
         settings.searchDirection.preset = rawValue
         settings.searchDirection.label = label
         settings.includeTerms = includeTerms
+        settings.searchDirection.keywords = includeTerms
         settings.excludeTerms = excludeTerms
         settings.searchDirection.queryManuallyEdited = false
         SearchPreset.regenerateQueriesIfAllowed(for: &settings)
@@ -186,6 +197,26 @@ public enum SearchPreset: String, CaseIterable {
         }
         settings.searchDirection.crossrefQuery = settings.includeTerms.joined(separator: " OR ")
         settings.searchDirection.openalexQuery = settings.includeTerms.joined(separator: " ")
+    }
+}
+
+public enum SearchDirectionEditor {
+    public static let customPresetIdentifier = "custom"
+
+    public static func keywords(from text: String) -> [String] {
+        let separators = CharacterSet(charactersIn: ",;\n")
+        return SettingsNormalizer.dedupeNonEmpty(text.components(separatedBy: separators))
+    }
+
+    public static func applyCustomDirection(label: String, keywords: [String], to settings: inout AppSettings) {
+        let cleanLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanKeywords = SettingsNormalizer.dedupeNonEmpty(keywords)
+        settings.searchDirection.preset = customPresetIdentifier
+        settings.searchDirection.label = cleanLabel.isEmpty ? "Custom" : cleanLabel
+        settings.searchDirection.keywords = cleanKeywords
+        settings.includeTerms = cleanKeywords
+        settings.searchDirection.queryManuallyEdited = false
+        SearchPreset.regenerateQueriesIfAllowed(for: &settings)
     }
 }
 
@@ -264,8 +295,43 @@ enum SettingsEditorLoadPolicy {
 }
 
 enum RefreshSchedulePolicy {
-    static func shouldReschedule(lastScheduledInterval: TimeInterval?, settingsIntervalSeconds: Int) -> Bool {
-        TimeInterval(settingsIntervalSeconds) != lastScheduledInterval
+    static func shouldReschedule(lastScheduledSettings: RefreshScheduleSettings?, settings: AppSettings) -> Bool {
+        RefreshScheduleSettings(
+            intervalSeconds: TimeInterval(settings.intervalSeconds),
+            startTime: AppRefreshSettings.normalizedStartTime(settings.refreshStartTime)
+        ) != lastScheduledSettings
+    }
+
+    static func initialDelay(
+        interval: TimeInterval,
+        startTime: String?,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> TimeInterval {
+        guard interval > 0 else {
+            return 0
+        }
+        guard let startTime = AppRefreshSettings.normalizedStartTime(startTime) else {
+            return interval
+        }
+        let parts = startTime.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else {
+            return interval
+        }
+        var components = calendar.dateComponents([.year, .month, .day], from: now)
+        components.hour = parts[0]
+        components.minute = parts[1]
+        components.second = 0
+        guard let today = calendar.date(from: components) else {
+            return interval
+        }
+        if today >= now {
+            return today.timeIntervalSince(now)
+        }
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) else {
+            return interval
+        }
+        return tomorrow.timeIntervalSince(now)
     }
 }
 

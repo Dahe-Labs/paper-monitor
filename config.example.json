@@ -4,6 +4,7 @@
   "journal_metrics_path": "journal_metrics.json",
   "settings_schema_version": 1,
   "interval_seconds": 43200,
+  "refresh_start_time": "",
   "max_notifications": 5,
   "include_terms": [
     "all-solid-state battery",
@@ -90,6 +91,18 @@
   "search_direction": {
     "preset": "solid_state_battery_general",
     "label": "Solid-state battery general",
+    "keywords": [
+      "solid electrolyte",
+      "electrolyte",
+      "all-solid-state battery",
+      "solid-state battery",
+      "electrode",
+      "LLZTO",
+      "LLZO",
+      "silicon anode",
+      "Si anode",
+      "NCM"
+    ],
     "crossref_query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
     "openalex_query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
     "query_manually_edited": false

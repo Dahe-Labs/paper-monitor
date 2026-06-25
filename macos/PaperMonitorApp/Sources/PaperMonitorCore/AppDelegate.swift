@@ -22,7 +22,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController?
     private let launchOptions: AppLaunchOptions
     private let refreshScheduler = RefreshScheduler()
-    private var lastScheduledInterval: TimeInterval?
+    private var lastScheduledSettings: RefreshScheduleSettings?
     private var lastDashboardURL: URL?
     private var refreshGate = RefreshRunGate()
 
@@ -125,25 +125,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleTimer() {
-        let interval = AppRefreshSettings.loadIntervalSeconds(from: bridge.configURL)
-        rescheduleTimer(interval: interval)
+        let schedule = AppRefreshSettings.loadSchedule(from: bridge.configURL)
+        rescheduleTimer(schedule)
     }
 
-    private func rescheduleTimer(interval: TimeInterval) {
-        refreshScheduler.schedule(interval: interval) { [weak self] in
+    private func rescheduleTimer(_ schedule: RefreshScheduleSettings) {
+        refreshScheduler.schedule(interval: schedule.intervalSeconds, startTime: schedule.startTime) { [weak self] in
             self?.refreshNow()
         }
-        lastScheduledInterval = interval
+        lastScheduledSettings = schedule
     }
 
     private func handleSettingsChange(_ settings: AppSettings) -> Bool {
         do {
             try settingsStore.save(settings)
             if RefreshSchedulePolicy.shouldReschedule(
-                lastScheduledInterval: lastScheduledInterval,
-                settingsIntervalSeconds: settings.intervalSeconds
+                lastScheduledSettings: lastScheduledSettings,
+                settings: settings
             ) {
-                rescheduleTimer(interval: TimeInterval(settings.intervalSeconds))
+                rescheduleTimer(RefreshScheduleSettings(
+                    intervalSeconds: TimeInterval(settings.intervalSeconds),
+                    startTime: settings.refreshStartTime
+                ))
             }
             return true
         } catch {

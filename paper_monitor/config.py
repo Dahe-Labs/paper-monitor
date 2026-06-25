@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "journal_metrics_path": "journal_metrics.json",
     "settings_schema_version": 1,
     "interval_seconds": 43200,
+    "refresh_start_time": "",
     "max_notifications": 5,
     "include_terms": [
         "all-solid-state battery",
@@ -103,6 +104,18 @@ DEFAULT_CONFIG = {
     "search_direction": {
         "preset": "solid_state_battery_general",
         "label": "Solid-state battery general",
+        "keywords": [
+            "solid electrolyte",
+            "electrolyte",
+            "all-solid-state battery",
+            "solid-state battery",
+            "electrode",
+            "LLZTO",
+            "LLZO",
+            "silicon anode",
+            "Si anode",
+            "NCM",
+        ],
         "crossref_query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
         "openalex_query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
         "query_manually_edited": False,
@@ -162,6 +175,7 @@ class AppConfig:
     dashboard_path: Path
     journal_metrics_path: Path
     interval_seconds: int
+    refresh_start_time: str
     monitor_config: MonitorConfig
     source_config: Dict[str, object]
     journal_scope_top_n: int
@@ -182,9 +196,10 @@ def load_app_config(path: Path) -> AppConfig:
         path.parent,
         str(raw.get("journal_metrics_path") or DEFAULT_CONFIG["journal_metrics_path"]),
     )
+    include_terms = _include_terms(raw)
     monitor_config = MonitorConfig(
         filter_config=FilterConfig(
-            include_terms=_dedupe_nonempty(raw.get("include_terms", DEFAULT_CONFIG["include_terms"])),
+            include_terms=include_terms,
             exclude_terms=_dedupe_nonempty(raw.get("exclude_terms", DEFAULT_CONFIG["exclude_terms"])),
             journals=_selected_journals(raw),
         ),
@@ -211,6 +226,7 @@ def load_app_config(path: Path) -> AppConfig:
         dashboard_path=dashboard_path,
         journal_metrics_path=journal_metrics_path,
         interval_seconds=int(raw.get("interval_seconds", DEFAULT_CONFIG["interval_seconds"])),
+        refresh_start_time=_normalized_start_time(raw.get("refresh_start_time")) or "",
         monitor_config=monitor_config,
         source_config=source_config,
         journal_scope_top_n=_journal_scope_top_n(raw, len(journals)),
@@ -271,7 +287,44 @@ def _search_direction_queries(raw):
         return None, None
     crossref_query = str(direction.get("crossref_query") or "").strip()
     openalex_query = str(direction.get("openalex_query") or "").strip()
+    keywords = _search_direction_keywords(raw)
+    if keywords and not bool(direction.get("query_manually_edited")):
+        crossref_query = crossref_query or " OR ".join(keywords)
+        openalex_query = openalex_query or " ".join(keywords)
     return crossref_query or None, openalex_query or None
+
+
+def _include_terms(raw):
+    direction_keywords = _search_direction_keywords(raw)
+    direction = raw.get("search_direction")
+    preset = direction.get("preset") if isinstance(direction, dict) else ""
+    if direction_keywords and _normalize_key(preset) == "custom":
+        return direction_keywords
+    return _dedupe_nonempty(raw.get("include_terms", DEFAULT_CONFIG["include_terms"]))
+
+
+def _search_direction_keywords(raw):
+    direction = raw.get("search_direction")
+    if not isinstance(direction, dict):
+        return []
+    return _dedupe_nonempty(direction.get("keywords", []))
+
+
+def _normalized_start_time(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = text.split(":")
+    if len(parts) != 2:
+        return ""
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return ""
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return ""
+    return f"{hour:02d}:{minute:02d}"
 
 
 def _resolve_path(base_dir: Path, value: str) -> Path:

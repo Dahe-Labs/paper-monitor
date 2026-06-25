@@ -662,6 +662,15 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(AppRefreshSettings.intervalSeconds(from: data), 7200)
     }
 
+    func testRefreshSettingsLoadsOptionalStartTimeFromConfigJSON() throws {
+        let data = #"{"interval_seconds": 7200, "refresh_start_time": "09:30"}"#.data(using: .utf8)!
+
+        let schedule = AppRefreshSettings.schedule(from: data)
+
+        XCTAssertEqual(schedule.intervalSeconds, 7200)
+        XCTAssertEqual(schedule.startTime, "09:30")
+    }
+
     func testRefreshSettingsFallsBackForMissingOrInvalidInterval() throws {
         XCTAssertEqual(
             AppRefreshSettings.intervalSeconds(from: #"{}"#.data(using: .utf8)!),
@@ -670,6 +679,9 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(
             AppRefreshSettings.intervalSeconds(from: #"{"interval_seconds": 0}"#.data(using: .utf8)!),
             AppRefreshSettings.defaultIntervalSeconds
+        )
+        XCTAssertNil(
+            AppRefreshSettings.schedule(from: #"{"refresh_start_time": "25:61"}"#.data(using: .utf8)!).startTime
         )
     }
 
@@ -684,6 +696,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             "selected_journals": ["Nature Energy", "", "Nature Energy", "Advanced Materials"]
           },
           "interval_seconds": 3600,
+          "refresh_start_time": "09:30",
           "include_terms": ["solid electrolyte", "", "solid electrolyte", "LLZO"],
           "exclude_terms": ["solid-state laser", "", "solid-state laser"],
           "sources": {
@@ -708,13 +721,33 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(settings.journalScope.topN, 50)
         XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature Energy", "Advanced Materials"])
         XCTAssertEqual(settings.intervalSeconds, 3600)
+        XCTAssertEqual(settings.refreshStartTime, "09:30")
         XCTAssertEqual(settings.includeTerms, ["solid electrolyte", "LLZO"])
         XCTAssertEqual(settings.excludeTerms, ["solid-state laser"])
         XCTAssertEqual(settings.searchDirection.preset, "solid_electrolyte")
         XCTAssertEqual(settings.searchDirection.label, "Solid electrolyte")
+        XCTAssertEqual(settings.searchDirection.keywords, ["solid electrolyte", "LLZO"])
         XCTAssertEqual(settings.searchDirection.crossrefQuery, "solid electrolyte OR LLZO")
         XCTAssertEqual(settings.searchDirection.openalexQuery, "solid electrolyte LLZO")
         XCTAssertTrue(settings.searchDirection.queryManuallyEdited)
+    }
+
+    func testCustomSearchDirectionBuildsQueriesFromEditableNameAndKeywords() {
+        var settings = AppSettings.default
+
+        SearchDirectionEditor.applyCustomDirection(
+            label: "Cathode interface",
+            keywords: ["cathode", "", " cathode ", "space charge"],
+            to: &settings
+        )
+
+        XCTAssertEqual(settings.searchDirection.preset, SearchDirectionEditor.customPresetIdentifier)
+        XCTAssertEqual(settings.searchDirection.label, "Cathode interface")
+        XCTAssertEqual(settings.searchDirection.keywords, ["cathode", "space charge"])
+        XCTAssertEqual(settings.includeTerms, ["cathode", "space charge"])
+        XCTAssertEqual(settings.searchDirection.crossrefQuery, "cathode OR space charge")
+        XCTAssertEqual(settings.searchDirection.openalexQuery, "cathode space charge")
+        XCTAssertFalse(settings.searchDirection.queryManuallyEdited)
     }
 
     func testSettingsStoreAddsIncludeTermAndRegeneratesQueries() throws {
@@ -784,6 +817,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         XCTAssertEqual(settings.searchDirection.preset, "solid_electrolyte")
         XCTAssertTrue(settings.includeTerms.contains("solid electrolyte"))
+        XCTAssertEqual(settings.searchDirection.keywords, settings.includeTerms)
         XCTAssertTrue(settings.searchDirection.crossrefQuery.contains("solid electrolyte"))
         XCTAssertFalse(settings.searchDirection.queryManuallyEdited)
 
@@ -823,6 +857,41 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         SearchTermEditor.updateExcludeTerms(["solid-state laser", "", " solid-state laser ", "solid-state drive"], in: &settings)
 
         XCTAssertEqual(settings.excludeTerms, ["solid-state laser", "solid-state drive"])
+    }
+
+    func testRefreshSchedulePolicyComputesFirstDelayFromStartTime() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: 2026, month: 6, day: 25, hour: 8, minute: 30).date!
+        let afterStart = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: 2026, month: 6, day: 25, hour: 10, minute: 0).date!
+
+        XCTAssertEqual(
+            RefreshSchedulePolicy.initialDelay(
+                interval: 86_400,
+                startTime: "09:00",
+                now: now,
+                calendar: calendar
+            ),
+            1_800
+        )
+        XCTAssertEqual(
+            RefreshSchedulePolicy.initialDelay(
+                interval: 86_400,
+                startTime: "09:00",
+                now: afterStart,
+                calendar: calendar
+            ),
+            82_800
+        )
+        XCTAssertEqual(
+            RefreshSchedulePolicy.initialDelay(
+                interval: 3_600,
+                startTime: nil,
+                now: now,
+                calendar: calendar
+            ),
+            3_600
+        )
     }
 
     func testSearchSettingsTopNAppliesCatalogJournalsWhenAvailable() {
@@ -1179,9 +1248,22 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     }
 
     func testRefreshSchedulePolicyOnlyReschedulesWhenIntervalChanges() {
-        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(lastScheduledInterval: nil, settingsIntervalSeconds: 3600))
-        XCTAssertFalse(RefreshSchedulePolicy.shouldReschedule(lastScheduledInterval: 3600, settingsIntervalSeconds: 3600))
-        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(lastScheduledInterval: 3600, settingsIntervalSeconds: 7200))
+        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(lastScheduledSettings: nil, settings: .default))
+        var settings = AppSettings.default
+        settings.intervalSeconds = 3600
+        settings.refreshStartTime = "09:00"
+        XCTAssertFalse(RefreshSchedulePolicy.shouldReschedule(
+            lastScheduledSettings: RefreshScheduleSettings(intervalSeconds: 3600, startTime: "09:00"),
+            settings: settings
+        ))
+        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(
+            lastScheduledSettings: RefreshScheduleSettings(intervalSeconds: 3600, startTime: "09:00"),
+            settings: {
+                var changed = settings
+                changed.refreshStartTime = "10:00"
+                return changed
+            }()
+        ))
     }
 
     @MainActor
@@ -1629,6 +1711,42 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         controller.loadView()
 
         XCTAssertEqual(controller.selectedPresetTitleForTesting, "Custom: My direction")
+    }
+
+    @MainActor
+    func testSearchSettingsCustomDirectionEditsNameAndKeywords() throws {
+        var emitted: [AppSettings] = []
+        let controller = SearchSettingsViewController(settings: .default, journalCatalog: nil) { settings in
+            emitted.append(settings)
+            return true
+        }
+
+        controller.applyCustomDirectionForTesting(
+            label: "Cathode interface",
+            keywordsText: "cathode, space charge\ninterface",
+            debounced: false
+        )
+
+        let saved = try XCTUnwrap(emitted.last)
+        XCTAssertEqual(controller.selectedPresetTitleForTesting, "Custom: Cathode interface")
+        XCTAssertEqual(saved.searchDirection.preset, SearchDirectionEditor.customPresetIdentifier)
+        XCTAssertEqual(saved.searchDirection.label, "Cathode interface")
+        XCTAssertEqual(saved.searchDirection.keywords, ["cathode", "space charge", "interface"])
+        XCTAssertEqual(saved.searchDirection.crossrefQuery, "cathode OR space charge OR interface")
+    }
+
+    @MainActor
+    func testSearchSettingsDisplaysExpandedRefreshFrequencyOptionsAndStartTime() {
+        var settings = AppSettings.default
+        settings.intervalSeconds = 172_800
+        settings.refreshStartTime = "09:00"
+        let controller = SearchSettingsViewController(settings: settings, journalCatalog: nil) { _ in true }
+
+        controller.loadView()
+
+        XCTAssertEqual(controller.intervalTitlesForTesting, ["1h", "3h", "6h", "12h", "1 day", "2 days"])
+        XCTAssertEqual(controller.selectedIntervalTitleForTesting, "2 days")
+        XCTAssertEqual(controller.refreshStartTimeForTesting, "09:00")
     }
 
     func testWindowSettingsFallbackSeedsSelectedJournalsFromCatalog() {

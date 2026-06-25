@@ -1,3 +1,22 @@
+# Paper Monitor 0.1.5
+
+Settings workflow release.
+
+## Included
+
+- Added a `Custom...` search direction option in Search Settings.
+- Custom directions support editable direction names and keyword lists.
+- Custom keywords generate Crossref queries with `OR` and OpenAlex queries with spaces.
+- Added `1 day` and `2 days` refresh frequency options.
+- Replaced the old `24h` label with `1 day`.
+- Added optional `Start Time` scheduling in `HH:mm` format. Scheduled refreshes wait until the next matching start time, then continue by the selected interval.
+- GitHub Release assets now use a macOS `.pkg` installer only; GitHub may still show its automatic source-code archive links.
+
+## Notes
+
+- This release is ad-hoc signed and not notarized.
+- Manual `Refresh Now` remains available and is not delayed by `Start Time`.
+
 # Paper Monitor 0.1.3
 
 macOS lifecycle and cleanup release.

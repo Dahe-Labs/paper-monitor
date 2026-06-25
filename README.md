@@ -14,6 +14,8 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 - Crossref, RSS, and optional arXiv retrieval with journal scope controls.
 - Local SQLite deduplication so repeated papers are not notified again.
 - Settings Apply workflow with visible unsaved/saved state.
+- Custom search directions with editable names and keyword-derived queries.
+- Refresh schedules with 1 day / 2 days intervals and an optional daily start time.
 - HTML dashboard grouped by detected date, with sorting by time, impact factor, and relevance.
 - Keyword analysis with date range, journal scope, candidate term filtering, block terms, taxonomy editing, and compact analysis paper list.
 - Configurable search terms, excluded terms, journal scope, refresh interval, and Top N journal selection.
@@ -24,7 +26,7 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 
 Download the latest macOS build from the GitHub Releases page.
 
-After extracting the ZIP, move `Paper Monitor.app` to `Applications` or `$HOME/Applications`, then open it. The build is ad-hoc signed for local distribution, so macOS may ask you to confirm the first launch from System Settings or by right-clicking the app and choosing Open.
+Download the macOS `.pkg` installer, run it, and open `Paper Monitor.app` from `/Applications`. The build is ad-hoc signed for local distribution, so macOS may ask you to confirm the first launch from System Settings or by right-clicking the app and choosing Open.
 
 ## Build From Source
 
