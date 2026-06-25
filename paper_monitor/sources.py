@@ -219,9 +219,23 @@ def _fetch_url_with_retries(
             return fetch(url)
         except urllib.error.HTTPError as error:
             if error.code not in {429, 500, 502, 503, 504} or attempt >= retry_count:
+                _close_http_error(error)
                 raise
+            _close_http_error(error)
             time.sleep(_retry_delay_seconds(error, attempt, retry_base_seconds, retry_max_seconds))
     return fetch(url)
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    close = getattr(error, "close", None)
+    if callable(close):
+        close()
+    fp = getattr(error, "fp", None)
+    if fp is not None:
+        fp_close = getattr(fp, "close", None)
+        if callable(fp_close):
+            fp_close()
+        error.fp = None
 
 
 def _retry_delay_seconds(
@@ -642,13 +656,39 @@ def _crossref_date_value(raw: object) -> str:
     if isinstance(raw, dict):
         parts = raw.get("date-parts")
         if isinstance(parts, list) and parts and isinstance(parts[0], list):
-            year = int(parts[0][0])
-            if len(parts[0]) > 2:
-                return "%04d-%02d-%02d" % (year, int(parts[0][1]), int(parts[0][2]))
-            if len(parts[0]) > 1:
-                return "%04d-%02d" % (year, int(parts[0][1]))
-            return "%04d" % year
+            values = parts[0]
+            if not values:
+                return ""
+            year = _crossref_date_part_int(values[0])
+            if year is None or not 1 <= year <= 9999:
+                return ""
+            if len(values) <= 1:
+                return "%04d" % year
+
+            month = _crossref_date_part_int(values[1])
+            if month is None or not 1 <= month <= 12:
+                return "%04d" % year
+            if len(values) <= 2:
+                return "%04d-%02d" % (year, month)
+
+            day = _crossref_date_part_int(values[2])
+            if day is None:
+                return "%04d-%02d" % (year, month)
+            try:
+                date(year, month, day)
+            except ValueError:
+                return "%04d-%02d" % (year, month)
+            return "%04d-%02d-%02d" % (year, month, day)
     return ""
+
+
+def _crossref_date_part_int(value: object) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _normalize_publication_date(value: str) -> str:

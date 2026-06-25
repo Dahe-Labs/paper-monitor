@@ -2,7 +2,7 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from paper_monitor.launchd import build_launch_agent_plist
@@ -65,9 +65,9 @@ class NotificationAndLaunchdTests(unittest.TestCase):
         )
 
         command = build_terminal_notifier_command(
-            terminal_notifier_path=Path("/opt/homebrew/bin/terminal-notifier"),
+            terminal_notifier_path=PurePosixPath("/opt/homebrew/bin/terminal-notifier"),
             article=article,
-            dashboard_path=Path("/tmp/solid-monitor/latest.html"),
+            dashboard_path=PurePosixPath("/tmp/solid-monitor/latest.html"),
         )
 
         self.assertEqual(command[0], "/opt/homebrew/bin/terminal-notifier")
@@ -92,9 +92,9 @@ class NotificationAndLaunchdTests(unittest.TestCase):
         )
 
         command = build_terminal_notifier_command(
-            terminal_notifier_path=Path("/opt/homebrew/bin/terminal-notifier"),
+            terminal_notifier_path=PurePosixPath("/opt/homebrew/bin/terminal-notifier"),
             article=article,
-            dashboard_path=Path("/tmp/solid-monitor/latest.html"),
+            dashboard_path=PurePosixPath("/tmp/solid-monitor/latest.html"),
         )
 
         click_command = command[command.index("-execute") + 1]
@@ -168,19 +168,20 @@ class NotificationAndLaunchdTests(unittest.TestCase):
             source="fixture",
         )
 
-        with patch("paper_monitor.notify.find_terminal_notifier", return_value=None):
-            with patch("paper_monitor.notify.run_notification_command", return_value=False):
-                delivered = notify_article(article, None, dashboard_path=Path("/tmp/paper-monitor/latest.html"))
+        with patch("paper_monitor.notify.sys.platform", "darwin"):
+            with patch("paper_monitor.notify.find_terminal_notifier", return_value=None):
+                with patch("paper_monitor.notify.run_notification_command", return_value=False):
+                    delivered = notify_article(article, None, dashboard_path=Path("/tmp/paper-monitor/latest.html"))
 
         self.assertFalse(delivered)
 
     def test_builds_launch_agent_plist_for_periodic_runs(self):
         plist_bytes = build_launch_agent_plist(
             label="com.example.paper-monitor",
-            python_path=Path("/usr/bin/python3"),
+            python_path=PurePosixPath("/usr/bin/python3"),
             module_name="paper_monitor.cli",
-            working_directory=Path("/tmp/solid-monitor"),
-            config_path=Path("/tmp/solid-monitor/config.json"),
+            working_directory=PurePosixPath("/tmp/solid-monitor"),
+            config_path=PurePosixPath("/tmp/solid-monitor/config.json"),
             interval_seconds=7200,
         )
 

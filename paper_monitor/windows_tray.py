@@ -7,16 +7,24 @@ import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from .app_refresh import run_app_refresh
 from .app_identity import DISPLAY_NAME
 from .config import load_app_config, write_default_config
+from .windows_dashboard_server import WindowsDashboardServer
 
 
 APP_NAME = DISPLAY_NAME
 APP_DIR_NAME = "PaperMonitor"
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def bundled_source_root() -> Path:
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        return Path(frozen_root)
+    return Path(__file__).resolve().parents[1]
 
 
 def default_windows_app_dir(env: Optional[Mapping[str, str]] = None):
@@ -52,6 +60,14 @@ def build_startup_registry_value(executable_path) -> str:
     return f'"{executable_path}" --quiet'
 
 
+def open_path_with_default_app(path: Path) -> object:
+    resolved = Path(path).resolve()
+    startfile = getattr(os, "startfile", None)
+    if callable(startfile):
+        return startfile(str(resolved))
+    return webbrowser.open(resolved.as_uri())
+
+
 def set_startup_enabled(enabled: bool, executable_path, registry_module=None) -> None:
     if registry_module is None:
         import winreg as registry_module
@@ -82,7 +98,7 @@ def set_startup_enabled(enabled: bool, executable_path, registry_module=None) ->
 
 def ensure_windows_app_files(app_dir=None, source_root: Optional[Path] = None) -> Path:
     app_dir = Path(app_dir or default_windows_app_dir())
-    source_root = source_root or Path(__file__).resolve().parents[1]
+    source_root = source_root or bundled_source_root()
     app_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = app_dir / "config.json"
@@ -136,14 +152,21 @@ class WindowsTrayApp:
         config_path: Path,
         notifier: Optional[WindowsToastNotifier] = None,
         refresh_function=run_app_refresh,
+        dashboard_server_factory: Callable[[Path], object] = WindowsDashboardServer,
+        open_url: Callable[[str], object] = webbrowser.open,
+        open_file: Callable[[Path], object] = open_path_with_default_app,
     ):
         self.config_path = Path(config_path)
         self.notifier = notifier or WindowsToastNotifier(icon_path=windows_icon_path())
         self.refresh_function = refresh_function
+        self.dashboard_server_factory = dashboard_server_factory
+        self.open_url = open_url
+        self.open_file = open_file
         self.status = TrayStatus()
         self._stop_event = threading.Event()
         self._refresh_lock = threading.Lock()
         self._icon = None
+        self._dashboard_server = None
 
     def run(self, refresh_on_start: bool = True) -> None:
         self._start_refresh_thread(refresh_on_start=refresh_on_start)
@@ -171,11 +194,30 @@ class WindowsTrayApp:
             self._refresh_lock.release()
 
     def open_dashboard(self) -> None:
+        if self._dashboard_server is None:
+            self._dashboard_server = self.dashboard_server_factory(self.config_path)
+        self.open_url(self._dashboard_server.start())
+
+    def open_settings(self) -> None:
+        self.open_file(self.config_path.resolve())
+
+    def post_test_notification(self) -> None:
         app_config = load_app_config(self.config_path)
-        webbrowser.open(app_config.dashboard_path.resolve().as_uri())
+        self.notifier.notify_article(
+            {
+                "title": f"{APP_NAME} test",
+                "journal": "Notification Test",
+                "url": "https://example.org/paper-monitor-test",
+                "doi": "",
+                "source": "local",
+            },
+            app_config.dashboard_path,
+        )
 
     def quit(self) -> None:
         self._stop_event.set()
+        if self._dashboard_server is not None and hasattr(self._dashboard_server, "stop"):
+            self._dashboard_server.stop()
         if self._icon is not None:
             self._icon.stop()
 
@@ -208,15 +250,31 @@ class WindowsTrayApp:
                 pystray.MenuItem(lambda _: self.status.last_result, None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Open Dashboard", lambda *_: self.open_dashboard()),
+                pystray.MenuItem("Settings...", lambda *_: self.open_settings()),
                 pystray.MenuItem("Refresh Now", lambda *_: threading.Thread(target=self.refresh_now, daemon=True).start()),
+                pystray.MenuItem("Test Notification", lambda *_: self.post_test_notification()),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Quit", lambda *_: self.quit()),
             ),
         )
 
 
+def tray_menu_labels() -> List[str]:
+    return [
+        APP_NAME,
+        "Last Run: never",
+        "Last Result: none",
+        "Open Dashboard",
+        "Settings...",
+        "Refresh Now",
+        "Test Notification",
+        "Quit",
+    ]
+
+
 def windows_icon_path() -> Optional[Path]:
     candidates = (
+        bundled_source_root() / "windows" / "assets" / "PaperMonitor.ico",
         Path(sys.executable).resolve().parent / "PaperMonitor.ico",
         Path(__file__).resolve().parents[1] / "windows" / "assets" / "PaperMonitor.ico",
     )
@@ -228,10 +286,16 @@ def windows_icon_path() -> Optional[Path]:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="PaperMonitor")
-    parser.add_argument("command", nargs="?", choices=("run", "install-startup", "uninstall-startup"), default="run")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("run", "install-startup", "uninstall-startup", "test-notification"),
+        default="run",
+    )
     parser.add_argument("--config", type=Path)
     parser.add_argument("--app-dir", type=Path)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--title", default=f"{APP_NAME} test")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.command == "install-startup":
@@ -240,6 +304,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if args.command == "uninstall-startup":
         set_startup_enabled(False, Path(sys.executable).resolve())
         return 0
+    if args.command == "test-notification":
+        config_path = args.config or ensure_windows_app_files(args.app_dir)
+        app_config = load_app_config(config_path)
+        sent = WindowsToastNotifier(icon_path=windows_icon_path()).notify_article(
+            {
+                "title": args.title,
+                "journal": "Notification Test",
+                "url": "https://example.org/paper-monitor-test",
+                "doi": "",
+                "source": "local",
+            },
+            app_config.dashboard_path,
+        )
+        return 0 if sent else 1
 
     config_path = args.config or ensure_windows_app_files(args.app_dir)
     app = WindowsTrayApp(config_path=config_path)

@@ -2,7 +2,7 @@
 
 [中文说明](README.zh-CN.md)
 
-Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, and a native macOS app.
+Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, a native macOS app, and a Windows system tray app.
 
 The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default. arXiv is available as an optional preprint source, but it is not selected by default.
 
@@ -18,13 +18,15 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 - Keyword analysis with date range, journal scope, candidate term filtering, block terms, taxonomy editing, and compact analysis paper list.
 - Configurable search terms, excluded terms, journal scope, refresh interval, and Top N journal selection.
 - Journal metric metadata from `journal_metrics.json`.
-- Early Windows tray source is included for contributors, but the published binary release is currently macOS only.
+- Windows system tray app with dashboard access, settings, manual refresh, startup install support, and test notifications.
 
 ## Download
 
-Download the latest macOS build from the GitHub Releases page.
+Download the latest macOS or Windows build from the GitHub Releases page.
 
-After extracting the ZIP, move `Paper Monitor.app` to `Applications` or `$HOME/Applications`, then open it. The build is ad-hoc signed for local distribution, so macOS may ask you to confirm the first launch from System Settings or by right-clicking the app and choosing Open.
+On macOS, after extracting the ZIP, move `Paper Monitor.app` to `Applications` or `$HOME/Applications`, then open it. The build is ad-hoc signed for local distribution, so macOS may ask you to confirm the first launch from System Settings or by right-clicking the app and choosing Open.
+
+On Windows, download the Windows ZIP, extract it, and run `PaperMonitor.exe`. The app starts in the system tray. See `README_WINDOWS.md` for Windows build and install details.
 
 ## Build From Source
 
@@ -33,6 +35,7 @@ Requirements:
 - macOS with Xcode command line tools
 - Swift Package Manager
 - Python 3
+- Windows with PowerShell and Python 3 for Windows packaging
 
 Run the Python test suite:
 
@@ -57,6 +60,19 @@ The built app is written to:
 
 ```text
 dist/Paper Monitor.app
+```
+
+Build the Windows app:
+
+```powershell
+python -m pip install -r requirements-windows.txt
+.\scripts\build_windows_app.ps1
+```
+
+The built executable is written to:
+
+```text
+dist/windows/PaperMonitor.exe
 ```
 
 ## Configuration
@@ -84,12 +100,12 @@ The personal `config.json`, runtime database, logs, and Crossref cache are inten
 
 ```text
 paper_monitor/          Python retrieval, filtering, storage, dashboard, and analysis logic
-macos/PaperMonitorApp/   Native macOS wrapper
-tests/                          Python tests
-scripts/                        Build and install helpers
-windows/                        Early Windows tray entry point
-journal_metrics.json            Journal metadata used by filters and dashboard
-config.example.json             Public default configuration template
+macos/PaperMonitorApp/  Native macOS wrapper
+tests/                  Python tests
+scripts/                Build and install helpers
+windows/                Windows tray entry point and assets
+journal_metrics.json    Journal metadata used by filters and dashboard
+config.example.json     Public default configuration template
 ```
 
 ## Privacy

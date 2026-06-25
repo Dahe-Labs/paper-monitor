@@ -1,6 +1,7 @@
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -90,12 +91,32 @@ def run_notification_command(command: List[str]) -> bool:
 
 
 def notify_article(article: Article, match: MatchResult, dashboard_path: Path = None) -> bool:
+    if sys.platform == "win32":
+        return _notify_windows_article(article, dashboard_path)
+
     terminal_notifier = find_terminal_notifier()
     if terminal_notifier and dashboard_path is not None:
         return run_notification_command(
             build_terminal_notifier_command(terminal_notifier, article, dashboard_path)
         )
     return run_notification_command(build_osascript_command(article))
+
+
+def _notify_windows_article(article: Article, dashboard_path: Path = None) -> bool:
+    from .windows_tray import WindowsToastNotifier, windows_icon_path
+
+    notifier = WindowsToastNotifier(icon_path=windows_icon_path())
+    dashboard_path = dashboard_path or Path.cwd()
+    return notifier.notify_article(
+        {
+            "title": article.title,
+            "journal": article.journal,
+            "url": article.url,
+            "doi": article.doi,
+            "source": article.source,
+        },
+        dashboard_path,
+    )
 
 
 def _truncate(value: str, limit: int) -> str:
