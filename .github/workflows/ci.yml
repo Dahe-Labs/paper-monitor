@@ -111,7 +111,6 @@ jobs:
   macos-swift-tests:
     name: macOS Swift tests
     runs-on: macos-latest
-    if: ${{ hashFiles('macos/PaperMonitorApp/Package.swift') != '' }}
 
     steps:
       - name: Checkout
