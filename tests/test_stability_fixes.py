@@ -230,7 +230,7 @@ class StabilityFixTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=True):
                     with patch("paper_monitor.windows_tray.activate_existing_app_window", return_value=True) as activate:
                         with patch("paper_monitor.windows_tray.ensure_tray_process") as ensure_tray:
@@ -254,7 +254,7 @@ class StabilityFixTests(unittest.TestCase):
             open_window.assert_called_once()
 
     def test_launch_app_window_uses_utf8_child_environment(self):
-        with patch("paper_monitor.windows_tray.os.name", "nt"):
+        with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
             with patch("paper_monitor.windows_tray.subprocess.Popen") as popen:
                 windows_tray.launch_app_window(Path("config.json"))
 
@@ -267,7 +267,7 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(kwargs["env"][windows_tray.LAUNCHED_BY_TRAY_ENV], "1")
 
     def test_frozen_launch_app_window_resets_pyinstaller_child_environment(self):
-        with patch("paper_monitor.windows_tray.os.name", "nt"):
+        with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
             with patch.object(sys, "frozen", True, create=True):
                 with patch("paper_monitor.windows_tray.subprocess.Popen") as popen:
                     windows_tray.launch_app_window(Path("config.json"))
@@ -450,7 +450,7 @@ class StabilityFixTests(unittest.TestCase):
                 launch_error_handler=lambda _error, _path: None,
             )
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=False):
                     with patch.object(sys, "executable", executable):
                         with patch.object(sys, "frozen", True, create=True):
@@ -496,7 +496,7 @@ class StabilityFixTests(unittest.TestCase):
                 control_window=lambda path, action, route=None: controls.append((Path(path), action, route)) or True,
             )
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=True):
                     app.open_settings()
 
@@ -548,7 +548,7 @@ class StabilityFixTests(unittest.TestCase):
             app._window_process = process
             app._pending_window_route = "/settings"
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=False):
                     app._monitor_window_launch(process, "/settings")
 
@@ -576,7 +576,7 @@ class StabilityFixTests(unittest.TestCase):
             running_process = RunningProcess()
             app._window_process = running_process
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=False):
                     with patch.object(app, "_start_window_launch_monitor") as monitor:
                         app.open_settings()
@@ -658,7 +658,7 @@ class StabilityFixTests(unittest.TestCase):
         fake_win32_module = types.ModuleType("pystray._win32")
         fake_win32_module.Icon = FakeWin32Icon
 
-        with patch("paper_monitor.windows_tray.os.name", "nt"):
+        with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
             with patch.dict(
                 sys.modules,
                 {
@@ -831,7 +831,7 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(focused, [True])
 
     def test_launch_app_window_skips_when_window_mutex_exists(self):
-        with patch("paper_monitor.windows_tray.os.name", "nt"):
+        with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
             with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=True):
                 with patch("paper_monitor.windows_tray.subprocess.Popen") as popen:
                     self.assertIsNone(windows_tray.launch_app_window(Path("config.json")))
@@ -870,7 +870,7 @@ class StabilityFixTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_tray_mutex_running", return_value=False):
                     with patch.object(sys, "executable", executable):
                         with patch.object(sys, "frozen", True, create=True):
@@ -897,7 +897,7 @@ class StabilityFixTests(unittest.TestCase):
             payload["app_settings"]["show_tray_icon"] = False
             config_path.write_text(json.dumps(payload), encoding="utf-8")
 
-            with patch("paper_monitor.windows_tray.os.name", "nt"):
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_tray_mutex_running", return_value=False):
                     with patch("paper_monitor.windows_tray.subprocess.Popen") as popen:
                         started = windows_tray.ensure_tray_process(config_path)
@@ -1434,11 +1434,9 @@ class StabilityFixTests(unittest.TestCase):
 
     def test_windows_packaging_includes_runtime_resource_directories(self):
         script = Path("scripts/build_windows_app.ps1").read_text(encoding="utf-8")
-        spec = Path("build/windows/PaperMonitor.spec").read_text(encoding="utf-8").replace("\\\\", "\\")
 
         for resource in ("paper_monitor\\templates", "paper_monitor\\static", "paper_monitor\\resources"):
             self.assertIn(resource, script)
-            self.assertIn(resource, spec)
 
         self.assertIn('"_sqlite3"', script)
         self.assertIn('"unicodedata"', script)

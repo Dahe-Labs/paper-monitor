@@ -14,6 +14,16 @@ from paper_monitor.journal_metrics import load_journal_metrics
 from paper_monitor.keyword_analysis import AnalysisScope
 
 
+def _run_node_script(node: str, script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [node],
+        input=script,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 class DashboardAndMetricsTests(unittest.TestCase):
     def test_loads_metrics_by_journal_name_and_alias(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -494,12 +504,7 @@ if (timeHtml.indexOf("Low") > timeHtml.indexOf("High")) {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -919,12 +924,7 @@ if (!progressLabel.textContent.includes("Preparing")) {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -970,12 +970,7 @@ if (!controls.includes('data-analysis-depth')) {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1020,12 +1015,7 @@ if (keywordAnalysisState.dateTo !== "2026-06-24") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1102,12 +1092,7 @@ if (button.textContent !== "Analyzing..." || !button.disabled) {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1201,12 +1186,7 @@ if (keywordAnalysisState.dateTo !== "2024-02-29") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1308,12 +1288,7 @@ if (keywordAnalysisState.dateFrom !== "2024-02-29") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1387,12 +1362,7 @@ if (posted.date_from !== "2026-01-01" || posted.date_to !== "2026-06-30") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1473,12 +1443,7 @@ if (keywordAnalysisState.dateFrom !== "2026-06-24") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1557,12 +1522,7 @@ if (!global.window.paperMonitorReceiveKeywordAnalysis) {{
 renderKeywordAnalysis = originalRender;
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1604,12 +1564,7 @@ if (!status.includes("0 fetched") || !status.includes("0 matched")) {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1682,12 +1637,7 @@ if (elements["keyword-analysis-nav"].textContent !== "Keyword Analysis") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1769,12 +1719,7 @@ if (controls.includes("data-term-option") || controls.includes("<h3>Matched Term
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -1865,7 +1810,7 @@ if (!controls.includes('data-stepper-action="analysis-top-n-decrement" aria-labe
     !controls.includes('data-stepper-action="analysis-top-n-increment" aria-label="Increase top journals">+</button>')) {{
   throw new Error("Top Journals stepper should keep minus/plus controls: " + controls);
 }}
-if (!controls.includes('class="checkbox-list analysis-journal-list"')) {{
+if (!controls.includes('class="analysis-dual-listbox analysis-journal-list"')) {{
   throw new Error("journal list should use taller analysis-specific class");
 }}
 let candidateHtml = renderCandidateTerms(discoveredTerms(selectedAnalysisPapers()));
@@ -1992,12 +1937,7 @@ if (terms.includes("interfacial resistance") || terms.includes("lithium depositi
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -2053,7 +1993,7 @@ if (keywordAnalysisState.selectedJournals.join(",") !== "Nature Energy,Joule") {
   throw new Error("default journals should come from scope: " + keywordAnalysisState.selectedJournals.join(","));
 }}
 const controls = renderAnalysisControls();
-if (!controls.includes('value="Joule"') || !controls.includes("2 / 2 selected")) {{
+if (!controls.includes('data-journal="Joule"') || !controls.includes("2 / 2 selected")) {{
   throw new Error("scope journals should render in controls: " + controls);
 }}
 keywordAnalysisState.dateFrom = "2026-06-01";
@@ -2064,12 +2004,7 @@ if (!posted || posted.journals.join(",") !== "Nature Energy,Joule") {{
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -2115,12 +2050,7 @@ if (keywordAnalysisState.selectedJournals.join(",") !== "Nature Energy,Joule") {
 }}
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -2184,12 +2114,7 @@ if (!terms.includes("interfacial resistance")) {{
 }});
 """
 
-        result = subprocess.run(
-            [node, "-e", harness],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_node_script(node, harness)
 
         self.assertEqual(result.returncode, 0, result.stderr)
 

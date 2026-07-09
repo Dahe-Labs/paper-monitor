@@ -34,6 +34,10 @@ WINDOW_READY_TIMEOUT_SECONDS = 15.0
 LOGGER = logging.getLogger(__name__)
 
 
+def _is_windows_platform() -> bool:
+    return os.name == "nt"
+
+
 class RefreshReason(str, Enum):
     PROCESS_LAUNCH = "process_launch"
     LOGIN_STARTUP = "login_startup"
@@ -109,7 +113,7 @@ def tray_process_command(
 
 def launch_app_window(config_path: Path, path: str = "/") -> Optional[subprocess.Popen]:
     kwargs: Dict[str, object] = {}
-    if os.name == "nt":
+    if _is_windows_platform():
         if _is_window_mutex_running():
             return None
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -132,7 +136,7 @@ def _internal_child_environment() -> Dict[str, str]:
 
 
 def focus_existing_app_window(title: str = APP_NAME) -> bool:
-    if os.name != "nt":
+    if not _is_windows_platform():
         return False
     try:
         import ctypes
@@ -194,7 +198,7 @@ def show_window_launch_error(error: BaseException, path: str = "/") -> None:
         f"{APP_NAME} could not open the {target} window.\n\n"
         f"{type(error).__name__}: {error}"
     )
-    if os.name != "nt":
+    if not _is_windows_platform():
         _write_stderr(message)
         return
     try:
@@ -206,7 +210,7 @@ def show_window_launch_error(error: BaseException, path: str = "/") -> None:
 
 
 def show_tray_message(message: str) -> None:
-    if os.name != "nt":
+    if not _is_windows_platform():
         _write_stderr(message)
         return
     try:
@@ -299,7 +303,7 @@ def ensure_tray_process(
     refresh_on_launch: bool = True,
     launch_reason: RefreshReason = RefreshReason.PROCESS_LAUNCH,
 ) -> bool:
-    if os.name != "nt" or _is_tray_mutex_running():
+    if not _is_windows_platform() or _is_tray_mutex_running():
         return False
 
     creationflags = 0
@@ -523,7 +527,7 @@ class WindowsTrayApp:
                 self.focus_window()
                 self._start_window_launch_monitor(self._window_process, path)
                 return
-            if os.name == "nt" and _is_window_mutex_running():
+            if _is_windows_platform() and _is_window_mutex_running():
                 if self._deliver_pending_window_route():
                     return
                 self.focus_window()
@@ -582,7 +586,7 @@ class WindowsTrayApp:
             return False
 
     def _reload_open_window(self) -> None:
-        if _process_is_running(self._window_process) or (os.name == "nt" and _is_window_mutex_running()):
+        if _process_is_running(self._window_process) or (_is_windows_platform() and _is_window_mutex_running()):
             self._send_window_control("reload", "/")
 
     def _deliver_pending_window_route(self) -> bool:
@@ -619,7 +623,7 @@ class WindowsTrayApp:
                         if self._window_process is process:
                             self._window_process = None
                     process = None
-                    if os.name != "nt" or not _is_window_mutex_running():
+                    if not _is_windows_platform() or not _is_window_mutex_running():
                         error = RuntimeError(
                             "The Paper Monitor window process exited before becoming ready."
                         )
@@ -629,7 +633,7 @@ class WindowsTrayApp:
                         self.status.last_result = "Last Result: Could not open window"
                         self.launch_error_handler(error, path)
                         return
-                if process is None and os.name == "nt" and not _is_window_mutex_running():
+                if process is None and _is_windows_platform() and not _is_window_mutex_running():
                     error = RuntimeError("The running Paper Monitor window did not become ready.")
                     _log_window_launch_error(self.config_path, path, error)
                     with self._window_launch_lock:
@@ -661,7 +665,7 @@ class WindowsTrayApp:
                     restart_path = self._pending_window_route
                     if _process_is_running(self._window_process):
                         restart_process = self._window_process
-                    elif os.name != "nt" or not _is_window_mutex_running():
+                    elif not _is_windows_platform() or not _is_window_mutex_running():
                         restart_path = None
             if restart_path is not None:
                 self._start_window_launch_monitor(restart_process, restart_path)
@@ -767,7 +771,7 @@ def _tray_menu(pystray, app: WindowsTrayApp):
 
 
 def _tray_icon_class(pystray, double_click_action: Callable[[], None]):
-    if os.name != "nt":
+    if not _is_windows_platform():
         return pystray.Icon
     try:
         from pystray._util import win32
@@ -906,7 +910,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     config_path = args.config or ensure_windows_app_files(args.app_dir)
     if args.command in ("window", "settings", "run"):
         window_path = "/settings" if args.command == "settings" else "/"
-        if os.name == "nt" and _is_window_mutex_running():
+        if _is_windows_platform() and _is_window_mutex_running():
             if activate_existing_app_window(config_path, path=window_path):
                 return 0
             error = RuntimeError("The running Paper Monitor window did not respond.")

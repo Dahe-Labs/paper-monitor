@@ -155,8 +155,9 @@ public final class NotificationController: NSObject, UNUserNotificationCenterDel
         let userInfo = response.notification.request.content.userInfo
         switch Self.responseAction(actionIdentifier: response.actionIdentifier, userInfo: userInfo) {
         case .openDashboard:
+            let dashboardOpener = openDashboard
             Task { @MainActor in
-                openDashboard()
+                dashboardOpener()
             }
         case .openExternalURL(let articleURL):
             workspace.open(articleURL)

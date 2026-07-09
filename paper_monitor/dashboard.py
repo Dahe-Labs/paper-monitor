@@ -2284,9 +2284,26 @@ function matchedPaperNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+const MATCHED_PAPER_SHORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  calendar: "gregory",
+  month: "short",
+  day: "numeric"
+});
+
+function matchedPaperIsoDateParts(value) {
+  const match = matchedPaperString(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return { date: date };
+}
+
 function dateHeadingShortLabel(label) {
   const value = matchedPaperString(label);
-  const parts = isoDateParts(value);
+  const parts = matchedPaperIsoDateParts(value);
   if (!parts) return value || "Unknown date";
   const date = parts.date;
 
@@ -2296,7 +2313,7 @@ function dateHeadingShortLabel(label) {
   if (dayDiff === 0) return "Today";
   if (dayDiff === 1) return "Yesterday";
 
-  return formatDisplayDate(value, "shortNoYear") || value;
+  return MATCHED_PAPER_SHORT_DATE_FORMATTER.format(date) || value;
 }
 
 function paperCountLabel(count) {
