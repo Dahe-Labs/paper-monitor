@@ -99,7 +99,7 @@ jobs:
         run: .\scripts\package_windows_release.ps1 -Version "0.0.0-ci.${{ github.run_number }}"
 
       - name: Upload Windows package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: PaperMonitor-Windows-CI-${{ github.run_number }}
           if-no-files-found: error
