@@ -134,6 +134,7 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("* text=auto eol=lf", attributes)
         self.assertIn('select = ["E4", "E7", "E9", "F", "I"]', quality_config)
         self.assertNotIn("if: ${{ hashFiles(", ci_workflow)
+        self.assertIn("push:\n    branches:\n      - main", ci_workflow)
 
     def test_windows_release_installer_registers_in_installed_apps(self):
         installer = read_text("windows/PaperMonitor.iss")
