@@ -961,7 +961,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let store = SettingsStore(configURL: configURL)
         let settings = try store.load()
 
-        XCTAssertEqual(settings.schemaVersion, 1)
+        XCTAssertEqual(settings.schemaVersion, 2)
         XCTAssertEqual(settings.journalScope.topN, 50)
         XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature Energy", "Advanced Materials"])
         XCTAssertEqual(settings.intervalSeconds, 3600)
@@ -1790,7 +1790,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         }
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         termsController.updateTerms(
             includeTerms: ["solid electrolyte", "solid electrolyte", "LLZO"],
@@ -1815,7 +1815,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.updateQueries(
             crossrefQuery: "pending crossref",
@@ -1847,7 +1847,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.updateQueries(
             crossrefQuery: "pending crossref",
@@ -1926,7 +1926,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.loadView()
         termsController.loadView()
@@ -1953,7 +1953,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.loadView()
         termsController.loadView()
@@ -1980,7 +1980,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let journalController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? JournalFilterViewController)
+        let journalController = try XCTUnwrap(tabViewController.tabViewItems[3].viewController as? JournalFilterViewController)
 
         searchController.loadView()
         journalController.loadView()
@@ -1999,7 +1999,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let journalController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? JournalFilterViewController)
+        let journalController = try XCTUnwrap(tabViewController.tabViewItems[3].viewController as? JournalFilterViewController)
 
         searchController.loadView()
         journalController.loadView()
@@ -2017,7 +2017,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         }
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         termsController.updateTerms(includeTerms: ["LLZO"], excludeTerms: [], debounced: true)
 

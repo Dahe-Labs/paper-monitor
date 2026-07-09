@@ -481,7 +481,7 @@ public struct JournalSelection: Equatable {
         var selection = DualListSelection(selectedItems: selectedJournals)
         if selected {
             selection.add(journal)
-        } else {
+        } else if selection.selectedItems.count > 1 {
             selection.remove(journal)
         }
         selectedJournals = selection.selectedItems

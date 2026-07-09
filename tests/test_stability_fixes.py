@@ -571,6 +571,7 @@ class StabilityFixTests(unittest.TestCase):
             app = windows_tray.WindowsTrayApp(
                 config_path,
                 open_window=lambda path, route: opened.append((Path(path), route)) or RunningProcess(),
+                focus_window=lambda: True,
                 control_window=lambda _path, _action, route=None: (_ for _ in ()).throw(RuntimeError("no endpoint")),
             )
             running_process = RunningProcess()
