@@ -1,6 +1,6 @@
 import Foundation
 
-protocol RefreshSchedulerTimer: AnyObject, Sendable {
+protocol RefreshSchedulerTimer: AnyObject {
     func invalidate()
 }
 
