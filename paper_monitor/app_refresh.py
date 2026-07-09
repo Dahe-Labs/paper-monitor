@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -10,9 +11,34 @@ from .models import Article
 from .monitor import run_once
 from .sources import fetch_all_sources
 from .storage import ArticleStore
+from .windows_mutex import REFRESH_MUTEX_NAME, acquire_mutex, close_handle
+
+_APP_REFRESH_LOCK = threading.Lock()
+
+
+class RefreshAlreadyRunning(RuntimeError):
+    """Raised when another process already owns the application refresh."""
 
 
 def run_app_refresh(
+    config_path: Path,
+    fetch_articles: Optional[Callable[[], List[Article]]] = None,
+) -> Dict[str, object]:
+    if not _APP_REFRESH_LOCK.acquire(blocking=False):
+        raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
+
+    refresh_mutex = None
+    try:
+        refresh_mutex = acquire_mutex(REFRESH_MUTEX_NAME)
+        if refresh_mutex is None:
+            raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
+        return _run_app_refresh(config_path, fetch_articles=fetch_articles)
+    finally:
+        close_handle(refresh_mutex)
+        _APP_REFRESH_LOCK.release()
+
+
+def _run_app_refresh(
     config_path: Path,
     fetch_articles: Optional[Callable[[], List[Article]]] = None,
 ) -> Dict[str, object]:

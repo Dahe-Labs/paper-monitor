@@ -8,21 +8,25 @@ public final class NotificationController: NSObject, UNUserNotificationCenterDel
     public static let foregroundPresentationOptions: UNNotificationPresentationOptions = [.banner, .list, .sound]
     public typealias NotificationRequestAdder = (UNNotificationRequest, @escaping @Sendable (Error?) -> Void) -> Void
     public typealias NotificationErrorLogger = @Sendable (String) -> Void
+    public typealias DashboardOpener = @MainActor @Sendable () -> Void
 
     private let notificationCenter: UNUserNotificationCenter?
     private let workspace: NSWorkspace
     private let addRequest: NotificationRequestAdder
     private let notificationErrorLogger: NotificationErrorLogger
+    private let openDashboard: DashboardOpener
 
     public init(
         notificationCenter: UNUserNotificationCenter = .current(),
         workspace: NSWorkspace = .shared,
+        openDashboard: @escaping DashboardOpener = {},
         notificationErrorLogger: @escaping NotificationErrorLogger = { message in
             NSLog("%@", message)
         }
     ) {
         self.notificationCenter = notificationCenter
         self.workspace = workspace
+        self.openDashboard = openDashboard
         self.addRequest = { request, completion in
             notificationCenter.add(request, withCompletionHandler: completion)
         }
@@ -35,11 +39,13 @@ public final class NotificationController: NSObject, UNUserNotificationCenterDel
     init(
         workspace: NSWorkspace = .shared,
         addRequest: @escaping NotificationRequestAdder,
+        openDashboard: @escaping DashboardOpener = {},
         notificationErrorLogger: @escaping NotificationErrorLogger
     ) {
         self.notificationCenter = nil
         self.workspace = workspace
         self.addRequest = addRequest
+        self.openDashboard = openDashboard
         self.notificationErrorLogger = notificationErrorLogger
         super.init()
     }
@@ -121,6 +127,18 @@ public final class NotificationController: NSObject, UNUserNotificationCenterDel
         return URL(string: "https://example.org")!
     }
 
+    static func responseAction(actionIdentifier: String, userInfo: [AnyHashable: Any]) -> NotificationResponseAction {
+        if actionIdentifier == Self.openDashboardActionIdentifier {
+            return .openDashboard
+        }
+        if let articleString = userInfo["article_url"] as? String,
+           let articleURL = URL(string: articleString),
+           ["http", "https"].contains(articleURL.scheme?.lowercased()) {
+            return .openExternalURL(articleURL)
+        }
+        return .none
+    }
+
     public func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -135,14 +153,22 @@ public final class NotificationController: NSObject, UNUserNotificationCenterDel
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let userInfo = response.notification.request.content.userInfo
-        if response.actionIdentifier == Self.openDashboardActionIdentifier,
-           let dashboardString = userInfo["dashboard_url"] as? String,
-           let dashboard = URL(string: dashboardString) {
-            workspace.open(dashboard)
-        } else if let articleString = userInfo["article_url"] as? String,
-                  let articleURL = URL(string: articleString) {
+        switch Self.responseAction(actionIdentifier: response.actionIdentifier, userInfo: userInfo) {
+        case .openDashboard:
+            Task { @MainActor in
+                openDashboard()
+            }
+        case .openExternalURL(let articleURL):
             workspace.open(articleURL)
+        case .none:
+            break
         }
         completionHandler()
     }
+}
+
+enum NotificationResponseAction: Equatable {
+    case openDashboard
+    case openExternalURL(URL)
+    case none
 }

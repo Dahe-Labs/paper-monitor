@@ -35,4 +35,20 @@ public enum RefreshPresentation {
     public static func permissionTitle(_ text: String) -> String {
         "Notification Permission: \(text)"
     }
+
+    public static func failedResultTitle(message: String?) -> String {
+        guard let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return failedResultTitle
+        }
+        return "Last Result: Refresh failed - \(shortMessage(message))"
+    }
+
+    private static func shortMessage(_ value: String, limit: Int = 120) -> String {
+        let compact = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if compact.count <= limit {
+            return compact
+        }
+        let endIndex = compact.index(compact.startIndex, offsetBy: max(0, limit - 1))
+        return String(compact[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
 }

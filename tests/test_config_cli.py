@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from paper_monitor.cli import _open_dashboard, _python_for_launch_agent, _write_launch_agent, build_arg_parser
+from paper_monitor.cli import (
+    _open_dashboard,
+    _python_for_launch_agent,
+    _write_launch_agent,
+    build_arg_parser,
+)
 from paper_monitor.config import DEFAULT_CONFIG, load_app_config, write_default_config
 from paper_monitor.models import Article
 from paper_monitor.storage import ArticleStore
@@ -176,7 +181,7 @@ class ConfigAndCliTests(unittest.TestCase):
             self.assertEqual(config.source_config["crossref"]["query"], "solid electrolyte OR LLZO")
             self.assertEqual(config.source_config["openalex"]["query"], "solid electrolyte LLZO")
 
-    def test_custom_search_direction_keywords_drive_terms_and_queries(self):
+    def test_custom_search_direction_queries_do_not_replace_filter_terms(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.json"
             payload = {
@@ -186,7 +191,8 @@ class ConfigAndCliTests(unittest.TestCase):
                 "search_direction": {
                     "preset": "custom",
                     "label": "Cathode interface",
-                    "keywords": ["cathode", "", "space charge", "cathode"],
+                    "crossref_query": "cathode OR space charge",
+                    "openalex_query": "cathode space charge",
                     "query_manually_edited": False,
                 },
                 "sources": {
@@ -199,7 +205,7 @@ class ConfigAndCliTests(unittest.TestCase):
 
             config = load_app_config(config_path)
 
-            self.assertEqual(config.monitor_config.filter_config.include_terms, ["cathode", "space charge"])
+            self.assertEqual(config.monitor_config.filter_config.include_terms, ["old term"])
             self.assertEqual(config.source_config["crossref"]["query"], "cathode OR space charge")
             self.assertEqual(config.source_config["openalex"]["query"], "cathode space charge")
 
@@ -328,8 +334,9 @@ class ConfigAndCliTests(unittest.TestCase):
             _write_launch_agent(config_path, output_path, "com.example.solid-monitor")
 
             payload = plistlib.loads(output_path.read_bytes())
-            self.assertEqual(payload["WorkingDirectory"], str(Path(temp_dir).resolve()))
-            self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], str(Path(temp_dir).resolve()))
+            expected_directory = Path(temp_dir).resolve().as_posix()
+            self.assertEqual(payload["WorkingDirectory"], expected_directory)
+            self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], expected_directory)
 
 
 if __name__ == "__main__":

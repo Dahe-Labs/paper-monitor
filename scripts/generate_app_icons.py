@@ -2,11 +2,53 @@
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "macos" / "PaperMonitorApp" / "Assets"
 ICONSET_DIR = ASSET_DIR / "AppIcon.iconset"
 APP_ICON_SOURCE = ASSET_DIR / "AppIconSource.png"
+
+
+def _load_pillow():
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required to generate PaperMonitor icons") from exc
+
+    return Image, ImageDraw
+
+
+def draw_windows_icon(size: int):
+    if size <= 0:
+        raise ValueError("Icon size must be positive")
+
+    Image, ImageDraw = _load_pillow()
+    scale = 4
+    canvas_size = size * scale
+    image = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+
+    factor = canvas_size / 64
+
+    def points(*values):
+        return tuple(round(value * factor) for value in values)
+
+    draw.ellipse(points(4, 4, 60, 60), fill=(21, 101, 192, 255))
+    draw.line(
+        points(22, 19, 43, 19, 22, 30, 42, 30, 42, 43, 21, 43),
+        fill=(255, 255, 255, 255),
+        width=max(1, round(7 * factor)),
+    )
+
+    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    return image.resize((size, size), resampling)
+
+
+def write_png(destination, image) -> None:
+    if isinstance(destination, (str, Path)):
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+    image.save(destination, format="PNG")
 
 
 def generate_app_iconset():

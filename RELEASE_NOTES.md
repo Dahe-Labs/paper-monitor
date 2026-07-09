@@ -1,3 +1,23 @@
+# Paper Monitor 0.1.6
+
+Windows reliability and release hardening update.
+
+## Included
+
+- Added a single-instance native Windows Dashboard/Settings window controlled by tray and relaunch actions.
+- Added reliable startup route delivery, atomic control metadata, and visible error logging for failed window launches.
+- Added process-local and Windows named refresh guards to prevent overlapping tray, Dashboard, and CLI refreshes.
+- Added runtime tray visibility updates without stopping background scheduling.
+- Added an Inno Setup per-user installer, portable ZIP, standalone EXE, SHA256 manifests, and embedded version metadata.
+- Added optional Authenticode signing support to local and GitHub release builds.
+- Hardened network source handling with HTTP(S)-only URLs, response-size limits, and DTD/entity rejection for XML feeds.
+- Restored the full historical regression suite and expanded it to 248 passing Python tests.
+
+## Notes
+
+- Windows `v0.1.6` artifacts are currently unsigned until a trusted Authenticode certificate is configured.
+- Runtime configuration, databases, logs, caches, local build output, and archived releases are excluded from source control.
+
 # Paper Monitor 0.1.5
 
 Settings workflow release.

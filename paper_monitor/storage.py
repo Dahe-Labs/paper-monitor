@@ -1,5 +1,5 @@
-import sqlite3
 import json
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
@@ -80,21 +80,42 @@ class ArticleStore:
             )
             return int(cursor.lastrowid)
 
-    def finish_run(self, run_id: int, fetched: int, matched: int, new_matches: int, skipped: int) -> None:
+    def finish_run(
+        self,
+        run_id: int,
+        fetched: int,
+        matched: int,
+        new_matches: int,
+        skipped: int,
+        status: str = "finished",
+        error_message: str = "",
+    ) -> None:
         with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE runs
                 SET finished_at = datetime('now'),
-                    status = 'finished',
+                    status = ?,
                     fetched = ?,
                     matched = ?,
                     new_matches = ?,
-                    skipped = ?
+                    skipped = ?,
+                    error_message = ?
                 WHERE id = ?
                 """,
-                (fetched, matched, new_matches, skipped, run_id),
+                (status, fetched, matched, new_matches, skipped, error_message, run_id),
             )
+
+    def fail_run(self, run_id: int, error_message: str) -> None:
+        self.finish_run(
+            run_id,
+            fetched=0,
+            matched=0,
+            new_matches=0,
+            skipped=0,
+            status="failed",
+            error_message=_short_error_message(error_message),
+        )
 
     def record_candidate(
         self,
@@ -137,7 +158,7 @@ class ArticleStore:
             connection.row_factory = sqlite3.Row
             row = connection.execute(
                 """
-                SELECT id, started_at, finished_at, status, fetched, matched, new_matches, skipped
+                SELECT id, started_at, finished_at, status, fetched, matched, new_matches, skipped, error_message
                 FROM runs
                 ORDER BY id DESC
                 LIMIT 1
@@ -220,7 +241,8 @@ class ArticleStore:
                     fetched INTEGER NOT NULL,
                     matched INTEGER NOT NULL,
                     new_matches INTEGER NOT NULL,
-                    skipped INTEGER NOT NULL
+                    skipped INTEGER NOT NULL,
+                    error_message TEXT
                 )
                 """
             )
@@ -248,6 +270,7 @@ class ArticleStore:
             )
             self._ensure_column(connection, "articles", "detected", "TEXT")
             self._ensure_column(connection, "candidates", "detected", "TEXT")
+            self._ensure_column(connection, "runs", "error_message", "TEXT")
             connection.execute("UPDATE articles SET detected = published WHERE detected IS NULL OR detected = ''")
             connection.execute("UPDATE candidates SET detected = published WHERE detected IS NULL OR detected = ''")
 
@@ -269,3 +292,10 @@ class ArticleStore:
             connection.commit()
         finally:
             connection.close()
+
+
+def _short_error_message(value: str, limit: int = 500) -> str:
+    compact = " ".join(str(value or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "..."

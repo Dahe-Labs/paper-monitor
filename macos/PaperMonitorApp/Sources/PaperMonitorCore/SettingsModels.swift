@@ -18,7 +18,6 @@ public struct JournalScope: Equatable, Codable, Sendable {
 public struct SearchDirection: Equatable, Codable, Sendable {
     public var preset: String
     public var label: String
-    public var keywords: [String]
     public var crossrefQuery: String
     public var openalexQuery: String
     public var queryManuallyEdited: Bool
@@ -26,14 +25,12 @@ public struct SearchDirection: Equatable, Codable, Sendable {
     public init(
         preset: String,
         label: String,
-        keywords: [String],
         crossrefQuery: String,
         openalexQuery: String,
         queryManuallyEdited: Bool
     ) {
         self.preset = preset
         self.label = label
-        self.keywords = keywords
         self.crossrefQuery = crossrefQuery
         self.openalexQuery = openalexQuery
         self.queryManuallyEdited = queryManuallyEdited
@@ -42,11 +39,70 @@ public struct SearchDirection: Equatable, Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case preset
         case label
-        case keywords
         case crossrefQuery = "crossref_query"
         case openalexQuery = "openalex_query"
         case queryManuallyEdited = "query_manually_edited"
     }
+}
+
+public struct RuntimeAppSettings: Equatable, Sendable {
+    public var startupEnabled: Bool
+    public var showTrayIcon: Bool
+    public var notificationsEnabled: Bool
+    public var silentStartupNotifications: Bool
+    public var refreshOnLaunch: Bool
+
+    public init(
+        startupEnabled: Bool,
+        showTrayIcon: Bool,
+        notificationsEnabled: Bool,
+        silentStartupNotifications: Bool,
+        refreshOnLaunch: Bool
+    ) {
+        self.startupEnabled = startupEnabled
+        self.showTrayIcon = showTrayIcon
+        self.notificationsEnabled = notificationsEnabled
+        self.silentStartupNotifications = silentStartupNotifications
+        self.refreshOnLaunch = refreshOnLaunch
+    }
+
+    public static let `default` = RuntimeAppSettings(
+        startupEnabled: false,
+        showTrayIcon: true,
+        notificationsEnabled: true,
+        silentStartupNotifications: true,
+        refreshOnLaunch: true
+    )
+}
+
+public struct OpenAlexSourceSettings: Equatable, Sendable {
+    public var enabled: Bool
+    public var daysBack: Int
+    public var perPage: Int
+    public var maxPages: Int
+    public var apiKey: String
+
+    public init(
+        enabled: Bool,
+        daysBack: Int,
+        perPage: Int,
+        maxPages: Int,
+        apiKey: String
+    ) {
+        self.enabled = enabled
+        self.daysBack = daysBack
+        self.perPage = perPage
+        self.maxPages = maxPages
+        self.apiKey = apiKey
+    }
+
+    public static let `default` = OpenAlexSourceSettings(
+        enabled: false,
+        daysBack: 15,
+        perPage: 100,
+        maxPages: 3,
+        apiKey: ""
+    )
 }
 
 public struct AppSettings: Equatable, Sendable {
@@ -54,43 +110,44 @@ public struct AppSettings: Equatable, Sendable {
     public var journalScope: JournalScope
     public var intervalSeconds: Int
     public var refreshStartTime: String
+    public var runtime: RuntimeAppSettings
     public var includeTerms: [String]
     public var excludeTerms: [String]
     public var searchDirection: SearchDirection
+    public var openAlex: OpenAlexSourceSettings
 
     public init(
         schemaVersion: Int,
         journalScope: JournalScope,
         intervalSeconds: Int,
-        refreshStartTime: String,
+        refreshStartTime: String = "",
+        runtime: RuntimeAppSettings = .default,
         includeTerms: [String],
         excludeTerms: [String],
-        searchDirection: SearchDirection
+        searchDirection: SearchDirection,
+        openAlex: OpenAlexSourceSettings = .default
     ) {
         self.schemaVersion = schemaVersion
         self.journalScope = journalScope
         self.intervalSeconds = intervalSeconds
         self.refreshStartTime = refreshStartTime
+        self.runtime = runtime
         self.includeTerms = includeTerms
         self.excludeTerms = excludeTerms
         self.searchDirection = searchDirection
+        self.openAlex = openAlex
     }
 
     public static let `default` = AppSettings(
-        schemaVersion: 1,
+        schemaVersion: 2,
         journalScope: JournalScope(topN: 15, selectedJournals: []),
         intervalSeconds: 43_200,
         refreshStartTime: "",
+        runtime: .default,
         includeTerms: [],
         excludeTerms: [],
-        searchDirection: SearchDirection(
-            preset: "solid_state_battery_general",
-            label: "Solid-state battery general",
-            keywords: ["solid electrolyte", "all-solid-state battery", "solid-state battery"],
-            crossrefQuery: "solid electrolyte OR all-solid-state battery OR solid-state battery",
-            openalexQuery: "solid electrolyte all-solid-state battery solid-state battery",
-            queryManuallyEdited: false
-        )
+        searchDirection: SearchPresetCatalog.bundled.defaultSearchDirection(),
+        openAlex: .default
     )
 }
 
@@ -126,13 +183,209 @@ public enum SettingsNormalizer {
         }
         return result
     }
+
+    public static func normalizedRefreshStartTime(_ value: String) -> String? {
+        AppRefreshSettings.normalizedRefreshStartTime(value)
+    }
+
+    public static func clampedOpenAlexDaysBack(_ value: Int) -> Int {
+        min(3650, max(1, value))
+    }
+
+    public static func clampedOpenAlexPerPage(_ value: Int) -> Int {
+        min(200, max(1, value))
+    }
+
+    public static func clampedOpenAlexMaxPages(_ value: Int) -> Int {
+        min(50, max(1, value))
+    }
+}
+
+public struct SearchPresetDefinition: Equatable, Codable, Sendable {
+    public var id: String
+    public var label: String
+    public var crossrefQuery: String
+    public var openalexQuery: String
+    public var includeTerms: [String]
+    public var excludeTerms: [String]
+    public var aliases: [String]
+    public var isCustom: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case crossrefQuery = "crossref_query"
+        case openalexQuery = "openalex_query"
+        case includeTerms = "include_terms"
+        case excludeTerms = "exclude_terms"
+        case aliases
+        case isCustom = "is_custom"
+    }
+}
+
+private enum SearchPresetCatalogError: Error {
+    case emptyCatalog
+    case missingDefaultPreset(String)
+}
+
+public struct SearchPresetCatalog: Equatable, Codable, Sendable {
+    public var defaultPresetID: String
+    public var presets: [SearchPresetDefinition]
+
+    enum CodingKeys: String, CodingKey {
+        case defaultPresetID = "default_preset"
+        case presets
+    }
+
+    public var selectablePresets: [SearchPresetDefinition] {
+        presets.filter { !$0.isCustom }
+    }
+
+    public var defaultPreset: SearchPresetDefinition {
+        definition(for: defaultPresetID, includeAliases: false) ?? presets.first ?? Self.fallback.presets[0]
+    }
+
+    public func definition(for id: String, includeAliases: Bool = true) -> SearchPresetDefinition? {
+        let clean = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else {
+            return nil
+        }
+        return presets.first { preset in
+            preset.id == clean || (includeAliases && preset.aliases.contains(clean))
+        }
+    }
+
+    public func defaultSearchDirection() -> SearchDirection {
+        let preset = defaultPreset
+        return SearchDirection(
+            preset: preset.id,
+            label: preset.label,
+            crossrefQuery: preset.crossrefQuery,
+            openalexQuery: preset.openalexQuery,
+            queryManuallyEdited: false
+        )
+    }
+
+    public func apply(_ preset: SearchPresetDefinition, to settings: inout AppSettings) {
+        settings.searchDirection.preset = preset.id
+        settings.searchDirection.label = preset.label
+        settings.searchDirection.crossrefQuery = preset.crossrefQuery
+        settings.searchDirection.openalexQuery = preset.openalexQuery
+        settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(preset.includeTerms)
+        settings.excludeTerms = SettingsNormalizer.dedupeNonEmpty(preset.excludeTerms)
+        settings.searchDirection.queryManuallyEdited = false
+    }
+
+    public func regenerateQueriesIfAllowed(for settings: inout AppSettings) {
+        guard !settings.searchDirection.queryManuallyEdited else {
+            return
+        }
+        settings.searchDirection.crossrefQuery = settings.includeTerms.joined(separator: " OR ")
+        settings.searchDirection.openalexQuery = settings.includeTerms.joined(separator: " OR ")
+    }
+
+    public static let bundled = loadBundledOrFallback()
+
+    public static func load(from url: URL) throws -> SearchPresetCatalog {
+        let catalog = try JSONDecoder().decode(SearchPresetCatalog.self, from: Data(contentsOf: url))
+        try catalog.validate()
+        return catalog
+    }
+
+    private func validate() throws {
+        guard !presets.isEmpty else {
+            throw SearchPresetCatalogError.emptyCatalog
+        }
+        guard definition(for: defaultPresetID, includeAliases: false) != nil else {
+            throw SearchPresetCatalogError.missingDefaultPreset(defaultPresetID)
+        }
+    }
+
+    private static func loadBundledOrFallback() -> SearchPresetCatalog {
+        for url in candidateURLs() {
+            if let catalog = try? load(from: url), !catalog.presets.isEmpty {
+                return catalog
+            }
+        }
+        return fallback
+    }
+
+    private static func candidateURLs() -> [URL] {
+        var urls: [URL] = []
+        if let bundled = Bundle.main.url(
+            forResource: "search_direction_presets",
+            withExtension: "json",
+            subdirectory: "paper_monitor/resources"
+        ) {
+            urls.append(bundled)
+        }
+        let current = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        urls.append(current.appendingPathComponent("../../paper_monitor/resources/search_direction_presets.json"))
+        urls.append(current.appendingPathComponent("paper_monitor/resources/search_direction_presets.json"))
+        return urls
+    }
+
+    private static let fallback = SearchPresetCatalog(
+        defaultPresetID: "solid_state_battery_general",
+        presets: [
+            SearchPresetDefinition(
+                id: "solid_state_battery_general",
+                label: "Solid-state battery general",
+                crossrefQuery: "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
+                openalexQuery: "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
+                includeTerms: ["all-solid-state battery", "solid-state battery", "solid electrolyte", "electrolyte", "electrode", "LLZTO", "LLZO", "silicon anode", "Si anode", "NCM"],
+                excludeTerms: ["solid-state laser", "solid state laser", "solid-state lighting", "solid-state drive"],
+                aliases: [],
+                isCustom: false
+            ),
+            SearchPresetDefinition(
+                id: "solid_electrolyte",
+                label: "Solid electrolyte",
+                crossrefQuery: "solid electrolyte OR sulfide electrolyte OR oxide electrolyte OR halide electrolyte OR argyrodite OR LLZO OR LLZTO OR NASICON",
+                openalexQuery: "solid electrolyte OR sulfide electrolyte OR oxide electrolyte OR halide electrolyte OR argyrodite OR LLZO OR LLZTO OR NASICON",
+                includeTerms: ["solid electrolyte", "sulfide electrolyte", "oxide electrolyte", "halide electrolyte", "argyrodite", "LLZO", "LLZTO", "NASICON"],
+                excludeTerms: ["solid-state laser", "solid state laser", "solid-state lighting", "solid-state drive"],
+                aliases: [],
+                isCustom: false
+            ),
+            SearchPresetDefinition(
+                id: "lithium_metal_anode",
+                label: "Lithium metal anode",
+                crossrefQuery: "lithium metal anode OR Li metal anode OR dendrite OR lithium dendrite OR solid electrolyte interphase OR SEI",
+                openalexQuery: "lithium metal anode OR Li metal anode OR dendrite OR lithium dendrite OR solid electrolyte interphase OR SEI",
+                includeTerms: ["lithium metal anode", "Li metal anode", "dendrite", "lithium dendrite", "solid electrolyte interphase", "SEI"],
+                excludeTerms: ["solid-state laser", "solid state laser", "solid-state lighting", "solid-state drive"],
+                aliases: [],
+                isCustom: false
+            ),
+            SearchPresetDefinition(
+                id: "interface_interphase",
+                label: "Interface / interphase",
+                crossrefQuery: "solid electrolyte interface OR interphase OR interfacial impedance OR space charge layer OR cathode interface OR anode interface",
+                openalexQuery: "solid electrolyte interface OR interphase OR interfacial impedance OR space charge layer OR cathode interface OR anode interface",
+                includeTerms: ["solid electrolyte interface", "interphase", "interfacial impedance", "space charge layer", "cathode interface", "anode interface"],
+                excludeTerms: ["solid-state laser", "solid state laser", "solid-state lighting", "solid-state drive"],
+                aliases: ["interface_impedance"],
+                isCustom: false
+            ),
+            SearchPresetDefinition(
+                id: "custom",
+                label: "Custom",
+                crossrefQuery: "",
+                openalexQuery: "",
+                includeTerms: [],
+                excludeTerms: [],
+                aliases: ["cathode_materials"],
+                isCustom: true
+            ),
+        ]
+    )
 }
 
 public enum SearchTermEditor {
     public static func updateIncludeTerms(_ terms: [String], in settings: inout AppSettings) {
         settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(terms)
-        settings.searchDirection.keywords = settings.includeTerms
-        SearchPreset.regenerateQueriesIfAllowed(for: &settings)
+        SearchPresetCatalog.bundled.regenerateQueriesIfAllowed(for: &settings)
     }
 
     public static func updateExcludeTerms(_ terms: [String], in settings: inout AppSettings) {
@@ -148,75 +401,30 @@ public enum SearchPreset: String, CaseIterable {
     case cathodeMaterials = "cathode_materials"
 
     public var label: String {
-        switch self {
-        case .solidStateBatteryGeneral:
-            return "Solid-state battery general"
-        case .solidElectrolyte:
-            return "Solid electrolyte"
-        case .interfaceImpedance:
-            return "Interface / impedance"
-        case .lithiumMetalAnode:
-            return "Lithium metal anode"
-        case .cathodeMaterials:
-            return "Cathode materials"
-        }
+        definition?.label ?? rawValue
     }
 
     public var includeTerms: [String] {
-        switch self {
-        case .solidStateBatteryGeneral:
-            return ["all-solid-state battery", "solid-state battery", "solid electrolyte", "electrolyte", "electrode"]
-        case .solidElectrolyte:
-            return ["solid electrolyte", "sulfide electrolyte", "oxide electrolyte", "halide electrolyte", "LLZO", "LLZTO"]
-        case .interfaceImpedance:
-            return ["interface", "interfacial impedance", "space charge", "lithium dendrite"]
-        case .lithiumMetalAnode:
-            return ["lithium metal anode", "Li metal", "dendrite", "anode interface"]
-        case .cathodeMaterials:
-            return ["cathode", "NCM", "LFP", "layered oxide", "positive electrode"]
-        }
+        definition?.includeTerms ?? []
     }
 
     public var excludeTerms: [String] {
-        ["solid-state laser", "solid state laser", "solid-state lighting", "solid-state drive"]
+        definition?.excludeTerms ?? []
     }
 
     public func apply(to settings: inout AppSettings) {
-        settings.searchDirection.preset = rawValue
-        settings.searchDirection.label = label
-        settings.includeTerms = includeTerms
-        settings.searchDirection.keywords = includeTerms
-        settings.excludeTerms = excludeTerms
-        settings.searchDirection.queryManuallyEdited = false
-        SearchPreset.regenerateQueriesIfAllowed(for: &settings)
+        guard let definition else {
+            return
+        }
+        SearchPresetCatalog.bundled.apply(definition, to: &settings)
     }
 
     public static func regenerateQueriesIfAllowed(for settings: inout AppSettings) {
-        guard !settings.searchDirection.queryManuallyEdited else {
-            return
-        }
-        settings.searchDirection.crossrefQuery = settings.includeTerms.joined(separator: " OR ")
-        settings.searchDirection.openalexQuery = settings.includeTerms.joined(separator: " ")
-    }
-}
-
-public enum SearchDirectionEditor {
-    public static let customPresetIdentifier = "custom"
-
-    public static func keywords(from text: String) -> [String] {
-        let separators = CharacterSet(charactersIn: ",;\n")
-        return SettingsNormalizer.dedupeNonEmpty(text.components(separatedBy: separators))
+        SearchPresetCatalog.bundled.regenerateQueriesIfAllowed(for: &settings)
     }
 
-    public static func applyCustomDirection(label: String, keywords: [String], to settings: inout AppSettings) {
-        let cleanLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanKeywords = SettingsNormalizer.dedupeNonEmpty(keywords)
-        settings.searchDirection.preset = customPresetIdentifier
-        settings.searchDirection.label = cleanLabel.isEmpty ? "Custom" : cleanLabel
-        settings.searchDirection.keywords = cleanKeywords
-        settings.includeTerms = cleanKeywords
-        settings.searchDirection.queryManuallyEdited = false
-        SearchPreset.regenerateQueriesIfAllowed(for: &settings)
+    private var definition: SearchPresetDefinition? {
+        SearchPresetCatalog.bundled.definition(for: rawValue)
     }
 }
 
@@ -259,7 +467,10 @@ public struct JournalSelection: Equatable {
 
     public mutating func applyTopN(_ catalog: JournalCatalog) {
         let preservedSources = selectedJournals.filter { journal in
-            catalog.entry(named: journal)?.defaultSelected == false
+            guard let entry = catalog.entry(named: journal) else {
+                return true
+            }
+            return entry.defaultSelected == false
         }
         selectedJournals = SettingsNormalizer.dedupeNonEmpty(
             catalog.topJournals(topN).map(\.journal) + preservedSources
@@ -267,16 +478,65 @@ public struct JournalSelection: Equatable {
     }
 
     public mutating func setSelected(_ selected: Bool, journal: String) {
-        let clean = journal.trimmingCharacters(in: .whitespacesAndNewlines)
+        var selection = DualListSelection(selectedItems: selectedJournals)
+        if selected {
+            selection.add(journal)
+        } else {
+            selection.remove(journal)
+        }
+        selectedJournals = selection.selectedItems
+    }
+}
+
+public struct DualListSelection: Equatable, Sendable {
+    public private(set) var selectedItems: [String]
+
+    public init(selectedItems: [String]) {
+        self.selectedItems = SettingsNormalizer.dedupeNonEmpty(selectedItems)
+    }
+
+    public mutating func add(_ value: String) {
+        let clean = Self.normalizedDisplayValue(value)
         guard !clean.isEmpty else {
             return
         }
+        selectedItems = SettingsNormalizer.dedupeNonEmpty(selectedItems + [clean])
+    }
 
-        if selected {
-            selectedJournals = SettingsNormalizer.dedupeNonEmpty(selectedJournals + [clean])
-        } else if selectedJournals.count > 1 {
-            selectedJournals.removeAll { $0 == clean }
+    public mutating func remove(_ value: String) {
+        let key = Self.normalizedKey(value)
+        guard !key.isEmpty else {
+            return
         }
+        selectedItems.removeAll { Self.normalizedKey($0) == key }
+    }
+
+    public mutating func setSelected(_ selected: Bool, value: String) {
+        if selected {
+            add(value)
+        } else {
+            remove(value)
+        }
+    }
+
+    public func contains(_ value: String) -> Bool {
+        let key = Self.normalizedKey(value)
+        return selectedItems.contains { Self.normalizedKey($0) == key }
+    }
+
+    public static func availableItems(candidates: [String], selectedItems: [String]) -> [String] {
+        let selectedKeys = Set(SettingsNormalizer.dedupeNonEmpty(selectedItems).map(normalizedKey))
+        return SettingsNormalizer.dedupeNonEmpty(candidates).filter { !selectedKeys.contains(normalizedKey($0)) }
+    }
+
+    public static func normalizedDisplayValue(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    public static func normalizedKey(_ value: String) -> String {
+        normalizedDisplayValue(value).lowercased()
     }
 }
 
@@ -295,43 +555,12 @@ enum SettingsEditorLoadPolicy {
 }
 
 enum RefreshSchedulePolicy {
-    static func shouldReschedule(lastScheduledSettings: RefreshScheduleSettings?, settings: AppSettings) -> Bool {
-        RefreshScheduleSettings(
+    static func shouldReschedule(lastScheduledSettings: AppRefreshSettings.Schedule?, settings: AppSettings) -> Bool {
+        let next = AppRefreshSettings.Schedule(
             intervalSeconds: TimeInterval(settings.intervalSeconds),
-            startTime: AppRefreshSettings.normalizedStartTime(settings.refreshStartTime)
-        ) != lastScheduledSettings
-    }
-
-    static func initialDelay(
-        interval: TimeInterval,
-        startTime: String?,
-        now: Date = Date(),
-        calendar: Calendar = .current
-    ) -> TimeInterval {
-        guard interval > 0 else {
-            return 0
-        }
-        guard let startTime = AppRefreshSettings.normalizedStartTime(startTime) else {
-            return interval
-        }
-        let parts = startTime.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2 else {
-            return interval
-        }
-        var components = calendar.dateComponents([.year, .month, .day], from: now)
-        components.hour = parts[0]
-        components.minute = parts[1]
-        components.second = 0
-        guard let today = calendar.date(from: components) else {
-            return interval
-        }
-        if today >= now {
-            return today.timeIntervalSince(now)
-        }
-        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) else {
-            return interval
-        }
-        return tomorrow.timeIntervalSince(now)
+            refreshStartTime: settings.refreshStartTime
+        )
+        return next != lastScheduledSettings
     }
 }
 

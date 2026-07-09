@@ -1,14 +1,14 @@
 # Paper Monitor 中文说明
 
-Paper Monitor 是一个本地运行的文献监控工具。它会按照设定的期刊范围和检索词，定期检索新发表或新收录的论文，筛选出与研究方向相关的文章，并通过 macOS 通知和本地 Dashboard 展示结果。
+Paper Monitor 是一个本地运行的文献监控工具。它会按照设定的期刊范围和检索词，定期检索新发表或新收录的论文，筛选出与研究方向相关的文章，并通过 Windows/macOS 通知和本地 Dashboard 展示结果。
 
 当前版本主要面向全固态电池、固态电解质、电极材料、锂金属负极等电池研究方向。默认配置可以直接使用，也可以在设置里改成自己的关键词、期刊范围和检索方向。
 
 ## 主要功能
 
-### 1. macOS 应用
+### 1. 桌面应用
 
-安装后，Paper Monitor 会作为普通 macOS 应用运行，并显示在 Dock。打开应用后，可以从左上角应用菜单或窗口中进入 Dashboard、设置页面、手动刷新和通知测试。
+Windows 版本使用一个可复用的原生窗口展示 Dashboard 和设置页面，托盘菜单及重复启动都会切换并聚焦这个窗口，不会创建多个相互竞争的窗口。macOS 版本作为普通 Dock 应用运行，可从应用菜单或窗口进入 Dashboard、设置页面、手动刷新和通知测试。
 
 关闭 Dashboard 或设置窗口不会退出应用；只要没有选择 `Quit Paper Monitor`，应用会继续在后台按设置的刷新频率监控并发送通知。
 
@@ -82,21 +82,23 @@ Keyword Analysis 用于统计指定时间范围内的研究热点。它会根据
 打开 GitHub Release 页面：
 
 ```text
-https://github.com/Stephendahe/paper-monitor/releases
+https://github.com/Dahe-Labs/paper-monitor/releases
 ```
 
 最新 Release 会把 macOS 和 Windows 下载文件放在同一个版本下，并保持版本号一致，例如：
 
 ```text
-Paper-Monitor-macOS-0.1.5.pkg
-Paper-Monitor-Windows-0.1.5.exe
+Paper-Monitor-macOS-0.1.6.pkg
+Paper-Monitor-Windows-0.1.6-Setup.exe
+Paper-Monitor-Windows-0.1.6.zip
+Paper-Monitor-Windows-0.1.6.exe
 ```
 
 macOS 用户下载 `.pkg` 安装包，双击后按系统提示安装。安装完成后会得到 `/Applications/Paper Monitor.app`。
 
 首次打开时，macOS 可能会提示应用来自互联网或未公证。可以右键点击 `Paper Monitor.app`，选择 `Open`，再确认打开。也可以在系统设置的安全性页面中允许打开。
 
-Windows 用户下载同版本号的 `.exe` 文件。Windows 包由仓库里的 GitHub Actions Windows 构建流程生成。
+Windows 用户优先下载 `-Setup.exe` 安装包；需要免安装运行时可下载 ZIP，独立 EXE 也会保留。Windows 发布流程会同时生成 SHA256 校验文件。
 
 ## 首次使用
 
@@ -156,7 +158,14 @@ Windows 用户下载同版本号的 `.exe` 文件。Windows 包由仓库里的 G
 运行 Python 测试：
 
 ```bash
-python3 -m pytest
+python -m unittest discover -s tests
+```
+
+构建完整 Windows 发布包：
+
+```powershell
+python -m pip install -r requirements-windows.txt
+.\scripts\package_windows_release.ps1 -Version 0.1.6
 ```
 
 运行 macOS 应用测试：
@@ -185,7 +194,7 @@ paper_monitor/          Python 检索、筛选、存储、Dashboard 和关键词
 macos/PaperMonitorApp/  macOS 原生应用工程
 tests/                  Python 测试
 scripts/                构建和安装脚本
-windows/                Windows 托盘版本的早期入口代码
+windows/                Windows 入口、安装程序和图标资源
 journal_metrics.json    期刊影响因子和元数据
 config.example.json     默认公开配置模板
 ```

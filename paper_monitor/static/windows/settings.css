@@ -1,0 +1,598 @@
+    :root {
+      color-scheme: light;
+      --bg: #f7f7f8;
+      --surface: #ffffff;
+      --text: #2b2b2f;
+      --muted: #63666d;
+      --border: #d8d8dd;
+      --control: #ececee;
+      --control-border: #e4e4e8;
+      --blue: #0a84ff;
+      --blue-ring: rgba(10, 132, 255, 0.25);
+      --ok: #197a38;
+      --error: #aa2d2d;
+      --shadow: 0 18px 60px rgba(0, 0, 0, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .window {
+      min-height: 100vh;
+      background: var(--surface);
+    }
+
+    .titlebar {
+      height: 58px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 24px;
+    }
+
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+      color: #252529;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 0 11px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .back-link:hover {
+      background: #f7f7f8;
+    }
+
+    h1 {
+      margin: 0;
+      color: #1f2933;
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 64px));
+      margin: 0 auto;
+      padding: 0 0 28px;
+    }
+
+    .tabs-wrap {
+      height: 54px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: flex-start;
+      padding-top: 12px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      background: #ececee;
+      border-radius: 7px;
+      padding: 0;
+      min-height: 34px;
+      overflow: hidden;
+    }
+
+    .tab {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: #2d2d31;
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      height: 34px;
+      min-width: 124px;
+      padding: 0 14px;
+      letter-spacing: 0;
+    }
+
+    .tab + .tab {
+      border-left: 1px solid #d5d5da;
+    }
+
+    .tab[aria-selected="true"] {
+      background: var(--blue);
+      color: #fff;
+      border-radius: 7px;
+      box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22);
+      font-weight: 700;
+      position: relative;
+      z-index: 1;
+    }
+
+    form {
+      min-height: calc(100vh - 126px);
+      padding-bottom: 70px;
+      position: relative;
+    }
+
+    .panel {
+      display: none;
+      padding-top: 14px;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 12px;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 170px minmax(0, 1fr);
+      align-items: center;
+      gap: 12px;
+      min-height: 36px;
+    }
+
+    .row.compact {
+      max-width: 520px;
+    }
+
+    label,
+    .label {
+      color: #57606a;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.2;
+      text-align: right;
+      letter-spacing: 0;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--control-border);
+      border-radius: 6px;
+      background: #ffffff;
+      color: #26262a;
+      font: inherit;
+      font-size: 14px;
+      line-height: 1.2;
+      letter-spacing: 0;
+      outline: none;
+      padding: 0 10px;
+      min-height: 36px;
+    }
+
+    select {
+      cursor: pointer;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 42px;
+      max-height: 132px;
+      padding: 9px 10px;
+      white-space: pre-wrap;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--blue);
+      background: #fff;
+      box-shadow: 0 0 0 3px var(--blue-ring);
+    }
+
+    input[type="number"] {
+      max-width: 92px;
+    }
+
+    input[type="time"] {
+      max-width: 138px;
+    }
+
+    #interval_seconds {
+      max-width: 150px;
+    }
+
+    #search_direction {
+      max-width: 320px;
+    }
+
+    .custom-row {
+      display: none;
+    }
+
+    .custom-row.visible {
+      display: grid;
+    }
+
+    .advanced {
+      margin-top: 18px;
+      border-top: 1px solid #ededf0;
+      padding-top: 14px;
+    }
+
+    .advanced summary {
+      color: #4b4b50;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin-left: 182px;
+      width: fit-content;
+    }
+
+    .source-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+      padding-left: 182px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .field span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .field input,
+    .field select {
+      font-size: 13px;
+      min-height: 32px;
+      border-radius: 6px;
+      padding: 0 8px;
+      max-width: none;
+    }
+
+    .check {
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: #2d2d31;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-align: left;
+    }
+
+    .check input {
+      width: 16px;
+      height: 16px;
+      min-height: 16px;
+      padding: 0;
+    }
+
+    .terms-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      padding-top: 4px;
+    }
+
+    .terms-box {
+      display: grid;
+      gap: 10px;
+    }
+
+    .terms-box label {
+      text-align: left;
+    }
+
+    .terms-box textarea {
+      min-height: 430px;
+      font-size: 13px;
+      line-height: 1.45;
+      padding: 10px 11px;
+      background: #fafafa;
+      white-space: pre;
+    }
+
+    .journal-box {
+      max-width: 760px;
+      margin: 0 auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .journal-box label {
+      text-align: left;
+    }
+
+    .journal-state {
+      display: none;
+    }
+
+    .journal-board {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+      gap: 16px;
+      min-height: 468px;
+    }
+
+    .journal-pane {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fafafa;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .journal-pane header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #ededf0;
+      background: #ffffff;
+    }
+
+    .journal-pane h2 {
+      margin: 0;
+      color: #1f2933;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .journal-count {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .journal-toolbar {
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #ededf0;
+      background: #ffffff;
+    }
+
+    .journal-toolbar-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .journal-toolbar select,
+    .journal-toolbar input {
+      max-width: none;
+      min-height: 34px;
+      font-size: 13px;
+    }
+
+    .journal-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+    }
+
+    .journal-list.drag-over {
+      background: rgba(10, 132, 255, 0.08);
+      outline: 2px solid var(--blue);
+      outline-offset: -3px;
+    }
+
+    .journal-item {
+      appearance: none;
+      width: 100%;
+      border: 1px solid #e4e4e8;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #252529;
+      cursor: pointer;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 38px;
+      margin: 0 0 7px;
+      padding: 7px 9px;
+      text-align: left;
+    }
+
+    .journal-item:hover {
+      border-color: #c8c8ce;
+      background: #f7f7f8;
+    }
+
+    .journal-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .journal-meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .journal-empty {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      padding: 14px 8px;
+      text-align: center;
+    }
+
+    .actions {
+      position: fixed;
+      right: 26px;
+      bottom: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 3;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid #ececf0;
+      border-radius: 8px;
+      padding: 7px;
+      backdrop-filter: blur(8px);
+    }
+
+    .status {
+      min-width: 180px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      text-align: right;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.error { color: var(--error); }
+
+    .button {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: #fff;
+      color: #252529;
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      min-height: 34px;
+      padding: 6px 12px;
+      text-decoration: none;
+      letter-spacing: 0;
+    }
+
+    .button.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .button:disabled {
+      cursor: wait;
+      opacity: 0.68;
+    }
+
+    @media (min-width: 980px) {
+      .window {
+        box-shadow: var(--shadow);
+      }
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100vw - 28px, 760px);
+      }
+
+      .titlebar {
+        height: auto;
+        min-height: 62px;
+        padding: 14px;
+      }
+
+      h1 {
+        font-size: 20px;
+      }
+
+      .tabs-wrap {
+        height: auto;
+        padding: 10px 0 4px;
+      }
+
+      .tabs {
+        width: 100%;
+      }
+
+      .tab {
+        min-width: 0;
+        flex: 1 1 0;
+        font-size: 16px;
+        padding: 0 8px;
+      }
+
+      .row,
+      .row.compact {
+        grid-template-columns: 1fr;
+        gap: 7px;
+        max-width: none;
+      }
+
+      label,
+      .label,
+      .terms-box label,
+      .journal-box label {
+        text-align: left;
+        font-size: 13px;
+      }
+
+      input,
+      select,
+      textarea {
+        font-size: 14px;
+      }
+
+      .source-grid,
+      .terms-grid {
+        grid-template-columns: 1fr;
+        padding-left: 0;
+      }
+
+      .journal-board {
+        grid-template-columns: 1fr;
+      }
+
+      .advanced summary {
+        margin-left: 0;
+      }
+
+      .actions {
+        position: static;
+        justify-content: flex-end;
+        margin: 24px 0 0;
+        flex-wrap: wrap;
+        background: transparent;
+        border: 0;
+        padding: 0;
+      }
+
+      .status {
+        flex-basis: 100%;
+        text-align: left;
+      }
+    }

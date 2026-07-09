@@ -1,0 +1,113 @@
+{
+  "default_preset": "solid_state_battery_general",
+  "presets": [
+    {
+      "id": "solid_state_battery_general",
+      "label": "Solid-state battery general",
+      "crossref_query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
+      "openalex_query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
+      "include_terms": [
+        "all-solid-state battery",
+        "solid-state battery",
+        "solid electrolyte",
+        "electrolyte",
+        "electrode",
+        "LLZTO",
+        "LLZO",
+        "silicon anode",
+        "Si anode",
+        "NCM"
+      ],
+      "exclude_terms": [
+        "solid-state laser",
+        "solid state laser",
+        "solid-state lighting",
+        "solid-state drive"
+      ],
+      "aliases": [],
+      "is_custom": false
+    },
+    {
+      "id": "solid_electrolyte",
+      "label": "Solid electrolyte",
+      "crossref_query": "solid electrolyte OR sulfide electrolyte OR oxide electrolyte OR halide electrolyte OR argyrodite OR LLZO OR LLZTO OR NASICON",
+      "openalex_query": "solid electrolyte OR sulfide electrolyte OR oxide electrolyte OR halide electrolyte OR argyrodite OR LLZO OR LLZTO OR NASICON",
+      "include_terms": [
+        "solid electrolyte",
+        "sulfide electrolyte",
+        "oxide electrolyte",
+        "halide electrolyte",
+        "argyrodite",
+        "LLZO",
+        "LLZTO",
+        "NASICON"
+      ],
+      "exclude_terms": [
+        "solid-state laser",
+        "solid state laser",
+        "solid-state lighting",
+        "solid-state drive"
+      ],
+      "aliases": [],
+      "is_custom": false
+    },
+    {
+      "id": "lithium_metal_anode",
+      "label": "Lithium metal anode",
+      "crossref_query": "lithium metal anode OR Li metal anode OR dendrite OR lithium dendrite OR solid electrolyte interphase OR SEI",
+      "openalex_query": "lithium metal anode OR Li metal anode OR dendrite OR lithium dendrite OR solid electrolyte interphase OR SEI",
+      "include_terms": [
+        "lithium metal anode",
+        "Li metal anode",
+        "dendrite",
+        "lithium dendrite",
+        "solid electrolyte interphase",
+        "SEI"
+      ],
+      "exclude_terms": [
+        "solid-state laser",
+        "solid state laser",
+        "solid-state lighting",
+        "solid-state drive"
+      ],
+      "aliases": [],
+      "is_custom": false
+    },
+    {
+      "id": "interface_interphase",
+      "label": "Interface / interphase",
+      "crossref_query": "solid electrolyte interface OR interphase OR interfacial impedance OR space charge layer OR cathode interface OR anode interface",
+      "openalex_query": "solid electrolyte interface OR interphase OR interfacial impedance OR space charge layer OR cathode interface OR anode interface",
+      "include_terms": [
+        "solid electrolyte interface",
+        "interphase",
+        "interfacial impedance",
+        "space charge layer",
+        "cathode interface",
+        "anode interface"
+      ],
+      "exclude_terms": [
+        "solid-state laser",
+        "solid state laser",
+        "solid-state lighting",
+        "solid-state drive"
+      ],
+      "aliases": [
+        "interface_impedance"
+      ],
+      "is_custom": false
+    },
+    {
+      "id": "custom",
+      "label": "Custom",
+      "crossref_query": "",
+      "openalex_query": "",
+      "include_terms": [],
+      "exclude_terms": [],
+      "aliases": [
+        "cathode_materials"
+      ],
+      "is_custom": true
+    }
+  ]
+}

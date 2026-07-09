@@ -1,8 +1,8 @@
+import importlib
 import sys
 import tempfile
 import types
 import unittest
-import importlib
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
@@ -106,7 +106,7 @@ class WindowsTrayTests(unittest.TestCase):
 
         self.assertEqual(
             build_startup_registry_value(PureWindowsPath(r"C:\Program Files\PaperMonitor\PaperMonitor.exe")),
-            r'"C:\Program Files\PaperMonitor\PaperMonitor.exe" --quiet',
+            r'"C:\Program Files\PaperMonitor\PaperMonitor.exe" tray --quiet',
         )
 
     def test_set_startup_enabled_writes_current_user_run_key(self):
@@ -131,7 +131,7 @@ class WindowsTrayTests(unittest.TestCase):
                     "Paper Monitor",
                     0,
                     fake.REG_SZ,
-                    r'"C:\Apps\PaperMonitor.exe" --quiet',
+                    r'"C:\Apps\PaperMonitor.exe" tray --quiet',
                 )
             ],
         )
@@ -183,6 +183,8 @@ class WindowsTrayTests(unittest.TestCase):
                 "scripts/install_windows_app.ps1",
                 "scripts/generate_windows_icon.py",
                 "scripts/generate_app_icons.py",
+                "scripts/generate_windows_version_info.py",
+                "scripts/package_windows_release.ps1",
             ]
             for relative_path in expected_files:
                 self.assertTrue((target / relative_path).exists(), relative_path)
@@ -191,6 +193,16 @@ class WindowsTrayTests(unittest.TestCase):
             self.assertFalse(any(path.startswith("macos/") for path in copied_paths))
             self.assertFalse(any("__pycache__" in path for path in copied_paths))
             self.assertFalse(any(path.endswith(".DS_Store") for path in copied_paths))
+            self.assertEqual(
+                (target / "README_WINDOWS.md").read_text(encoding="utf-8"),
+                Path("README_WINDOWS.md").read_text(encoding="utf-8"),
+            )
+
+    def test_prepare_windows_project_rejects_repository_target(self):
+        from scripts.prepare_windows_project import ROOT, prepare_windows_project
+
+        with self.assertRaisesRegex(ValueError, "must not be the repository"):
+            prepare_windows_project(ROOT)
 
     def test_windows_cli_open_dashboard_uses_cross_platform_webbrowser(self):
         windows_project = Path("windows_project/PaperMonitorWindows").resolve()

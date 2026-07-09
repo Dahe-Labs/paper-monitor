@@ -2,7 +2,8 @@ import AppKit
 import PaperMonitorCore
 
 let app = NSApplication.shared
-let delegate = AppDelegate(launchOptions: AppLaunchOptions())
+let launchOptions = AppLaunchOptions()
+let delegate = AppDelegate(launchOptions: launchOptions)
 app.delegate = delegate
-app.setActivationPolicy(.regular)
+app.setActivationPolicy(LaunchPresentationPolicy.activationPolicy(for: launchOptions.launchReason))
 app.run()

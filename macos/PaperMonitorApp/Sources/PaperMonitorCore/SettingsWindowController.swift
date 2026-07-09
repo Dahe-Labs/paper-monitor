@@ -67,6 +67,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             },
             onChange: onSettingsChange
         )
+        let appSettingsController = AppSettingsViewController(
+            editingState: editingState,
+            changeDebouncer: settingsChangeDebouncer
+        )
         let journalFilterController = JournalFilterViewController(
             editingState: editingState,
             catalog: journalCatalog ?? JournalCatalog(entries: []),
@@ -79,6 +83,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         controllerBox.searchSettingsController = searchSettingsController
         controllerBox.journalFilterController = journalFilterController
         tabViewController.addTabViewItem(NSTabViewItem(viewController: searchSettingsController))
+        tabViewController.addTabViewItem(NSTabViewItem(viewController: appSettingsController))
         tabViewController.addTabViewItem(NSTabViewItem(viewController: termsController))
         tabViewController.addTabViewItem(NSTabViewItem(viewController: journalFilterController))
         refreshApplyControls()

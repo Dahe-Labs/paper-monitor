@@ -1,26 +1,42 @@
-.DS_Store
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 .pytest_cache/
-.playwright-cli/
-.superpowers/
+.mypy_cache/
+.ruff_cache/
 
-config.json
-work/
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+
+# Build output
+build/
 dist/
-outputs/
-previews/
-windows_project/
 public_release/
-
-*.sqlite3
-*.db
-*.log
-*.tmp
-
 macos/PaperMonitorApp/.build/
-DerivedData/
-*.xcuserdata/
+macos/PaperMonitorApp/DerivedData/
 *.app
-*.zip
 *.dmg
+
+# Local runtime data
+work/
+*.sqlite3
+*.sqlite3-*
+config.json
+config.json.bak
+
+# Platform/editor files
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+
+# Imported comparison workspace; promote needed files into the repo instead.
+.repo-compare/
+
+# Local agent state and archived release snapshots
+.agents/
+旧的归档文件夹/

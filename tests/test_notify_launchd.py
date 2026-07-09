@@ -168,9 +168,10 @@ class NotificationAndLaunchdTests(unittest.TestCase):
             source="fixture",
         )
 
-        with patch("paper_monitor.notify.find_terminal_notifier", return_value=None):
-            with patch("paper_monitor.notify.run_notification_command", return_value=False):
-                delivered = notify_article(article, None, dashboard_path=Path("/tmp/paper-monitor/latest.html"))
+        with patch("paper_monitor.notify.sys.platform", "darwin"):
+            with patch("paper_monitor.notify.find_terminal_notifier", return_value=None):
+                with patch("paper_monitor.notify.run_notification_command", return_value=False):
+                    delivered = notify_article(article, None, dashboard_path=Path("/tmp/paper-monitor/latest.html"))
 
         self.assertFalse(delivered)
 

@@ -1,5 +1,5 @@
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 
 class MacOSInstallScriptTests(unittest.TestCase):
@@ -43,8 +43,7 @@ class MacOSInstallScriptTests(unittest.TestCase):
         main = Path("macos/PaperMonitorApp/Sources/PaperMonitorApp/main.swift").read_text(encoding="utf-8")
 
         self.assertNotIn("<key>LSUIElement</key>", plist)
-        self.assertIn("app.setActivationPolicy(.regular)", main)
-        self.assertNotIn("app.setActivationPolicy(.accessory)", main)
+        self.assertIn("LaunchPresentationPolicy.activationPolicy(for: launchOptions.launchReason)", main)
 
     def test_build_script_codesigns_final_app_bundle(self):
         script = Path("scripts/build_macos_app.sh").read_text(encoding="utf-8")

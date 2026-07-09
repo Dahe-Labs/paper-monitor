@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct ArticleNotification: Codable, Equatable, Sendable {
@@ -109,6 +110,18 @@ public struct RefreshResult: Codable, Equatable, Sendable {
     }
 }
 
+public struct DashboardRenderResult: Codable, Equatable, Sendable {
+    public let dashboardPath: String
+
+    public init(dashboardPath: String) {
+        self.dashboardPath = dashboardPath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case dashboardPath = "dashboard_path"
+    }
+}
+
 public struct KeywordAnalysisRequest: Equatable, Sendable {
     public let dateFrom: String
     public let dateTo: String
@@ -128,6 +141,10 @@ public struct KeywordAnalysisRequest: Equatable, Sendable {
 }
 
 public final class PythonBridge: @unchecked Sendable {
+    public static let refreshTimeoutSeconds: TimeInterval = 120
+    public static let dashboardRenderTimeoutSeconds: TimeInterval = 30
+    public static let keywordAnalysisTimeoutSeconds: TimeInterval = 180
+
     public let appSupportDirectory: URL
     public let pythonPath: String
 
@@ -145,6 +162,16 @@ public final class PythonBridge: @unchecked Sendable {
             "-m",
             "paper_monitor.cli",
             "app-refresh",
+            "--config",
+            configURL.path,
+        ]
+    }
+
+    public var renderDashboardArguments: [String] {
+        [
+            "-m",
+            "paper_monitor.cli",
+            "render-dashboard",
             "--config",
             configURL.path,
         ]
@@ -176,21 +203,31 @@ public final class PythonBridge: @unchecked Sendable {
     }
 
     public func refresh() throws -> RefreshResult {
-        let output = try runPython(arguments: arguments)
+        let output = try runPython(arguments: arguments, timeout: Self.refreshTimeoutSeconds)
         let result = try JSONDecoder().decode(RefreshResult.self, from: output.stdout)
         let warnings = result.warnings + Self.warningLines(from: output.stderr)
         return result.withWarnings(warnings)
     }
 
+    public func renderDashboard() throws -> URL {
+        let output = try runPython(arguments: renderDashboardArguments, timeout: Self.dashboardRenderTimeoutSeconds)
+        let result = try JSONDecoder().decode(DashboardRenderResult.self, from: output.stdout)
+        return URL(fileURLWithPath: result.dashboardPath)
+    }
+
     public func analyzeKeywords(request: KeywordAnalysisRequest) throws -> String {
-        let output = try runPython(arguments: analyzeArguments(request: request))
+        let output = try runPython(arguments: analyzeArguments(request: request), timeout: Self.keywordAnalysisTimeoutSeconds)
         guard let json = String(data: output.stdout, encoding: .utf8) else {
             throw PythonBridgeError.refreshFailed("Keyword analysis returned non-UTF-8 output")
         }
         return json.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func runPython(arguments: [String]) throws -> (stdout: Data, stderr: Data) {
+    private func runPython(arguments: [String], timeout: TimeInterval) throws -> (stdout: Data, stderr: Data) {
+        guard FileManager.default.isExecutableFile(atPath: pythonPath) else {
+            throw PythonBridgeError.pythonMissing(pythonPath)
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: pythonPath)
         process.arguments = arguments
@@ -206,6 +243,10 @@ public final class PythonBridge: @unchecked Sendable {
 
         let outputReader = ProcessPipeReader(fileHandle: stdout.fileHandleForReading)
         let errorReader = ProcessPipeReader(fileHandle: stderr.fileHandleForReading)
+        let termination = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            termination.signal()
+        }
 
         do {
             try process.run()
@@ -219,14 +260,23 @@ public final class PythonBridge: @unchecked Sendable {
             throw error
         }
 
-        process.waitUntilExit()
+        if termination.wait(timeout: .now() + timeout) == .timedOut {
+            process.terminate()
+            if termination.wait(timeout: .now() + 5) == .timedOut {
+                process.forceTerminateIfNeeded()
+                _ = termination.wait(timeout: .now() + 2)
+            }
+            _ = outputReader.data()
+            _ = errorReader.data()
+            throw PythonBridgeError.pythonTimeout(timeout)
+        }
 
         let output = outputReader.data()
         let errorOutput = errorReader.data()
 
         if process.terminationStatus != 0 {
             let message = String(data: errorOutput, encoding: .utf8) ?? "Python refresh failed"
-            throw PythonBridgeError.refreshFailed(message)
+            throw PythonBridgeError.nonZeroExit(message)
         }
 
         return (output, errorOutput)
@@ -245,6 +295,33 @@ public final class PythonBridge: @unchecked Sendable {
 
 public enum PythonBridgeError: Error, Equatable {
     case refreshFailed(String)
+    case pythonMissing(String)
+    case pythonTimeout(TimeInterval)
+    case nonZeroExit(String)
+}
+
+extension PythonBridgeError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .refreshFailed(let message):
+            return message
+        case .pythonMissing(let path):
+            return "Python executable is missing or not executable: \(path)"
+        case .pythonTimeout(let timeout):
+            return "Python process timed out after \(Int(timeout)) seconds."
+        case .nonZeroExit(let message):
+            return message.isEmpty ? "Python process exited with an error." : message
+        }
+    }
+}
+
+private extension Process {
+    func forceTerminateIfNeeded() {
+        guard isRunning else {
+            return
+        }
+        kill(processIdentifier, SIGKILL)
+    }
 }
 
 private final class ProcessPipeReader: @unchecked Sendable {
