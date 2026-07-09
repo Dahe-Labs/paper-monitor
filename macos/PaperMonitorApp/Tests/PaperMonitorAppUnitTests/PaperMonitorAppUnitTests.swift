@@ -1932,13 +1932,13 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         termsController.loadView()
         searchController.applyPresetForTesting(.solidElectrolyte)
 
-        termsController.appendIncludeTermForTesting("argyrodite", debounced: false)
+        termsController.appendIncludeTermForTesting("stack pressure", debounced: false)
         XCTAssertTrue(controller.triggerApplyForTesting())
 
         let saved = try XCTUnwrap(emitted.last)
         XCTAssertEqual(
             saved.includeTerms,
-            SearchPreset.solidElectrolyte.includeTerms + ["argyrodite"]
+            SearchPreset.solidElectrolyte.includeTerms + ["stack pressure"]
         )
         XCTAssertEqual(saved.excludeTerms, SearchPreset.solidElectrolyte.excludeTerms)
     }

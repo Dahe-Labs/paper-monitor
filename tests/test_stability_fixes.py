@@ -1453,6 +1453,7 @@ class StabilityFixTests(unittest.TestCase):
         self.assertIn("generate_windows_version_info.py", script)
         self.assertIn('"--version-file"', script)
         self.assertIn('".venv\\Scripts\\python.exe"', script)
+        self.assertLess(script.index('@("python")'), script.index('@("py", "-3")'))
 
     def test_windows_version_info_supports_timestamp_release_versions(self):
         self.assertEqual(numeric_version("20260710-055055"), (2026, 7, 10, 550))

@@ -109,9 +109,9 @@ function Get-PythonCommand {
   if (Test-Path -LiteralPath $WorkspacePython -PathType Leaf) {
     $Candidates += ,@($WorkspacePython)
   }
-  $Candidates += ,@("py", "-3")
-  $Candidates += ,@("python3")
   $Candidates += ,@("python")
+  $Candidates += ,@("python3")
+  $Candidates += ,@("py", "-3")
 
   foreach ($Candidate in $Candidates) {
     $Python = Test-PythonCandidate -Candidate $Candidate
