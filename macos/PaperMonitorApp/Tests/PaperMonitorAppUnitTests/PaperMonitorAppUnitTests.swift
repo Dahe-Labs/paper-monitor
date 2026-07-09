@@ -2584,7 +2584,7 @@ private func containsHan(_ value: String) -> Bool {
     }
 }
 
-private final class TestRefreshTimer: RefreshSchedulerTimer {
+private final class TestRefreshTimer: RefreshSchedulerTimer, @unchecked Sendable {
     let interval: TimeInterval
     let handler: @MainActor () -> Void
     private(set) var invalidateCount = 0

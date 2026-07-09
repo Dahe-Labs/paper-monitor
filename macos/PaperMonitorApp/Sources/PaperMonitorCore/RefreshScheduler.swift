@@ -1,10 +1,20 @@
 import Foundation
 
-protocol RefreshSchedulerTimer: AnyObject {
+protocol RefreshSchedulerTimer: AnyObject, Sendable {
     func invalidate()
 }
 
-extension Timer: RefreshSchedulerTimer {}
+private final class FoundationRefreshSchedulerTimer: RefreshSchedulerTimer, @unchecked Sendable {
+    private let timer: Timer
+
+    init(_ timer: Timer) {
+        self.timer = timer
+    }
+
+    func invalidate() {
+        timer.invalidate()
+    }
+}
 
 @MainActor
 public final class RefreshScheduler {
@@ -17,11 +27,12 @@ public final class RefreshScheduler {
 
     public init() {
         self.timerFactory = { interval, repeats, handler in
-            Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
+            let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: repeats) { _ in
                 Task { @MainActor in
                     handler()
                 }
             }
+            return FoundationRefreshSchedulerTimer(timer)
         }
     }
 
