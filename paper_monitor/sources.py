@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import concurrent.futures
 import hashlib
 import json
@@ -5,30 +7,49 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
-import urllib.parse
 import urllib.error
+import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+
+# XML declarations with DTDs or entities are rejected by _parse_xml_payload.
+import xml.etree.ElementTree as ET  # nosec B405
+from dataclasses import dataclass
 from datetime import date, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
+from .date_utils import first_iso_date
 from .models import Article, normalize_doi
 
-
 USER_AGENT = "paper-monitor/0.1 (local personal research monitor)"
+CROSSREF_PUBLIC_LIST_CONCURRENCY_LIMIT = 1
+CROSSREF_POLITE_LIST_CONCURRENCY_LIMIT = 3
+CROSSREF_PUBLIC_LIST_REQUEST_INTERVAL_SECONDS = 1.0
+CROSSREF_POLITE_LIST_REQUEST_INTERVAL_SECONDS = 1.0 / 3.0
+MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class DateWindow:
+    date_from: str
+    date_to: str = ""
 
 
 def fetch_url(url: str, timeout: int = 30) -> bytes:
+    url = _validated_http_url(url)
     request = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = response.read()
+    # _validated_http_url restricts this request to HTTP(S) without embedded credentials.
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+        data = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise ValueError("response exceeds the maximum allowed size")
 
     if _looks_like_client_challenge(data):
         curl_data = _fetch_url_with_curl(url, timeout)
@@ -61,12 +82,10 @@ def fetch_all_sources(source_config: Dict[str, object]) -> List[Article]:
 
     openalex = source_config.get("openalex", {})
     if isinstance(openalex, dict) and openalex.get("enabled", False):
-        api_key = str(openalex.get("api_key", "")).strip()
-        if api_key:
-            try:
-                articles.extend(fetch_openalex(openalex))
-            except Exception as error:
-                _warn("OpenAlex source failed: %s" % error)
+        try:
+            articles.extend(fetch_openalex(openalex))
+        except Exception as error:
+            _warn("OpenAlex source failed: %s" % error)
 
     arxiv = source_config.get("arxiv", {})
     if isinstance(arxiv, dict) and arxiv.get("enabled", False):
@@ -82,32 +101,48 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
     articles: List[Article] = []
     urls = build_crossref_urls(config)
     timeout = int(config.get("timeout_seconds", 10))
-    max_workers = max(1, int(config.get("max_workers", 6)))
+    requested_max_workers = max(1, int(config.get("max_workers", 6)))
+    max_workers = _crossref_effective_max_workers(config, requested_max_workers)
     cursor_pagination = bool(config.get("cursor_pagination"))
     max_cursor_pages = max(1, int(config.get("max_cursor_pages", 100)))
-    retry_count = max(0, int(config.get("retry_count", 0)))
+    retry_count = max(0, int(config.get("retry_count", 2)))
     retry_base_seconds = max(0.0, float(config.get("retry_base_seconds", 0.75)))
     retry_max_seconds = max(retry_base_seconds, float(config.get("retry_max_seconds", 8.0)))
-    fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
+    if fetch is None:
+        def fetch_one(url: str) -> bytes:
+            return fetch_url(url, timeout=timeout)
+    else:
+        fetch_one = fetch
+    request_interval = _crossref_min_request_interval_seconds(config)
+    if request_interval > 0:
+        fetch_one = _rate_limited_fetch(fetch_one, request_interval)
     if retry_count > 0:
         network_fetch = fetch_one
-        fetch_one = lambda url, network_fetch=network_fetch: _fetch_url_with_retries(
-            url,
-            network_fetch,
-            retry_count,
-            retry_base_seconds,
-            retry_max_seconds,
-        )
+
+        def retrying_fetch(url: str, _network_fetch: Callable[[str], bytes] = network_fetch) -> bytes:
+            return _fetch_url_with_retries(
+                url,
+                _network_fetch,
+                retry_count,
+                retry_base_seconds,
+                retry_max_seconds,
+            )
+
+        fetch_one = retrying_fetch
     cache_dir = str(config.get("cache_dir") or "").strip()
     cache_ttl_seconds = int(config.get("cache_ttl_seconds") or 0)
     if cache_dir and cache_ttl_seconds > 0:
         network_fetch = fetch_one
-        fetch_one = lambda url, network_fetch=network_fetch: _fetch_url_with_cache(
-            url,
-            Path(cache_dir),
-            cache_ttl_seconds,
-            network_fetch,
-        )
+
+        def cached_fetch(url: str, _network_fetch: Callable[[str], bytes] = network_fetch) -> bytes:
+            return _fetch_url_with_cache(
+                url,
+                Path(cache_dir),
+                cache_ttl_seconds,
+                _network_fetch,
+            )
+
+        fetch_one = cached_fetch
 
     if max_workers == 1 or len(urls) <= 1:
         for url in urls:
@@ -136,6 +171,50 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
             except Exception as error:
                 _warn("Crossref query failed: %s (%s)" % (_redact_query_url(url), error))
     return articles
+
+
+def _crossref_effective_max_workers(config: Dict[str, object], requested_max_workers: int) -> int:
+    limit = (
+        CROSSREF_POLITE_LIST_CONCURRENCY_LIMIT
+        if _crossref_uses_polite_pool(config)
+        else CROSSREF_PUBLIC_LIST_CONCURRENCY_LIMIT
+    )
+    return max(1, min(int(requested_max_workers), limit))
+
+
+def _crossref_min_request_interval_seconds(config: Dict[str, object]) -> float:
+    value = config.get("min_request_interval_seconds")
+    if value is not None:
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            pass
+    if _crossref_uses_polite_pool(config):
+        return CROSSREF_POLITE_LIST_REQUEST_INTERVAL_SECONDS
+    return CROSSREF_PUBLIC_LIST_REQUEST_INTERVAL_SECONDS
+
+
+def _crossref_uses_polite_pool(config: Dict[str, object]) -> bool:
+    mailto = str(config.get("mailto") or "").strip()
+    return bool(mailto)
+
+
+def _rate_limited_fetch(fetch: Callable[[str], bytes], min_interval_seconds: float) -> Callable[[str], bytes]:
+    lock = threading.Lock()
+    next_allowed_at = 0.0
+
+    def wrapper(url: str) -> bytes:
+        nonlocal next_allowed_at
+        with lock:
+            now = time.monotonic()
+            wait_seconds = next_allowed_at - now
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+                now = time.monotonic()
+            next_allowed_at = now + min_interval_seconds
+        return fetch(url)
+
+    return wrapper
 
 
 def _fetch_crossref_url(url: str, fetch: Callable[[str], bytes]) -> List[Article]:
@@ -219,9 +298,23 @@ def _fetch_url_with_retries(
             return fetch(url)
         except urllib.error.HTTPError as error:
             if error.code not in {429, 500, 502, 503, 504} or attempt >= retry_count:
+                _close_http_error(error)
                 raise
+            _close_http_error(error)
             time.sleep(_retry_delay_seconds(error, attempt, retry_base_seconds, retry_max_seconds))
     return fetch(url)
+
+
+def _close_http_error(error: urllib.error.HTTPError) -> None:
+    close = getattr(error, "close", None)
+    if callable(close):
+        close()
+    fp = getattr(error, "fp", None)
+    if fp is not None:
+        fp_close = getattr(fp, "close", None)
+        if callable(fp_close):
+            fp_close()
+        error.fp = None
 
 
 def _retry_delay_seconds(
@@ -245,16 +338,14 @@ def _crossref_cache_path(url: str, cache_dir: Path) -> Path:
 
 
 def build_crossref_urls(config: Dict[str, object]) -> List[str]:
-    days_back = int(config.get("days_back", 3))
     query = str(config.get("query", "solid electrolyte OR all-solid-state battery"))
     query_field = _crossref_query_field(config.get("query_field"))
     select_fields = _crossref_select_fields(config.get("select_fields"))
     mailto = str(config.get("mailto", "")).strip()
-    from_date = str(config.get("date_from") or "").strip() or (date.today() - timedelta(days=days_back)).isoformat()
-    until_date = str(config.get("date_to") or "").strip()
+    window = _date_window_from_config(config, default_days_back=3)
     journal_titles = [str(title) for title in config.get("journal_titles", []) if str(title).strip()]
     cursor_pagination = bool(config.get("cursor_pagination"))
-    date_ranges = _crossref_date_ranges(from_date, until_date, int(config.get("date_chunk_days") or 0))
+    date_ranges = _crossref_date_ranges(window.date_from, window.date_to, int(config.get("date_chunk_days") or 0))
     urls = []
     if journal_titles:
         for journal_title in journal_titles:
@@ -293,7 +384,8 @@ def build_crossref_urls(config: Dict[str, object]) -> List[str]:
 def fetch_arxiv(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> List[Article]:
     timeout = int(config.get("timeout_seconds", 20))
     fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
-    return parse_arxiv_response(fetch_one(build_arxiv_url(config)))
+    articles = parse_arxiv_response(fetch_one(build_arxiv_url(config)))
+    return _filter_articles_by_days_back(articles, config.get("days_back", 3))
 
 
 def build_arxiv_url(config: Dict[str, object]) -> str:
@@ -321,6 +413,21 @@ def _bounded_arxiv_results(value: object) -> int:
     except (TypeError, ValueError):
         rows = 100
     return min(2000, max(1, rows))
+
+
+def _filter_articles_by_days_back(articles: List[Article], days_back: object) -> List[Article]:
+    try:
+        days = max(0, int(days_back))
+    except (TypeError, ValueError):
+        days = 3
+    cutoff = date.today() - timedelta(days=days)
+    filtered = []
+    for article in articles:
+        article_date = first_iso_date(article.detected or article.published)
+        if article_date is not None and article_date < cutoff:
+            continue
+        filtered.append(article)
+    return filtered
 
 
 def _crossref_params(
@@ -398,26 +505,77 @@ def _bounded_crossref_rows(value: object) -> int:
     return min(1000, max(1, rows))
 
 
-def fetch_openalex(config: Dict[str, object]) -> List[Article]:
-    days_back = int(config.get("days_back", 3))
+def fetch_openalex(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> List[Article]:
+    timeout = int(config.get("timeout_seconds", 30))
+    fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
+    max_pages = _bounded_openalex_pages(config.get("max_pages", 1))
+    current_url = build_openalex_url(config, cursor="*" if max_pages > 1 else "")
+    articles: List[Article] = []
+    seen_cursors = set()
+
+    for _page in range(max_pages):
+        payload = _openalex_payload(fetch_one(current_url))
+        articles.extend(_openalex_articles_from_payload(payload, source_name="OpenAlex"))
+        next_cursor = _openalex_next_cursor(payload)
+        if max_pages <= 1 or not next_cursor or next_cursor in seen_cursors:
+            break
+        seen_cursors.add(next_cursor)
+        current_url = _replace_query_param(current_url, "cursor", next_cursor)
+    return articles
+
+
+def build_openalex_url(config: Dict[str, object], cursor: Optional[str] = None) -> str:
     query = str(config.get("query", "solid electrolyte all-solid-state battery"))
     api_key = str(config.get("api_key", "")).strip()
-    from_date = (date.today() - timedelta(days=days_back)).isoformat()
-    filters = "from_publication_date:%s,type:article" % from_date
+    if not api_key:
+        raise ValueError("sources.openalex.api_key is required when OpenAlex is enabled")
+    window = _date_window_from_config(config, default_days_back=3)
+    filters = ["from_publication_date:%s" % window.date_from, "type:article"]
+    if window.date_to:
+        filters.append("to_publication_date:%s" % window.date_to)
     params = {
         "search": query,
-        "filter": filters,
-        "per_page": str(int(config.get("per_page", 100))),
+        "filter": ",".join(filters),
+        "per_page": str(_bounded_openalex_results(config.get("per_page", 100))),
         "sort": "publication_date:desc",
-        "select": "display_name,doi,publication_date,primary_location,abstract_inverted_index",
+        "select": "id,display_name,doi,publication_date,primary_location,abstract_inverted_index,authorships",
         "api_key": api_key,
     }
-    url = "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
-    return parse_openalex_response(fetch_url(url), source_name="OpenAlex")
+    cursor_value = str(config.get("cursor") if cursor is None else cursor).strip()
+    if cursor_value:
+        params["cursor"] = cursor_value
+    return "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
+
+
+def _bounded_openalex_results(value: object) -> int:
+    try:
+        rows = int(value)
+    except (TypeError, ValueError):
+        rows = 100
+    return min(200, max(1, rows))
+
+
+def _bounded_openalex_pages(value: object) -> int:
+    try:
+        pages = int(value)
+    except (TypeError, ValueError):
+        pages = 1
+    return min(50, max(1, pages))
+
+
+def _date_window_from_config(config: Dict[str, object], default_days_back: int, today: Optional[date] = None) -> DateWindow:
+    try:
+        days_back = max(0, int(config.get("days_back", default_days_back)))
+    except (TypeError, ValueError):
+        days_back = default_days_back
+    current_date = today or date.today()
+    date_from = str(config.get("date_from") or "").strip() or (current_date - timedelta(days=days_back)).isoformat()
+    date_to = str(config.get("date_to") or "").strip()
+    return DateWindow(date_from=date_from, date_to=date_to)
 
 
 def parse_rss_feed(data: bytes, source_name: str) -> List[Article]:
-    root = ET.fromstring(data)
+    root = _parse_xml_payload(data)
     channel = _first_child(root, "channel")
     channel_title = _rss_journal_title(
         _child_text(channel, "title") if channel is not None else "",
@@ -535,30 +693,67 @@ def _replace_query_param(url: str, name: str, value: str) -> str:
 
 
 def parse_openalex_response(data: bytes, source_name: str = "OpenAlex") -> List[Article]:
+    return _openalex_articles_from_payload(_openalex_payload(data), source_name=source_name)
+
+
+def _openalex_payload(data: bytes) -> Dict[str, object]:
     payload = json.loads(data.decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _openalex_articles_from_payload(payload: Dict[str, object], source_name: str = "OpenAlex") -> List[Article]:
     articles: List[Article] = []
     for item in payload.get("results", []):
-        location = item.get("primary_location") or {}
-        source = location.get("source") or {}
+        if not isinstance(item, dict):
+            continue
+        location = _dict_value(item.get("primary_location"))
+        source = _dict_value(location.get("source"))
         doi = normalize_doi(str(item.get("doi") or ""))
         published = str(item.get("publication_date") or "")
+        url = str(location.get("landing_page_url") or "")
+        if not url and doi:
+            url = "https://doi.org/" + doi
+        if not url:
+            url = str(item.get("id") or "")
         articles.append(
             Article(
                 title=str(item.get("display_name") or ""),
                 journal=str(source.get("display_name") or ""),
-                url=str(location.get("landing_page_url") or ("https://doi.org/" + doi if doi else "")),
+                url=url,
                 doi=doi,
                 published=published,
                 abstract=_uninvert_abstract(item.get("abstract_inverted_index") or {}),
                 source=source_name,
                 detected=published,
+                authors=_openalex_authors(item),
             )
         )
-    return [article for article in articles if article.title]
+    return [article for article in articles if article.title and article.url]
+
+
+def _openalex_next_cursor(payload: Dict[str, object]) -> str:
+    meta = _dict_value(payload.get("meta"))
+    return str(meta.get("next_cursor") or "").strip()
+
+
+def _openalex_authors(item: Dict[str, object]) -> tuple:
+    authorships = item.get("authorships")
+    if not isinstance(authorships, list):
+        return ()
+    names = []
+    seen = set()
+    for authorship in authorships:
+        author = _dict_value(_dict_value(authorship).get("author"))
+        name = _strip_markup(str(author.get("display_name") or ""))
+        key = name.casefold()
+        if name and key not in seen:
+            seen.add(key)
+            names.append(name)
+    return tuple(names)
 
 
 def parse_arxiv_response(data: bytes, source_name: str = "arXiv") -> List[Article]:
-    root = ET.fromstring(data)
+    root = _parse_xml_payload(data)
     articles: List[Article] = []
     for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry"):
         published = _child_text(entry, "published")
@@ -642,13 +837,39 @@ def _crossref_date_value(raw: object) -> str:
     if isinstance(raw, dict):
         parts = raw.get("date-parts")
         if isinstance(parts, list) and parts and isinstance(parts[0], list):
-            year = int(parts[0][0])
-            if len(parts[0]) > 2:
-                return "%04d-%02d-%02d" % (year, int(parts[0][1]), int(parts[0][2]))
-            if len(parts[0]) > 1:
-                return "%04d-%02d" % (year, int(parts[0][1]))
-            return "%04d" % year
+            values = parts[0]
+            if not values:
+                return ""
+            year = _crossref_date_part_int(values[0])
+            if year is None or not 1 <= year <= 9999:
+                return ""
+            if len(values) <= 1:
+                return "%04d" % year
+
+            month = _crossref_date_part_int(values[1])
+            if month is None or not 1 <= month <= 12:
+                return "%04d" % year
+            if len(values) <= 2:
+                return "%04d-%02d" % (year, month)
+
+            day = _crossref_date_part_int(values[2])
+            if day is None:
+                return "%04d-%02d" % (year, month)
+            try:
+                date(year, month, day)
+            except ValueError:
+                return "%04d-%02d" % (year, month)
+            return "%04d-%02d-%02d" % (year, month, day)
     return ""
+
+
+def _crossref_date_part_int(value: object) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _normalize_publication_date(value: str) -> str:
@@ -666,11 +887,22 @@ def _normalize_publication_date(value: str) -> str:
 
 
 def _uninvert_abstract(index: Dict[str, Iterable[int]]) -> str:
+    if not isinstance(index, dict):
+        return ""
     words: Dict[int, str] = {}
     for word, positions in index.items():
+        if not isinstance(positions, list):
+            continue
         for position in positions:
-            words[int(position)] = word
+            try:
+                words[int(position)] = str(word)
+            except (TypeError, ValueError):
+                continue
     return " ".join(words[position] for position in sorted(words))
+
+
+def _dict_value(value: object) -> Dict[str, object]:
+    return value if isinstance(value, dict) else {}
 
 
 def _first_child(element: ET.Element, name: str) -> Optional[ET.Element]:
@@ -747,15 +979,39 @@ def _looks_like_client_challenge(data: bytes) -> bool:
     )
 
 
+def _validated_http_url(url: str) -> str:
+    value = str(url or "").strip()
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("source URL must use http or https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("source URL must not contain embedded credentials")
+    return value
+
+
+def _parse_xml_payload(data: bytes) -> ET.Element:
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise ValueError("XML payload exceeds the maximum allowed size")
+    if re.search(br"<!\s*(?:DOCTYPE|ENTITY)\b", data, flags=re.IGNORECASE):
+        raise ValueError("XML DTD and entity declarations are not allowed")
+    # The declaration check above rejects DTD and entity expansion before parsing.
+    return ET.fromstring(data)  # nosec B314
+
+
 def _fetch_url_with_curl(url: str, timeout: int) -> bytes:
+    url = _validated_http_url(url)
     curl = shutil.which("curl")
     if not curl:
         raise RuntimeError("received client challenge HTML and curl is not available")
-    return subprocess.check_output(
+    data = subprocess.check_output(
         [
             curl,
             "-L",
             "-sS",
+            "--proto",
+            "=http,https",
+            "--proto-redir",
+            "=http,https",
             "--max-time",
             str(timeout),
             "-A",
@@ -763,3 +1019,6 @@ def _fetch_url_with_curl(url: str, timeout: int) -> bytes:
             url,
         ]
     )
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise ValueError("response exceeds the maximum allowed size")
+    return data

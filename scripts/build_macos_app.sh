@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+export COPYFILE_DISABLE=1
 APP_NAME="Paper Monitor"
 PACKAGE_DIR="$ROOT_DIR/macos/PaperMonitorApp"
 DIST_DIR="$ROOT_DIR/dist"
@@ -21,10 +22,11 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$PACKAGE_DIR/.build/release/PaperMonitorApp" "$MACOS_DIR/PaperMonitorApp"
 cp "$PACKAGE_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$PACKAGE_DIR/Assets/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
-rsync -a --exclude '__pycache__' --exclude '.DS_Store' "$ROOT_DIR/paper_monitor/" "$RESOURCES_DIR/paper_monitor/"
+rsync -a --exclude '__pycache__' --exclude '.DS_Store' --exclude '._*' --exclude '__MACOSX' "$ROOT_DIR/paper_monitor/" "$RESOURCES_DIR/paper_monitor/"
 cp "$ROOT_DIR/config.example.json" "$RESOURCES_DIR/config.example.json"
 cp "$ROOT_DIR/journal_metrics.json" "$RESOURCES_DIR/journal_metrics.json"
 cp "$ROOT_DIR/README.md" "$RESOURCES_DIR/README.md"
+find "$APP_DIR" \( -name '._*' -o -name '.DS_Store' -o -name '__MACOSX' \) -prune -exec rm -rf {} +
 chmod +x "$MACOS_DIR/PaperMonitorApp"
 codesign --force --deep --sign - "$APP_DIR"
 

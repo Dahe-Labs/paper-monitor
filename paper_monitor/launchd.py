@@ -10,30 +10,37 @@ def build_launch_agent_plist(
     config_path: Path,
     interval_seconds: int,
 ) -> bytes:
-    log_directory = working_directory / "work" / "paper-monitor" / "logs"
+    working_directory_text = _posix_path(working_directory)
+    config_path_text = _posix_path(config_path)
+    python_path_text = _posix_path(python_path)
+    log_directory = working_directory_text + "/work/paper-monitor/logs"
     launch_code = (
         "import sys; "
         "sys.path.insert(0, %r); "
         "from paper_monitor.cli import main; "
         "raise SystemExit(main())"
-    ) % str(working_directory)
+    ) % working_directory_text
     payload = {
         "Label": label,
         "ProgramArguments": [
-            str(python_path),
+            python_path_text,
             "-c",
             launch_code,
             "run",
             "--config",
-            str(config_path),
+            config_path_text,
         ],
-        "WorkingDirectory": str(working_directory),
+        "WorkingDirectory": working_directory_text,
         "EnvironmentVariables": {
-            "PYTHONPATH": str(working_directory),
+            "PYTHONPATH": working_directory_text,
         },
         "StartInterval": int(interval_seconds),
         "RunAtLoad": True,
-        "StandardOutPath": str(log_directory / "paper-monitor.out.log"),
-        "StandardErrorPath": str(log_directory / "paper-monitor.err.log"),
+        "StandardOutPath": log_directory + "/paper-monitor.out.log",
+        "StandardErrorPath": log_directory + "/paper-monitor.err.log",
     }
     return plistlib.dumps(payload, sort_keys=False)
+
+
+def _posix_path(path: Path) -> str:
+    return str(path).replace("\\", "/")

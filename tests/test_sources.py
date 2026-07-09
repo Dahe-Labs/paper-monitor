@@ -3,8 +3,8 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from paper_monitor.models import Article
 from paper_monitor.sources import (
@@ -31,7 +31,7 @@ class FakeHTTPResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
+    def read(self, _size=-1):
         return self.data
 
 
@@ -341,7 +341,34 @@ class SourceParsingTests(unittest.TestCase):
                     result = fetch_url("https://feeds.nature.com/nenergy/rss/current")
 
         self.assertEqual(result, rss)
-        self.assertIn("/usr/bin/curl", curl.call_args.args[0])
+        command = curl.call_args.args[0]
+        self.assertIn("/usr/bin/curl", command)
+        self.assertIn("--proto", command)
+        self.assertIn("--proto-redir", command)
+
+    def test_fetch_url_rejects_non_http_schemes_before_opening(self):
+        with patch("paper_monitor.sources.urllib.request.urlopen") as opener:
+            with self.assertRaisesRegex(ValueError, "http or https"):
+                fetch_url("file:///etc/passwd")
+
+        opener.assert_not_called()
+
+    def test_fetch_url_rejects_oversized_responses(self):
+        with patch("paper_monitor.sources.MAX_RESPONSE_BYTES", 4):
+            with patch(
+                "paper_monitor.sources.urllib.request.urlopen",
+                return_value=FakeHTTPResponse(b"12345"),
+            ):
+                with self.assertRaisesRegex(ValueError, "maximum allowed size"):
+                    fetch_url("https://example.org/feed.xml")
+
+    def test_rss_parser_rejects_external_entities(self):
+        payload = b'''<?xml version="1.0"?>
+        <!DOCTYPE rss [<!ENTITY external SYSTEM "file:///etc/passwd">]>
+        <rss><channel><item><title>&external;</title></item></channel></rss>'''
+
+        with self.assertRaisesRegex(ValueError, "DTD and entity"):
+            parse_rss_feed(payload, source_name="Untrusted RSS")
 
     def test_builds_crossref_urls_per_allowlisted_journal(self):
         urls = build_crossref_urls(

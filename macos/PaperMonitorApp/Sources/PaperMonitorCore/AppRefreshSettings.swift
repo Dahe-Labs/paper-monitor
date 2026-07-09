@@ -1,40 +1,33 @@
 import Foundation
 
-public struct RefreshScheduleSettings: Equatable, Sendable {
-    public var intervalSeconds: TimeInterval
-    public var startTime: String?
-
-    public init(intervalSeconds: TimeInterval, startTime: String?) {
-        self.intervalSeconds = intervalSeconds
-        self.startTime = AppRefreshSettings.normalizedStartTime(startTime)
-    }
-}
-
 public enum AppRefreshSettings {
+    public struct Schedule: Equatable, Sendable {
+        public var intervalSeconds: TimeInterval
+        public var refreshStartTime: String
+
+        public init(intervalSeconds: TimeInterval, refreshStartTime: String = "") {
+            self.intervalSeconds = intervalSeconds
+            self.refreshStartTime = refreshStartTime
+        }
+    }
+
     public static let defaultIntervalSeconds: TimeInterval = 43_200
+
+    public static func load(from configURL: URL) -> Schedule {
+        guard let data = try? Data(contentsOf: configURL) else {
+            return Schedule(intervalSeconds: defaultIntervalSeconds)
+        }
+        return Schedule(
+            intervalSeconds: intervalSeconds(from: data),
+            refreshStartTime: refreshStartTime(from: data)
+        )
+    }
 
     public static func loadIntervalSeconds(from configURL: URL) -> TimeInterval {
         guard let data = try? Data(contentsOf: configURL) else {
             return defaultIntervalSeconds
         }
         return intervalSeconds(from: data)
-    }
-
-    public static func loadSchedule(from configURL: URL) -> RefreshScheduleSettings {
-        guard let data = try? Data(contentsOf: configURL) else {
-            return RefreshScheduleSettings(intervalSeconds: defaultIntervalSeconds, startTime: nil)
-        }
-        return schedule(from: data)
-    }
-
-    public static func schedule(from data: Data) -> RefreshScheduleSettings {
-        guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return RefreshScheduleSettings(intervalSeconds: defaultIntervalSeconds, startTime: nil)
-        }
-        return RefreshScheduleSettings(
-            intervalSeconds: intervalSeconds(from: data),
-            startTime: normalizedStartTime(payload["refresh_start_time"] as? String)
-        )
     }
 
     public static func intervalSeconds(from data: Data) -> TimeInterval {
@@ -59,13 +52,19 @@ public enum AppRefreshSettings {
         return interval
     }
 
-    public static func normalizedStartTime(_ value: String?) -> String? {
-        guard let value else {
-            return nil
+    public static func refreshStartTime(from data: Data) -> String {
+        guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let value = payload["refresh_start_time"]
+        else {
+            return ""
         }
-        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            return nil
+        return normalizedRefreshStartTime(value) ?? ""
+    }
+
+    public static func normalizedRefreshStartTime(_ value: Any?) -> String? {
+        let text = String(describing: value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            return ""
         }
         let parts = text.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 2,

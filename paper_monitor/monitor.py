@@ -28,41 +28,46 @@ def run_once(
     notify: Callable[[Article, MatchResult], None],
 ) -> RunSummary:
     run_id = store.start_run()
-    fetched_articles = fetch_articles()
-    matched_pairs = []
-    skipped = 0
-    seen_identities = set()
-    for article in fetched_articles:
-        if article.identity in seen_identities:
-            skipped += 1
-            continue
-        seen_identities.add(article.identity)
-        result = match_article(article, config.filter_config)
-        store.record_candidate(
-            run_id=run_id,
-            article=article,
-            matched=result.matched,
-            reason=result.reason,
-            matched_terms=result.matched_terms,
-            journal_match=result.journal_match,
+    try:
+        fetched_articles = fetch_articles()
+        matched_pairs = []
+        skipped = 0
+        seen_identities = set()
+        for article in fetched_articles:
+            if article.identity in seen_identities:
+                skipped += 1
+                continue
+            seen_identities.add(article.identity)
+            result = match_article(article, config.filter_config)
+            store.record_candidate(
+                run_id=run_id,
+                article=article,
+                matched=result.matched,
+                reason=result.reason,
+                matched_terms=result.matched_terms,
+                journal_match=result.journal_match,
+            )
+            if result.matched:
+                matched_pairs.append((article, result))
+            else:
+                skipped += 1
+
+        new_articles = store.add_new_articles(article for article, _ in matched_pairs)
+        result_by_identity = {article.identity: result for article, result in matched_pairs}
+        for article in new_articles[: config.max_notifications]:
+            notify(article, result_by_identity[article.identity])
+
+        store.finish_run(
+            run_id,
+            fetched=len(fetched_articles),
+            matched=len(matched_pairs),
+            new_matches=len(new_articles),
+            skipped=skipped,
         )
-        if result.matched:
-            matched_pairs.append((article, result))
-        else:
-            skipped += 1
 
-    new_articles = store.add_new_articles(article for article, _ in matched_pairs)
-    result_by_identity = {article.identity: result for article, result in matched_pairs}
-    for article in new_articles[: config.max_notifications]:
-        notify(article, result_by_identity[article.identity])
-
-    store.finish_run(
-        run_id,
-        fetched=len(fetched_articles),
-        matched=len(matched_pairs),
-        new_matches=len(new_articles),
-        skipped=skipped,
-    )
+    except Exception as exc:
+        store.fail_run(run_id, str(exc))
+        raise
 
     return RunSummary(
         run_id=run_id,

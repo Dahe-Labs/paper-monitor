@@ -29,6 +29,12 @@ class JournalMetrics:
     def lookup(self, journal: str) -> Optional[JournalMetric]:
         return self._by_name.get(_normalize(journal))
 
+    def names_for(self, journal: str) -> List[str]:
+        metric = self.lookup(journal)
+        if metric is None:
+            return [journal]
+        return [metric.journal] + list(metric.aliases)
+
 
 def load_journal_metrics(path: Path) -> JournalMetrics:
     path = Path(path)

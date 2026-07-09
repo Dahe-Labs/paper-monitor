@@ -91,7 +91,7 @@ final class AppMainMenuController: NSObject {
     }
 
     func update(result: RefreshResult) {
-        lastRunItem.title = "Last Run: \(DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short))"
+        lastRunItem.title = "Last Run: \(EnglishDateFormatter.compactDateTime(Date()))"
         lastResultItem.title = RefreshPresentation.resultTitle(for: result)
         refreshItem.isEnabled = true
     }
@@ -101,8 +101,8 @@ final class AppMainMenuController: NSObject {
         refreshItem.isEnabled = false
     }
 
-    func updateRefreshFailed() {
-        lastResultItem.title = RefreshPresentation.failedResultTitle
+    func updateRefreshFailed(message: String? = nil) {
+        lastResultItem.title = RefreshPresentation.failedResultTitle(message: message)
         refreshItem.isEnabled = true
     }
 

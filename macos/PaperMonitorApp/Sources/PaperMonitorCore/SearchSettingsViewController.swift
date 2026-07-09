@@ -1,7 +1,7 @@
 import AppKit
 
 @MainActor
-final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate, NSTextViewDelegate {
+final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate {
     var settings: AppSettings {
         get { editingState.settings }
         set { editingState.settings = newValue }
@@ -11,16 +11,19 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
     private let editingState: SettingsEditingState
     private let onImmediateChange: @MainActor () -> Void
     private let journalCatalog: JournalCatalog?
+    private let searchPresetCatalog: SearchPresetCatalog
     private let topNStepper = NSStepper()
     private let topNField = NSTextField()
     private let intervalPopup = NSPopUpButton()
-    private let refreshStartField = NSTextField()
+    private let refreshStartTimeField = NSTextField()
     private let presetPopup = NSPopUpButton()
-    private let directionNameField = NSTextField()
-    private let keywordsTextView = NSTextView()
-    private let keywordsScrollView = NSScrollView()
     private let crossrefField = NSTextField()
     private let openalexField = NSTextField()
+    private let openalexEnabledButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
+    private let openalexDaysField = NSTextField()
+    private let openalexPerPageField = NSTextField()
+    private let openalexMaxPagesField = NSTextField()
+    private let openalexAPIKeyField = NSSecureTextField(frame: .zero)
     private let settingsChangeDebouncer: SearchSettingsChangeDebouncer
     private var isReloadingFromEditingState = false
     private let intervalOptions = [
@@ -28,10 +31,8 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         ("3h", 10_800),
         ("6h", 21_600),
         ("12h", 43_200),
-        ("1 day", 86_400),
-        ("2 days", 172_800),
+        ("24h", 86_400),
     ]
-    private let customPresetTitle = "Custom..."
 
     convenience init(
         settings: AppSettings,
@@ -48,6 +49,7 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
     init(
         editingState: SettingsEditingState,
         journalCatalog: JournalCatalog?,
+        searchPresetCatalog: SearchPresetCatalog = .bundled,
         changeDebouncer: SearchSettingsChangeDebouncer? = nil,
         debounceScheduler: @escaping SearchSettingsChangeDebouncer.Scheduler = SearchSettingsChangeDebouncer.defaultScheduler,
         onImmediateChange: @escaping @MainActor () -> Void = {},
@@ -56,6 +58,7 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         self.editingState = editingState
         self.onImmediateChange = onImmediateChange
         self.journalCatalog = journalCatalog
+        self.searchPresetCatalog = searchPresetCatalog
         self.onChange = onChange
         self.settingsChangeDebouncer = changeDebouncer ?? SearchSettingsChangeDebouncer(
             scheduler: debounceScheduler,
@@ -99,28 +102,33 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         intervalPopup.action = #selector(intervalChanged)
         stack.addArrangedSubview(row("Refresh Frequency", intervalPopup))
 
-        configureRefreshStartField()
-        stack.addArrangedSubview(row("Start Time", refreshStartField))
+        refreshStartTimeField.stringValue = settings.refreshStartTime
+        refreshStartTimeField.placeholderString = "HH:MM"
+        refreshStartTimeField.delegate = self
+        refreshStartTimeField.target = self
+        refreshStartTimeField.action = #selector(refreshStartTimeChanged)
+        refreshStartTimeField.widthAnchor.constraint(equalToConstant: 84).isActive = true
+        stack.addArrangedSubview(row("Start Refresh Time", refreshStartTimeField))
 
-        presetPopup.addItems(withTitles: SearchPreset.allCases.map(\.label))
-        presetPopup.addItem(withTitle: customPresetTitle)
+        presetPopup.addItems(withTitles: searchPresetCatalog.selectablePresets.map(\.label))
         addCustomPresetIfNeeded()
         selectPreset()
         presetPopup.target = self
         presetPopup.action = #selector(presetChanged)
         stack.addArrangedSubview(row("Search Direction", presetPopup))
 
-        configureDirectionNameField()
-        stack.addArrangedSubview(row("Direction Name", directionNameField))
-
-        configureKeywordsTextView()
-        stack.addArrangedSubview(row("Keywords", keywordsScrollView))
-
         configureQueryField(crossrefField, value: settings.searchDirection.crossrefQuery)
         stack.addArrangedSubview(row("Crossref Query", crossrefField))
 
         configureQueryField(openalexField, value: settings.searchDirection.openalexQuery)
         stack.addArrangedSubview(row("OpenAlex Query", openalexField))
+
+        configureOpenAlexSourceControls()
+        stack.addArrangedSubview(row("OpenAlex Enabled", openalexEnabledButton))
+        stack.addArrangedSubview(row("OpenAlex Days", openalexDaysField))
+        stack.addArrangedSubview(row("OpenAlex Per Page", openalexPerPageField))
+        stack.addArrangedSubview(row("OpenAlex Pages", openalexMaxPagesField))
+        stack.addArrangedSubview(row("OpenAlex API Key", openalexAPIKeyField))
     }
 
     private var integerFormatter: NumberFormatter {
@@ -129,6 +137,15 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         formatter.allowsFloats = false
         formatter.minimum = 1
         formatter.maximum = 50
+        return formatter
+    }
+
+    private func boundedIntegerFormatter(minimum: Int, maximum: Int) -> NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.allowsFloats = false
+        formatter.minimum = NSNumber(value: minimum)
+        formatter.maximum = NSNumber(value: maximum)
         return formatter
     }
 
@@ -141,36 +158,48 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         field.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
     }
 
-    private func configureRefreshStartField() {
-        refreshStartField.stringValue = settings.refreshStartTime
-        refreshStartField.placeholderString = "HH:mm"
-        refreshStartField.delegate = self
-        refreshStartField.target = self
-        refreshStartField.action = #selector(refreshStartChanged)
-        refreshStartField.widthAnchor.constraint(equalToConstant: 96).isActive = true
+    private func configureOpenAlexSourceControls() {
+        openalexEnabledButton.state = settings.openAlex.enabled ? .on : .off
+        openalexEnabledButton.target = self
+        openalexEnabledButton.action = #selector(openAlexEnabledChanged)
+
+        configureIntegerField(
+            openalexDaysField,
+            value: settings.openAlex.daysBack,
+            maxValue: 3650,
+            action: #selector(openAlexIntegerFieldChanged)
+        )
+        configureIntegerField(
+            openalexPerPageField,
+            value: settings.openAlex.perPage,
+            maxValue: 200,
+            action: #selector(openAlexIntegerFieldChanged)
+        )
+        configureIntegerField(
+            openalexMaxPagesField,
+            value: settings.openAlex.maxPages,
+            maxValue: 50,
+            action: #selector(openAlexIntegerFieldChanged)
+        )
+        openalexAPIKeyField.stringValue = settings.openAlex.apiKey
+        openalexAPIKeyField.delegate = self
+        openalexAPIKeyField.target = self
+        openalexAPIKeyField.action = #selector(openAlexAPIKeyChanged)
+        openalexAPIKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
     }
 
-    private func configureDirectionNameField() {
-        directionNameField.stringValue = settings.searchDirection.label
-        directionNameField.delegate = self
-        directionNameField.target = self
-        directionNameField.action = #selector(customDirectionChanged)
-        directionNameField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
-    }
-
-    private func configureKeywordsTextView() {
-        keywordsTextView.string = keywordText(for: settings)
-        keywordsTextView.delegate = self
-        keywordsTextView.font = .systemFont(ofSize: NSFont.systemFontSize)
-        keywordsTextView.isRichText = false
-        keywordsTextView.isAutomaticQuoteSubstitutionEnabled = false
-        keywordsTextView.isAutomaticDashSubstitutionEnabled = false
-
-        keywordsScrollView.documentView = keywordsTextView
-        keywordsScrollView.hasVerticalScroller = true
-        keywordsScrollView.borderType = .bezelBorder
-        keywordsScrollView.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
-        keywordsScrollView.heightAnchor.constraint(equalToConstant: 74).isActive = true
+    private func configureIntegerField(
+        _ field: NSTextField,
+        value: Int,
+        maxValue: Int,
+        action: Selector
+    ) {
+        field.integerValue = value
+        field.formatter = boundedIntegerFormatter(minimum: 1, maximum: maxValue)
+        field.delegate = self
+        field.target = self
+        field.action = action
+        field.widthAnchor.constraint(equalToConstant: 72).isActive = true
     }
 
     private func row(_ label: String, _ views: NSView...) -> NSStackView {
@@ -204,43 +233,22 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
     }
 
     private func selectPreset() {
-        if let preset = SearchPreset(rawValue: settings.searchDirection.preset),
-           let index = SearchPreset.allCases.firstIndex(of: preset) {
+        if let preset = searchPresetCatalog.definition(for: settings.searchDirection.preset),
+           !preset.isCustom,
+           let index = searchPresetCatalog.selectablePresets.firstIndex(where: { $0.id == preset.id }) {
             presetPopup.selectItem(at: index)
-        } else {
-            refreshCustomPresetMenuItem()
-            presetPopup.selectItem(at: SearchPreset.allCases.count)
+        } else if presetPopup.numberOfItems > searchPresetCatalog.selectablePresets.count {
+            presetPopup.selectItem(at: searchPresetCatalog.selectablePresets.count)
         }
-        updateCustomControls()
     }
 
     private func addCustomPresetIfNeeded() {
-        guard SearchPreset(rawValue: settings.searchDirection.preset) == nil,
-              presetPopup.numberOfItems == SearchPreset.allCases.count
-        else {
-            return
-        }
-        presetPopup.addItem(withTitle: customPresetTitle)
-    }
-
-    private func refreshCustomPresetMenuItem() {
-        guard presetPopup.numberOfItems > SearchPreset.allCases.count else {
+        if let preset = searchPresetCatalog.definition(for: settings.searchDirection.preset),
+           !preset.isCustom {
             return
         }
         let label = settings.searchDirection.label.trimmingCharacters(in: .whitespacesAndNewlines)
-        presetPopup.item(at: SearchPreset.allCases.count)?.title = label.isEmpty ? "Custom" : "Custom: \(label)"
-    }
-
-    private func updateCustomControls() {
-        let isCustom = SearchPreset(rawValue: settings.searchDirection.preset) == nil
-        directionNameField.isEnabled = isCustom
-        keywordsTextView.isEditable = isCustom
-        keywordsTextView.textColor = isCustom ? .labelColor : .secondaryLabelColor
-    }
-
-    private func keywordText(for settings: AppSettings) -> String {
-        let keywords = settings.searchDirection.keywords.isEmpty ? settings.includeTerms : settings.searchDirection.keywords
-        return keywords.joined(separator: "\n")
+        presetPopup.addItem(withTitle: label.isEmpty ? "Custom" : "Custom: \(label)")
     }
 
     @discardableResult
@@ -286,59 +294,26 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         emitChange()
     }
 
-    @objc private func refreshStartChanged() {
-        settings.refreshStartTime = AppRefreshSettings.normalizedStartTime(refreshStartField.stringValue)
-            ?? refreshStartField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        emitDebouncedChange()
+    @objc private func refreshStartTimeChanged() {
+        settings.refreshStartTime = SettingsNormalizer.normalizedRefreshStartTime(refreshStartTimeField.stringValue)
+            ?? refreshStartTimeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        refreshStartTimeField.stringValue = settings.refreshStartTime
+        emitChange()
     }
 
     @objc private func presetChanged() {
         let index = presetPopup.indexOfSelectedItem
-        if SearchPreset.allCases.indices.contains(index) {
-            applyPreset(SearchPreset.allCases[index])
+        guard searchPresetCatalog.selectablePresets.indices.contains(index) else {
             return
         }
-        applyCustomDirection(
-            label: directionNameField.stringValue.isEmpty ? "Custom" : directionNameField.stringValue,
-            keywordsText: keywordsTextView.string,
-            debounced: false
-        )
+        applyPreset(searchPresetCatalog.selectablePresets[index])
     }
 
-    private func applyPreset(_ preset: SearchPreset) {
-        preset.apply(to: &settings)
-        directionNameField.stringValue = settings.searchDirection.label
-        keywordsTextView.string = keywordText(for: settings)
-        selectPreset()
+    private func applyPreset(_ preset: SearchPresetDefinition) {
+        searchPresetCatalog.apply(preset, to: &settings)
         crossrefField.stringValue = settings.searchDirection.crossrefQuery
         openalexField.stringValue = settings.searchDirection.openalexQuery
         emitChange()
-    }
-
-    @objc private func customDirectionChanged() {
-        applyCustomDirection(
-            label: directionNameField.stringValue,
-            keywordsText: keywordsTextView.string,
-            debounced: true
-        )
-    }
-
-    private func applyCustomDirection(label: String, keywordsText: String, debounced: Bool) {
-        SearchDirectionEditor.applyCustomDirection(
-            label: label,
-            keywords: SearchDirectionEditor.keywords(from: keywordsText),
-            to: &settings
-        )
-        refreshCustomPresetMenuItem()
-        presetPopup.selectItem(at: SearchPreset.allCases.count)
-        updateCustomControls()
-        crossrefField.stringValue = settings.searchDirection.crossrefQuery
-        openalexField.stringValue = settings.searchDirection.openalexQuery
-        if debounced {
-            emitDebouncedChange()
-        } else {
-            emitChange()
-        }
     }
 
     @objc private func queryChanged() {
@@ -360,6 +335,60 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         }
     }
 
+    @objc private func openAlexEnabledChanged() {
+        updateOpenAlexSource(
+            enabled: openalexEnabledButton.state == .on,
+            daysBack: openalexDaysField.integerValue,
+            perPage: openalexPerPageField.integerValue,
+            maxPages: openalexMaxPagesField.integerValue,
+            apiKey: openalexAPIKeyField.stringValue,
+            debounced: false
+        )
+    }
+
+    @objc private func openAlexIntegerFieldChanged() {
+        updateOpenAlexSource(
+            enabled: openalexEnabledButton.state == .on,
+            daysBack: openalexDaysField.integerValue,
+            perPage: openalexPerPageField.integerValue,
+            maxPages: openalexMaxPagesField.integerValue,
+            apiKey: openalexAPIKeyField.stringValue,
+            debounced: false
+        )
+    }
+
+    @objc private func openAlexAPIKeyChanged() {
+        updateOpenAlexSource(
+            enabled: openalexEnabledButton.state == .on,
+            daysBack: openalexDaysField.integerValue,
+            perPage: openalexPerPageField.integerValue,
+            maxPages: openalexMaxPagesField.integerValue,
+            apiKey: openalexAPIKeyField.stringValue,
+            debounced: true
+        )
+    }
+
+    func updateOpenAlexSource(
+        enabled: Bool,
+        daysBack: Int,
+        perPage: Int,
+        maxPages: Int,
+        apiKey: String,
+        debounced: Bool
+    ) {
+        settings.openAlex.enabled = enabled
+        settings.openAlex.daysBack = SettingsNormalizer.clampedOpenAlexDaysBack(daysBack)
+        settings.openAlex.perPage = SettingsNormalizer.clampedOpenAlexPerPage(perPage)
+        settings.openAlex.maxPages = SettingsNormalizer.clampedOpenAlexMaxPages(maxPages)
+        settings.openAlex.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        reloadOpenAlexSourceControls()
+        if debounced {
+            emitDebouncedChange()
+        } else {
+            emitChange()
+        }
+    }
+
     func controlTextDidChange(_ notification: Notification) {
         guard !isReloadingFromEditingState else {
             return
@@ -369,21 +398,9 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         }
         if field === crossrefField || field === openalexField {
             queryChanged()
-        } else if field === refreshStartField {
-            refreshStartChanged()
-        } else if field === directionNameField {
-            customDirectionChanged()
+        } else if field === openalexAPIKeyField {
+            openAlexAPIKeyChanged()
         }
-    }
-
-    func textDidChange(_ notification: Notification) {
-        guard !isReloadingFromEditingState else {
-            return
-        }
-        guard notification.object as? NSTextView === keywordsTextView else {
-            return
-        }
-        customDirectionChanged()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -392,6 +409,10 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         }
         if field === topNField {
             updateTopN(topNField.integerValue)
+        } else if field === refreshStartTimeField {
+            refreshStartTimeChanged()
+        } else if field === openalexDaysField || field === openalexPerPageField || field === openalexMaxPagesField {
+            openAlexIntegerFieldChanged()
         }
     }
 
@@ -409,8 +430,19 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         if firstResponder == nil || firstResponder !== openalexField.currentEditor() {
             openalexField.stringValue = settings.searchDirection.openalexQuery
         }
-        if firstResponder == nil || firstResponder !== keywordsTextView {
-            keywordsTextView.string = keywordText(for: settings)
+        isReloadingFromEditingState = false
+    }
+
+    private func reloadOpenAlexSourceControls() {
+        _ = view
+        isReloadingFromEditingState = true
+        openalexEnabledButton.state = settings.openAlex.enabled ? .on : .off
+        openalexDaysField.integerValue = settings.openAlex.daysBack
+        openalexPerPageField.integerValue = settings.openAlex.perPage
+        openalexMaxPagesField.integerValue = settings.openAlex.maxPages
+        let firstResponder = view.window?.firstResponder
+        if firstResponder == nil || firstResponder !== openalexAPIKeyField.currentEditor() {
+            openalexAPIKeyField.stringValue = settings.openAlex.apiKey
         }
         isReloadingFromEditingState = false
     }
@@ -428,7 +460,19 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
     }
 
     func applyPresetForTesting(_ preset: SearchPreset) {
-        applyPreset(preset)
+        guard let definition = searchPresetCatalog.definition(for: preset.rawValue),
+              !definition.isCustom else {
+            return
+        }
+        applyPreset(definition)
+    }
+
+    func applyPresetForTesting(id: String) {
+        guard let definition = searchPresetCatalog.definition(for: id),
+              !definition.isCustom else {
+            return
+        }
+        applyPreset(definition)
     }
 
     func applyTopNForTesting(_ value: Int) {
@@ -451,25 +495,32 @@ final class SearchSettingsViewController: NSViewController, NSTextFieldDelegate,
         )
     }
 
-    func applyCustomDirectionForTesting(label: String, keywordsText: String, debounced: Bool) {
+    func updateOpenAlexSourceForTesting(
+        enabled: Bool,
+        daysBack: Int,
+        perPage: Int,
+        maxPages: Int,
+        apiKey: String,
+        debounced: Bool
+    ) {
         _ = view
-        directionNameField.stringValue = label
-        keywordsTextView.string = keywordsText
-        applyCustomDirection(label: label, keywordsText: keywordsText, debounced: debounced)
+        openalexEnabledButton.state = enabled ? .on : .off
+        openalexDaysField.integerValue = daysBack
+        openalexPerPageField.integerValue = perPage
+        openalexMaxPagesField.integerValue = maxPages
+        openalexAPIKeyField.stringValue = apiKey
+        updateOpenAlexSource(
+            enabled: enabled,
+            daysBack: daysBack,
+            perPage: perPage,
+            maxPages: maxPages,
+            apiKey: apiKey,
+            debounced: debounced
+        )
     }
 
-    var intervalTitlesForTesting: [String] {
+    var openAlexSourceSettingsForTesting: OpenAlexSourceSettings {
         _ = view
-        return intervalPopup.itemTitles
-    }
-
-    var selectedIntervalTitleForTesting: String? {
-        _ = view
-        return intervalPopup.selectedItem?.title
-    }
-
-    var refreshStartTimeForTesting: String {
-        _ = view
-        return refreshStartField.stringValue
+        return settings.openAlex
     }
 }

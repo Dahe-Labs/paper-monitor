@@ -1,12 +1,12 @@
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 from .filtering import MatchResult
 from .models import Article
-
 
 NOTIFICATION_TIMEOUT_SECONDS = 5
 
@@ -36,7 +36,7 @@ def build_terminal_notifier_command(
     dashboard_path: Path,
 ) -> List[str]:
     return [
-        str(terminal_notifier_path),
+        _posix_path(terminal_notifier_path),
         "-title",
         _truncate(article.title, 120),
         "-subtitle",
@@ -90,12 +90,32 @@ def run_notification_command(command: List[str]) -> bool:
 
 
 def notify_article(article: Article, match: MatchResult, dashboard_path: Path = None) -> bool:
+    if sys.platform == "win32":
+        return _notify_windows_article(article, dashboard_path)
+
     terminal_notifier = find_terminal_notifier()
     if terminal_notifier and dashboard_path is not None:
         return run_notification_command(
             build_terminal_notifier_command(terminal_notifier, article, dashboard_path)
         )
     return run_notification_command(build_osascript_command(article))
+
+
+def _notify_windows_article(article: Article, dashboard_path: Path = None) -> bool:
+    from .windows_tray import WindowsToastNotifier, windows_icon_path
+
+    notifier = WindowsToastNotifier(icon_path=windows_icon_path())
+    dashboard_path = dashboard_path or Path.cwd()
+    return notifier.notify_article(
+        {
+            "title": article.title,
+            "journal": article.journal,
+            "url": article.url,
+            "doi": article.doi,
+            "source": article.source,
+        },
+        dashboard_path,
+    )
 
 
 def _truncate(value: str, limit: int) -> str:
@@ -107,3 +127,7 @@ def _truncate(value: str, limit: int) -> str:
 
 def _open_command(target: str) -> str:
     return "/usr/bin/open " + shlex.quote(target)
+
+
+def _posix_path(path: Path) -> str:
+    return str(path).replace("\\", "/")

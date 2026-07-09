@@ -51,6 +51,13 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             "--config",
             "/Users/example/Library/Application Support/PaperMonitor/config.json",
         ])
+        XCTAssertEqual(bridge.renderDashboardArguments, [
+            "-m",
+            "paper_monitor.cli",
+            "render-dashboard",
+            "--config",
+            "/Users/example/Library/Application Support/PaperMonitor/config.json",
+        ])
     }
 
     func testBuildsKeywordAnalysisPythonArguments() {
@@ -151,7 +158,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         )
     }
 
-    func testMacOSAppRunsAsRegularDockAppWithApplicationMenu() throws {
+    func testMacOSAppUsesExplicitLaunchPresentationPolicy() throws {
         let plist = try String(contentsOfFile: "Info.plist", encoding: .utf8)
         let main = try String(
             contentsOfFile: "Sources/PaperMonitorApp/main.swift",
@@ -159,8 +166,10 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         )
 
         XCTAssertFalse(plist.contains("<key>LSUIElement</key>"))
-        XCTAssertTrue(main.contains("app.setActivationPolicy(.regular)"))
+        XCTAssertTrue(main.contains("LaunchPresentationPolicy.activationPolicy(for: launchOptions.launchReason)"))
         XCTAssertFalse(main.contains("app.setActivationPolicy(.accessory)"))
+        XCTAssertEqual(LaunchPresentationPolicy.activationPolicy(for: .processLaunch), .regular)
+        XCTAssertEqual(LaunchPresentationPolicy.activationPolicy(for: .loginStartup), .accessory)
     }
 
     @MainActor
@@ -204,10 +213,12 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertFalse(window.isReleasedWhenClosed)
         XCTAssertEqual(tabViewController.tabViewItems.map(\.label), [
             "Search Settings",
+            "App Settings",
             "Search Terms",
             "Journal Filter",
         ])
-        XCTAssertTrue(tabViewController.tabViewItems[2].viewController is JournalFilterViewController)
+        XCTAssertTrue(tabViewController.tabViewItems[1].viewController is AppSettingsViewController)
+        XCTAssertTrue(tabViewController.tabViewItems[3].viewController is JournalFilterViewController)
     }
 
     func testActivationNotificationNameIsStable() {
@@ -228,6 +239,123 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertFalse(
             AppLaunchOptions(arguments: ["PaperMonitorApp"]).postTestNotificationOnLaunch
         )
+    }
+
+    func testLaunchOptionsParseLaunchReason() {
+        XCTAssertEqual(AppLaunchOptions(arguments: ["PaperMonitorApp"]).launchReason, .processLaunch)
+        XCTAssertEqual(AppLaunchOptions(arguments: ["PaperMonitorApp", "--login-startup"]).launchReason, .loginStartup)
+    }
+
+    func testLaunchReasonsHaveStableRawValues() {
+        XCTAssertEqual(LaunchReason.processLaunch.rawValue, "process_launch")
+        XCTAssertEqual(LaunchReason.loginStartup.rawValue, "login_startup")
+        XCTAssertEqual(LaunchReason.manualRefresh.rawValue, "manual_refresh")
+        XCTAssertEqual(LaunchReason.scheduledRefresh.rawValue, "scheduled_refresh")
+    }
+
+    func testLaunchRefreshPolicyOnlyRunsForProcessStartReasons() {
+        var runtime = RuntimeAppSettings.default
+        runtime.refreshOnLaunch = true
+
+        XCTAssertTrue(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .processLaunch))
+        XCTAssertTrue(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .loginStartup))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .manualRefresh))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .scheduledRefresh))
+
+        runtime.refreshOnLaunch = false
+        XCTAssertFalse(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .processLaunch))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldRefreshOnLaunch(runtimeSettings: runtime, reason: .loginStartup))
+    }
+
+    func testLaunchRefreshPolicySuppressesNotificationsOnlyForQuietLoginStartup() {
+        var runtime = RuntimeAppSettings.default
+        runtime.silentStartupNotifications = true
+
+        XCTAssertTrue(LaunchRefreshPolicy.shouldSuppressNotifications(runtimeSettings: runtime, reason: .loginStartup))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldSuppressNotifications(runtimeSettings: runtime, reason: .processLaunch))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldSuppressNotifications(runtimeSettings: runtime, reason: .manualRefresh))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldSuppressNotifications(runtimeSettings: runtime, reason: .scheduledRefresh))
+
+        runtime.silentStartupNotifications = false
+        XCTAssertFalse(LaunchRefreshPolicy.shouldSuppressNotifications(runtimeSettings: runtime, reason: .loginStartup))
+    }
+
+    func testLaunchPolicyNeverOpensDashboardAutomatically() {
+        XCTAssertFalse(LaunchRefreshPolicy.shouldOpenDashboardOnLaunch(reason: .processLaunch))
+        XCTAssertFalse(LaunchRefreshPolicy.shouldOpenDashboardOnLaunch(reason: .loginStartup))
+    }
+
+    func testEnglishDateFormatterUsesFixedEnglishDisplayFormats() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 9, hour: 13, minute: 5)))
+
+        XCTAssertEqual(EnglishDateFormatter.compactDate(date), "Jul 9, 2026")
+        XCTAssertEqual(EnglishDateFormatter.detailDate(date), "July 9, 2026")
+        XCTAssertEqual(EnglishDateFormatter.compactDateTime(date), "Jul 9, 2026, 1:05 PM")
+        XCTAssertFalse(EnglishDateFormatter.compactDate(date).contains("年"))
+        XCTAssertFalse(EnglishDateFormatter.detailDate(date).contains("月"))
+        XCTAssertFalse(EnglishDateFormatter.compactDateTime(date).contains("日"))
+    }
+
+    func testDualListSelectionDedupesAndRemovesCaseInsensitively() {
+        var selection = DualListSelection(selectedItems: [" Nature Energy ", "nature energy", "Advanced Materials"])
+
+        selection.add("ADVANCED MATERIALS")
+        selection.add("Custom Journal")
+        selection.remove("nature ENERGY")
+
+        XCTAssertEqual(selection.selectedItems, ["Advanced Materials", "Custom Journal"])
+        XCTAssertTrue(selection.contains("custom journal"))
+        XCTAssertFalse(selection.contains("Nature Energy"))
+        XCTAssertEqual(
+            DualListSelection.availableItems(
+                candidates: ["Advanced Materials", "Nature Energy", "Custom Journal"],
+                selectedItems: selection.selectedItems
+            ),
+            ["Nature Energy"]
+        )
+    }
+
+    func testJournalSelectionTopNPreservesManualJournalsAndSources() {
+        let catalog = JournalCatalog(entries: [
+            JournalCatalogEntry(
+                rank: 1,
+                journal: "Nature Energy",
+                aliases: [],
+                impactFactor: 40,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Test",
+                sourceURL: "https://example.org"
+            ),
+            JournalCatalogEntry(
+                rank: 2,
+                journal: "Advanced Materials",
+                aliases: [],
+                impactFactor: 30,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Test",
+                sourceURL: "https://example.org"
+            ),
+            JournalCatalogEntry(
+                rank: 999,
+                journal: "arXiv",
+                aliases: ["arxiv"],
+                impactFactor: nil,
+                impactFactorYear: nil,
+                fiveYearImpactFactor: nil,
+                level: "Preprint",
+                sourceURL: "https://arxiv.org",
+                defaultSelected: false
+            ),
+        ])
+        var selection = JournalSelection(topN: 1, selectedJournals: ["Manual Journal", "arXiv"])
+
+        selection.applyTopN(catalog)
+
+        XCTAssertEqual(selection.selectedJournals, ["Nature Energy", "Manual Journal", "arXiv"])
     }
 
     func testBuildsStableTestNotificationArticle() {
@@ -267,6 +395,85 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertTrue(options.contains(.banner))
         XCTAssertTrue(options.contains(.list))
         XCTAssertTrue(options.contains(.sound))
+    }
+
+    func testStatusItemClickPolicyRoutesPrimaryClicksToDashboard() {
+        XCTAssertEqual(StatusItemClickPolicy.action(for: .leftMouseUp, clickCount: 1), .openDashboard)
+        XCTAssertEqual(StatusItemClickPolicy.action(for: .leftMouseUp, clickCount: 2), .openDashboard)
+        XCTAssertEqual(StatusItemClickPolicy.action(for: nil, clickCount: 1), .openDashboard)
+    }
+
+    func testStatusItemClickPolicyRoutesRightClicksToMenu() {
+        XCTAssertEqual(StatusItemClickPolicy.action(for: .rightMouseDown, clickCount: 1), .showMenu)
+        XCTAssertEqual(StatusItemClickPolicy.action(for: .rightMouseUp, clickCount: 1), .showMenu)
+    }
+
+    func testStatusMenuOpenDashboardUsesNativeDashboardAction() throws {
+        let appDelegate = try String(
+            contentsOfFile: "Sources/PaperMonitorCore/AppDelegate.swift",
+            encoding: .utf8
+        )
+        let actionStart = try XCTUnwrap(appDelegate.range(of: "private func statusMenu()"))
+        let actionEnd = try XCTUnwrap(appDelegate.range(of: "@objc private func statusOpenSettings()"))
+        let statusActions = String(appDelegate[actionStart.lowerBound..<actionEnd.lowerBound])
+
+        XCTAssertTrue(statusActions.contains(#"action: #selector(statusOpenDashboard)"#))
+        XCTAssertTrue(statusActions.contains("@objc private func statusOpenDashboard()"))
+        XCTAssertTrue(statusActions.contains("case .openDashboard:"))
+        XCTAssertTrue(statusActions.contains("openDashboard()"))
+        XCTAssertFalse(statusActions.contains("NSWorkspace.shared.open"))
+        XCTAssertFalse(statusActions.contains("open-dashboard"))
+    }
+
+    func testLaunchRefreshIsOnlyWiredFromApplicationDidFinishLaunching() throws {
+        let appDelegate = try String(
+            contentsOfFile: "Sources/PaperMonitorCore/AppDelegate.swift",
+            encoding: .utf8
+        )
+        let didFinishStart = try XCTUnwrap(appDelegate.range(of: "public func applicationDidFinishLaunching"))
+        let reopenStart = try XCTUnwrap(appDelegate.range(of: "public func applicationShouldHandleReopen"))
+        let didFinish = String(appDelegate[didFinishStart.lowerBound..<reopenStart.lowerBound])
+
+        XCTAssertTrue(didFinish.contains("requestNotificationAuthorizationThenRefresh"))
+        XCTAssertTrue(didFinish.contains("launchReason: launchOptions.launchReason"))
+        XCTAssertTrue(appDelegate.contains("if launchReason == .loginStartup"))
+
+        let reopenEnd = try XCTUnwrap(appDelegate.range(of: "public func applicationShouldTerminateAfterLastWindowClosed"))
+        let reopen = String(appDelegate[reopenStart.lowerBound..<reopenEnd.lowerBound])
+        XCTAssertFalse(reopen.contains("runLaunchRefreshIfNeeded"))
+        XCTAssertFalse(reopen.contains("LaunchRefreshPolicy"))
+        XCTAssertFalse(appDelegate.contains("applicationDidBecomeActive"))
+        XCTAssertFalse(appDelegate.contains("didWake"))
+    }
+
+    func testNotificationOpenDashboardActionUsesNativeDashboardAction() {
+        let action = NotificationController.responseAction(
+            actionIdentifier: NotificationController.openDashboardActionIdentifier,
+            userInfo: [
+                "dashboard_url": "file:///tmp/latest.html",
+                "article_url": "https://example.org/article",
+            ]
+        )
+
+        XCTAssertEqual(action, .openDashboard)
+    }
+
+    func testNotificationDefaultActionOpensExternalArticleURL() throws {
+        let action = NotificationController.responseAction(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            userInfo: ["article_url": "https://example.org/article"]
+        )
+
+        XCTAssertEqual(action, .openExternalURL(try XCTUnwrap(URL(string: "https://example.org/article"))))
+    }
+
+    func testNotificationResponseIgnoresNonExternalArticleURL() {
+        let action = NotificationController.responseAction(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            userInfo: ["article_url": "file:///tmp/latest.html"]
+        )
+
+        XCTAssertEqual(action, .none)
     }
 
     @MainActor
@@ -473,6 +680,34 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertNil(target)
     }
 
+    func testDashboardEntrypointSourcesDoNotOpenDashboardInSystemBrowser() throws {
+        let sourceFiles = [
+            "Sources/PaperMonitorCore/AppDelegate.swift",
+            "Sources/PaperMonitorCore/StatusItemClickPolicy.swift",
+            "Sources/PaperMonitorCore/AppMainMenuController.swift",
+        ]
+
+        for sourceFile in sourceFiles {
+            let source = try String(contentsOfFile: sourceFile, encoding: .utf8)
+
+            XCTAssertFalse(source.contains("NSWorkspace.shared.open"), sourceFile)
+            XCTAssertFalse(source.contains("open-dashboard"), sourceFile)
+            XCTAssertFalse(source.contains("webbrowser.open"), sourceFile)
+        }
+    }
+
+    func testDashboardWindowControllerDoesNotTriggerRefreshOnOpenOrFocus() throws {
+        let source = try String(
+            contentsOfFile: "Sources/PaperMonitorCore/DashboardWindowController.swift",
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(source.contains("refreshNow"))
+        XCTAssertFalse(source.contains("refreshOnLaunch"))
+        XCTAssertFalse(source.contains("LaunchRefreshPolicy"))
+        XCTAssertFalse(source.contains("bridge.refresh"))
+    }
+
     func testRefreshRunGateRejectsConcurrentRefreshesUntilFinished() {
         var gate = RefreshRunGate()
 
@@ -560,6 +795,10 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     func testRefreshPresentationKeepsRefreshErrorsSeparateFromNotificationPermission() {
         XCTAssertEqual(RefreshPresentation.refreshingResultTitle, "Last Result: Refreshing...")
         XCTAssertEqual(RefreshPresentation.failedResultTitle, "Last Result: Refresh failed")
+        XCTAssertEqual(
+            RefreshPresentation.failedResultTitle(message: "Python process timed out"),
+            "Last Result: Refresh failed - Python process timed out"
+        )
         XCTAssertEqual(
             RefreshPresentation.permissionTitle("Granted"),
             "Notification Permission: Granted"
@@ -662,15 +901,6 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(AppRefreshSettings.intervalSeconds(from: data), 7200)
     }
 
-    func testRefreshSettingsLoadsOptionalStartTimeFromConfigJSON() throws {
-        let data = #"{"interval_seconds": 7200, "refresh_start_time": "09:30"}"#.data(using: .utf8)!
-
-        let schedule = AppRefreshSettings.schedule(from: data)
-
-        XCTAssertEqual(schedule.intervalSeconds, 7200)
-        XCTAssertEqual(schedule.startTime, "09:30")
-    }
-
     func testRefreshSettingsFallsBackForMissingOrInvalidInterval() throws {
         XCTAssertEqual(
             AppRefreshSettings.intervalSeconds(from: #"{}"#.data(using: .utf8)!),
@@ -680,8 +910,16 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             AppRefreshSettings.intervalSeconds(from: #"{"interval_seconds": 0}"#.data(using: .utf8)!),
             AppRefreshSettings.defaultIntervalSeconds
         )
-        XCTAssertNil(
-            AppRefreshSettings.schedule(from: #"{"refresh_start_time": "25:61"}"#.data(using: .utf8)!).startTime
+    }
+
+    func testRefreshSettingsLoadsRefreshStartTime() throws {
+        XCTAssertEqual(
+            AppRefreshSettings.refreshStartTime(from: #"{"refresh_start_time":"9:05"}"#.data(using: .utf8)!),
+            "09:05"
+        )
+        XCTAssertEqual(
+            AppRefreshSettings.refreshStartTime(from: #"{"refresh_start_time":"25:00"}"#.data(using: .utf8)!),
+            ""
         )
     }
 
@@ -696,7 +934,13 @@ final class PaperMonitorAppUnitTests: XCTestCase {
             "selected_journals": ["Nature Energy", "", "Nature Energy", "Advanced Materials"]
           },
           "interval_seconds": 3600,
-          "refresh_start_time": "09:30",
+          "app_settings": {
+            "startup_enabled": true,
+            "show_tray_icon": false,
+            "notifications_enabled": false,
+            "silent_startup_notifications": true,
+            "refresh_on_launch": false
+          },
           "include_terms": ["solid electrolyte", "", "solid electrolyte", "LLZO"],
           "exclude_terms": ["solid-state laser", "", "solid-state laser"],
           "sources": {
@@ -717,37 +961,22 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let store = SettingsStore(configURL: configURL)
         let settings = try store.load()
 
-        XCTAssertEqual(settings.schemaVersion, 1)
+        XCTAssertEqual(settings.schemaVersion, 2)
         XCTAssertEqual(settings.journalScope.topN, 50)
         XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature Energy", "Advanced Materials"])
         XCTAssertEqual(settings.intervalSeconds, 3600)
-        XCTAssertEqual(settings.refreshStartTime, "09:30")
+        XCTAssertEqual(settings.runtime.startupEnabled, true)
+        XCTAssertEqual(settings.runtime.showTrayIcon, false)
+        XCTAssertEqual(settings.runtime.notificationsEnabled, false)
+        XCTAssertEqual(settings.runtime.silentStartupNotifications, true)
+        XCTAssertEqual(settings.runtime.refreshOnLaunch, false)
         XCTAssertEqual(settings.includeTerms, ["solid electrolyte", "LLZO"])
         XCTAssertEqual(settings.excludeTerms, ["solid-state laser"])
         XCTAssertEqual(settings.searchDirection.preset, "solid_electrolyte")
         XCTAssertEqual(settings.searchDirection.label, "Solid electrolyte")
-        XCTAssertEqual(settings.searchDirection.keywords, ["solid electrolyte", "LLZO"])
         XCTAssertEqual(settings.searchDirection.crossrefQuery, "solid electrolyte OR LLZO")
         XCTAssertEqual(settings.searchDirection.openalexQuery, "solid electrolyte LLZO")
         XCTAssertTrue(settings.searchDirection.queryManuallyEdited)
-    }
-
-    func testCustomSearchDirectionBuildsQueriesFromEditableNameAndKeywords() {
-        var settings = AppSettings.default
-
-        SearchDirectionEditor.applyCustomDirection(
-            label: "Cathode interface",
-            keywords: ["cathode", "", " cathode ", "space charge"],
-            to: &settings
-        )
-
-        XCTAssertEqual(settings.searchDirection.preset, SearchDirectionEditor.customPresetIdentifier)
-        XCTAssertEqual(settings.searchDirection.label, "Cathode interface")
-        XCTAssertEqual(settings.searchDirection.keywords, ["cathode", "space charge"])
-        XCTAssertEqual(settings.includeTerms, ["cathode", "space charge"])
-        XCTAssertEqual(settings.searchDirection.crossrefQuery, "cathode OR space charge")
-        XCTAssertEqual(settings.searchDirection.openalexQuery, "cathode space charge")
-        XCTAssertFalse(settings.searchDirection.queryManuallyEdited)
     }
 
     func testSettingsStoreAddsIncludeTermAndRegeneratesQueries() throws {
@@ -782,6 +1011,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         XCTAssertEqual(settings.includeTerms, ["solid electrolyte", "stack pressure"])
         XCTAssertEqual(settings.searchDirection.crossrefQuery, "solid electrolyte OR stack pressure")
+        XCTAssertEqual(settings.searchDirection.openalexQuery, "solid electrolyte OR stack pressure")
         let payload = try JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any]
         XCTAssertEqual(payload?["include_terms"] as? [String], ["solid electrolyte", "stack pressure"])
     }
@@ -809,6 +1039,91 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(payload?["include_terms"] as? [String], ["solid electrolyte"])
     }
 
+    func testSettingsStoreCanonicalizesLegacyInterfacePreset() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try """
+        {
+          "journal_scope": {"selected_journals": ["Nature Energy"]},
+          "search_direction": {
+            "preset": "interface_impedance",
+            "label": "Interface / impedance",
+            "crossref_query": "old interface query",
+            "openalex_query": "old interface query",
+            "query_manually_edited": false
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let settings = try SettingsStore(configURL: configURL).load()
+
+        XCTAssertEqual(settings.searchDirection.preset, "interface_interphase")
+        XCTAssertEqual(settings.searchDirection.label, "Interface / interphase")
+        XCTAssertTrue(settings.searchDirection.crossrefQuery.contains("solid electrolyte interface"))
+        XCTAssertEqual(settings.includeTerms, [
+            "solid electrolyte interface",
+            "interphase",
+            "interfacial impedance",
+            "space charge layer",
+            "cathode interface",
+            "anode interface",
+        ])
+        XCTAssertTrue(settings.excludeTerms.contains("solid-state laser"))
+    }
+
+    func testSettingsStorePreservesManualLegacyInterfaceQueries() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try """
+        {
+          "journal_scope": {"selected_journals": ["Nature Energy"]},
+          "include_terms": ["custom interface term"],
+          "exclude_terms": ["custom exclusion"],
+          "search_direction": {
+            "preset": "interface_impedance",
+            "label": "Interface / impedance",
+            "crossref_query": "manual interface query",
+            "openalex_query": "manual openalex interface query",
+            "query_manually_edited": true
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let settings = try SettingsStore(configURL: configURL).load()
+
+        XCTAssertEqual(settings.searchDirection.preset, "interface_interphase")
+        XCTAssertEqual(settings.searchDirection.label, "Interface / interphase")
+        XCTAssertEqual(settings.searchDirection.crossrefQuery, "manual interface query")
+        XCTAssertEqual(settings.searchDirection.openalexQuery, "manual openalex interface query")
+        XCTAssertEqual(settings.includeTerms, ["custom interface term"])
+        XCTAssertEqual(settings.excludeTerms, ["custom exclusion"])
+        XCTAssertTrue(settings.searchDirection.queryManuallyEdited)
+    }
+
+    func testSettingsStoreTreatsLegacyCathodePresetAsCustom() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try """
+        {
+          "journal_scope": {"selected_journals": ["Nature Energy"]},
+          "search_direction": {
+            "preset": "cathode_materials",
+            "label": "Cathode materials",
+            "crossref_query": "cathode query",
+            "openalex_query": "cathode query",
+            "query_manually_edited": false
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let settings = try SettingsStore(configURL: configURL).load()
+
+        XCTAssertEqual(settings.searchDirection.preset, "custom")
+        XCTAssertEqual(settings.searchDirection.label, "Cathode materials")
+        XCTAssertEqual(settings.searchDirection.crossrefQuery, "cathode query")
+        XCTAssertTrue(settings.searchDirection.queryManuallyEdited)
+    }
+
     func testSearchPresetAppliesTermsAndQueriesUntilQueryIsManuallyEdited() {
         var settings = AppSettings.default
         let preset = SearchPreset.solidElectrolyte
@@ -817,7 +1132,6 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         XCTAssertEqual(settings.searchDirection.preset, "solid_electrolyte")
         XCTAssertTrue(settings.includeTerms.contains("solid electrolyte"))
-        XCTAssertEqual(settings.searchDirection.keywords, settings.includeTerms)
         XCTAssertTrue(settings.searchDirection.crossrefQuery.contains("solid electrolyte"))
         XCTAssertFalse(settings.searchDirection.queryManuallyEdited)
 
@@ -827,6 +1141,46 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         SearchPreset.regenerateQueriesIfAllowed(for: &settings)
 
         XCTAssertEqual(settings.searchDirection.crossrefQuery, "custom query")
+    }
+
+    func testSearchPresetCatalogResolvesSharedPresetAliases() {
+        let catalog = SearchPresetCatalog.bundled
+
+        XCTAssertEqual(catalog.defaultPresetID, "solid_state_battery_general")
+        XCTAssertEqual(catalog.definition(for: "interface_impedance")?.id, "interface_interphase")
+        XCTAssertEqual(catalog.definition(for: "cathode_materials")?.id, "custom")
+        XCTAssertFalse(catalog.selectablePresets.contains { $0.id == "custom" })
+    }
+
+    func testSearchPresetCatalogLoadsSharedJSONResource() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let packageRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let repositoryRoot = packageRoot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let catalogURL = repositoryRoot.appendingPathComponent("paper_monitor/resources/search_direction_presets.json")
+        let catalog = try SearchPresetCatalog.load(from: catalogURL)
+
+        XCTAssertEqual(catalog.defaultPreset.id, "solid_state_battery_general")
+        XCTAssertEqual(catalog.definition(for: "interface_impedance")?.id, "interface_interphase")
+        XCTAssertFalse(catalog.presets.isEmpty)
+    }
+
+    func testSearchPresetCatalogApplyUsesExplicitQueries() throws {
+        let catalog = SearchPresetCatalog.bundled
+        let preset = try XCTUnwrap(catalog.definition(for: "solid_electrolyte"))
+        var settings = AppSettings.default
+
+        catalog.apply(preset, to: &settings)
+
+        XCTAssertEqual(settings.searchDirection.preset, "solid_electrolyte")
+        XCTAssertEqual(settings.searchDirection.crossrefQuery, preset.crossrefQuery)
+        XCTAssertEqual(settings.searchDirection.openalexQuery, preset.openalexQuery)
+        XCTAssertEqual(settings.includeTerms, preset.includeTerms)
+        XCTAssertFalse(settings.searchDirection.queryManuallyEdited)
     }
 
     func testSearchPresetDefaultTermsAndQueriesUseEnglishOnly() {
@@ -859,42 +1213,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(settings.excludeTerms, ["solid-state laser", "solid-state drive"])
     }
 
-    func testRefreshSchedulePolicyComputesFirstDelayFromStartTime() {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let now = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: 2026, month: 6, day: 25, hour: 8, minute: 30).date!
-        let afterStart = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: 2026, month: 6, day: 25, hour: 10, minute: 0).date!
-
-        XCTAssertEqual(
-            RefreshSchedulePolicy.initialDelay(
-                interval: 86_400,
-                startTime: "09:00",
-                now: now,
-                calendar: calendar
-            ),
-            1_800
-        )
-        XCTAssertEqual(
-            RefreshSchedulePolicy.initialDelay(
-                interval: 86_400,
-                startTime: "09:00",
-                now: afterStart,
-                calendar: calendar
-            ),
-            82_800
-        )
-        XCTAssertEqual(
-            RefreshSchedulePolicy.initialDelay(
-                interval: 3_600,
-                startTime: nil,
-                now: now,
-                calendar: calendar
-            ),
-            3_600
-        )
-    }
-
-    func testSearchSettingsTopNAppliesCatalogJournalsWhenAvailable() {
+    func testSearchSettingsTopNAppliesCatalogJournalsAndPreservesManualJournals() {
         var settings = AppSettings.default
         settings.journalScope.selectedJournals = ["Existing"]
         let catalog = makeJournalCatalog(["Nature", "Science", "Cell"])
@@ -902,7 +1221,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         SearchSettingsPolicy.applyTopN(2, to: &settings, catalog: catalog)
 
         XCTAssertEqual(settings.journalScope.topN, 2)
-        XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature", "Science"])
+        XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature", "Science", "Existing"])
     }
 
     func testSearchSettingsTopNPreservesSelectedJournalsWhenCatalogIsEmpty() {
@@ -1054,7 +1373,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     @MainActor
     func testJournalFilterFiltersByJournalAliasAndLevel() {
         var settings = AppSettings.default
-        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy"])
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Existing"])
         let catalog = JournalCatalog(entries: [
             JournalCatalogEntry(
                 rank: 1,
@@ -1117,7 +1436,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     @MainActor
     func testJournalFilterDefaultsToImpactFactorDescendingOrder() {
         var settings = AppSettings.default
-        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy"])
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Existing"])
         let catalog = JournalCatalog(entries: [
             JournalCatalogEntry(
                 rank: 1,
@@ -1171,7 +1490,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     @MainActor
     func testJournalFilterSeparatesArxivFromFormalJournalTable() {
         var settings = AppSettings.default
-        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy"])
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Existing"])
         let catalog = JournalCatalog(entries: [
             JournalCatalogEntry(
                 rank: 1,
@@ -1200,6 +1519,20 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(controller.visibleJournalNamesForTesting, ["Nature Energy"])
         XCTAssertEqual(controller.preprintSourceNamesForTesting, ["arXiv"])
         XCTAssertEqual(controller.preprintSourceSelectionForTesting, ["arXiv": false])
+    }
+
+    @MainActor
+    func testJournalFilterSupportsManualJournalAdd() {
+        var settings = AppSettings.default
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature Energy"])
+        let controller = JournalFilterViewController(
+            settings: settings,
+            catalog: makeJournalCatalog(["Nature Energy", "Science"])
+        ) { _ in true }
+
+        controller.addManualJournalForTesting("Custom Battery Journal")
+
+        XCTAssertTrue(controller.selectedJournalNamesForTesting.contains("Custom Battery Journal"))
     }
 
     @MainActor
@@ -1247,22 +1580,25 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(controller.preprintSourceSelectionForTesting, ["arXiv": true])
     }
 
-    func testRefreshSchedulePolicyOnlyReschedulesWhenIntervalChanges() {
-        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(lastScheduledSettings: nil, settings: .default))
+    func testRefreshSchedulePolicyReschedulesWhenIntervalOrStartTimeChanges() {
         var settings = AppSettings.default
         settings.intervalSeconds = 3600
-        settings.refreshStartTime = "09:00"
+        settings.refreshStartTime = ""
+        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(lastScheduledSettings: nil, settings: settings))
         XCTAssertFalse(RefreshSchedulePolicy.shouldReschedule(
-            lastScheduledSettings: RefreshScheduleSettings(intervalSeconds: 3600, startTime: "09:00"),
+            lastScheduledSettings: AppRefreshSettings.Schedule(intervalSeconds: 3600, refreshStartTime: ""),
             settings: settings
         ))
+        settings.intervalSeconds = 7200
         XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(
-            lastScheduledSettings: RefreshScheduleSettings(intervalSeconds: 3600, startTime: "09:00"),
-            settings: {
-                var changed = settings
-                changed.refreshStartTime = "10:00"
-                return changed
-            }()
+            lastScheduledSettings: AppRefreshSettings.Schedule(intervalSeconds: 3600, refreshStartTime: ""),
+            settings: settings
+        ))
+        settings.intervalSeconds = 3600
+        settings.refreshStartTime = "09:30"
+        XCTAssertTrue(RefreshSchedulePolicy.shouldReschedule(
+            lastScheduledSettings: AppRefreshSettings.Schedule(intervalSeconds: 3600, refreshStartTime: ""),
+            settings: settings
         ))
     }
 
@@ -1454,7 +1790,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         }
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         termsController.updateTerms(
             includeTerms: ["solid electrolyte", "solid electrolyte", "LLZO"],
@@ -1479,7 +1815,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.updateQueries(
             crossrefQuery: "pending crossref",
@@ -1511,7 +1847,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.updateQueries(
             crossrefQuery: "pending crossref",
@@ -1590,19 +1926,19 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.loadView()
         termsController.loadView()
         searchController.applyPresetForTesting(.solidElectrolyte)
 
-        termsController.appendIncludeTermForTesting("argyrodite", debounced: false)
+        termsController.appendIncludeTermForTesting("stack pressure", debounced: false)
         XCTAssertTrue(controller.triggerApplyForTesting())
 
         let saved = try XCTUnwrap(emitted.last)
         XCTAssertEqual(
             saved.includeTerms,
-            SearchPreset.solidElectrolyte.includeTerms + ["argyrodite"]
+            SearchPreset.solidElectrolyte.includeTerms + ["stack pressure"]
         )
         XCTAssertEqual(saved.excludeTerms, SearchPreset.solidElectrolyte.excludeTerms)
     }
@@ -1617,7 +1953,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         searchController.loadView()
         termsController.loadView()
@@ -1632,7 +1968,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         let saved = try XCTUnwrap(emitted.last)
         XCTAssertEqual(saved.searchDirection.crossrefQuery, "custom crossref")
-        XCTAssertEqual(saved.searchDirection.openalexQuery, "solid electrolyte LLZO")
+        XCTAssertEqual(saved.searchDirection.openalexQuery, "solid electrolyte OR LLZO")
     }
 
     @MainActor
@@ -1644,7 +1980,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let journalController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? JournalFilterViewController)
+        let journalController = try XCTUnwrap(tabViewController.tabViewItems[3].viewController as? JournalFilterViewController)
 
         searchController.loadView()
         journalController.loadView()
@@ -1663,7 +1999,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
         let searchController = try XCTUnwrap(tabViewController.tabViewItems[0].viewController as? SearchSettingsViewController)
-        let journalController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? JournalFilterViewController)
+        let journalController = try XCTUnwrap(tabViewController.tabViewItems[3].viewController as? JournalFilterViewController)
 
         searchController.loadView()
         journalController.loadView()
@@ -1681,7 +2017,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         }
         let window = try XCTUnwrap(controller.window)
         let tabViewController = try XCTUnwrap(window.contentViewController as? NSTabViewController)
-        let termsController = try XCTUnwrap(tabViewController.tabViewItems[1].viewController as? SearchTermsViewController)
+        let termsController = try XCTUnwrap(tabViewController.tabViewItems[2].viewController as? SearchTermsViewController)
 
         termsController.updateTerms(includeTerms: ["LLZO"], excludeTerms: [], debounced: true)
 
@@ -1714,39 +2050,54 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     }
 
     @MainActor
-    func testSearchSettingsCustomDirectionEditsNameAndKeywords() throws {
+    func testSearchSettingsSelectsCanonicalPresetForLegacyAlias() throws {
+        var settings = AppSettings.default
+        settings.searchDirection.preset = "interface_impedance"
+        settings.searchDirection.label = "Interface / impedance"
+        let controller = SearchSettingsViewController(settings: settings, journalCatalog: nil) { _ in true }
+
+        controller.loadView()
+
+        XCTAssertEqual(controller.selectedPresetTitleForTesting, "Interface / interphase")
+    }
+
+    @MainActor
+    func testSearchSettingsShowsCustomForLegacyCathodePreset() throws {
+        var settings = AppSettings.default
+        settings.searchDirection.preset = "cathode_materials"
+        settings.searchDirection.label = "Cathode materials"
+        let controller = SearchSettingsViewController(settings: settings, journalCatalog: nil) { _ in true }
+
+        controller.loadView()
+
+        XCTAssertEqual(controller.selectedPresetTitleForTesting, "Custom: Cathode materials")
+    }
+
+    @MainActor
+    func testSearchSettingsUpdatesOpenAlexSourceSettings() throws {
         var emitted: [AppSettings] = []
         let controller = SearchSettingsViewController(settings: .default, journalCatalog: nil) { settings in
             emitted.append(settings)
             return true
         }
 
-        controller.applyCustomDirectionForTesting(
-            label: "Cathode interface",
-            keywordsText: "cathode, space charge\ninterface",
+        controller.loadView()
+        controller.updateOpenAlexSourceForTesting(
+            enabled: true,
+            daysBack: 21,
+            perPage: 50,
+            maxPages: 4,
+            apiKey: " openalex-key ",
             debounced: false
         )
 
-        let saved = try XCTUnwrap(emitted.last)
-        XCTAssertEqual(controller.selectedPresetTitleForTesting, "Custom: Cathode interface")
-        XCTAssertEqual(saved.searchDirection.preset, SearchDirectionEditor.customPresetIdentifier)
-        XCTAssertEqual(saved.searchDirection.label, "Cathode interface")
-        XCTAssertEqual(saved.searchDirection.keywords, ["cathode", "space charge", "interface"])
-        XCTAssertEqual(saved.searchDirection.crossrefQuery, "cathode OR space charge OR interface")
-    }
-
-    @MainActor
-    func testSearchSettingsDisplaysExpandedRefreshFrequencyOptionsAndStartTime() {
-        var settings = AppSettings.default
-        settings.intervalSeconds = 172_800
-        settings.refreshStartTime = "09:00"
-        let controller = SearchSettingsViewController(settings: settings, journalCatalog: nil) { _ in true }
-
-        controller.loadView()
-
-        XCTAssertEqual(controller.intervalTitlesForTesting, ["1h", "3h", "6h", "12h", "1 day", "2 days"])
-        XCTAssertEqual(controller.selectedIntervalTitleForTesting, "2 days")
-        XCTAssertEqual(controller.refreshStartTimeForTesting, "09:00")
+        let source = controller.openAlexSourceSettingsForTesting
+        XCTAssertEqual(source.enabled, true)
+        XCTAssertEqual(source.daysBack, 21)
+        XCTAssertEqual(source.perPage, 50)
+        XCTAssertEqual(source.maxPages, 4)
+        XCTAssertEqual(source.apiKey, "openalex-key")
+        XCTAssertEqual(emitted.last?.openAlex.apiKey, "openalex-key")
     }
 
     func testWindowSettingsFallbackSeedsSelectedJournalsFromCatalog() {
@@ -1839,6 +2190,58 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(settings.searchDirection.openalexQuery, "source openalex query")
     }
 
+    func testSettingsStoreLoadsOpenAlexSourceSettings() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try """
+        {
+          "sources": {
+            "openalex": {
+              "enabled": true,
+              "days_back": 21,
+              "per_page": 50,
+              "max_pages": 4,
+              "api_key": "openalex-key",
+              "query": "source openalex query"
+            }
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let settings = try SettingsStore(configURL: configURL).load()
+
+        XCTAssertEqual(settings.openAlex.enabled, true)
+        XCTAssertEqual(settings.openAlex.daysBack, 21)
+        XCTAssertEqual(settings.openAlex.perPage, 50)
+        XCTAssertEqual(settings.openAlex.maxPages, 4)
+        XCTAssertEqual(settings.openAlex.apiKey, "openalex-key")
+        XCTAssertEqual(settings.searchDirection.openalexQuery, "source openalex query")
+    }
+
+    func testSettingsStoreClampsOpenAlexSourceSettingsOnLoad() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        try """
+        {
+          "sources": {
+            "openalex": {
+              "enabled": false,
+              "days_back": 99999,
+              "per_page": 999,
+              "max_pages": 999,
+              "api_key": ""
+            }
+          }
+        }
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let settings = try SettingsStore(configURL: configURL).load()
+
+        XCTAssertEqual(settings.openAlex.daysBack, 3650)
+        XCTAssertEqual(settings.openAlex.perPage, 200)
+        XCTAssertEqual(settings.openAlex.maxPages, 50)
+    }
+
     func testSettingsStoreWritesRuntimeFieldsAtomically() throws {
         let directory = try makeTemporaryDirectory()
         let configURL = directory.appendingPathComponent("config.json")
@@ -1848,6 +2251,14 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         var settings = AppSettings.default
         settings.journalScope = JournalScope(topN: 2, selectedJournals: ["Nature", "Science"])
         settings.intervalSeconds = 7200
+        settings.refreshStartTime = "09:30"
+        settings.runtime = RuntimeAppSettings(
+            startupEnabled: true,
+            showTrayIcon: false,
+            notificationsEnabled: false,
+            silentStartupNotifications: true,
+            refreshOnLaunch: false
+        )
         settings.includeTerms = ["solid electrolyte", "", "solid electrolyte", "LLZO"]
         settings.excludeTerms = ["solid-state laser", "", "solid-state laser"]
         settings.searchDirection.preset = "solid_electrolyte"
@@ -1855,12 +2266,26 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         settings.searchDirection.crossrefQuery = "solid electrolyte"
         settings.searchDirection.openalexQuery = "solid electrolyte LLZO"
         settings.searchDirection.queryManuallyEdited = true
+        settings.openAlex = OpenAlexSourceSettings(
+            enabled: true,
+            daysBack: 21,
+            perPage: 50,
+            maxPages: 4,
+            apiKey: " openalex-key "
+        )
 
         try store.save(settings)
 
         let data = try Data(contentsOf: configURL)
         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         XCTAssertEqual(payload?["interval_seconds"] as? Int, 7200)
+        XCTAssertEqual(payload?["refresh_start_time"] as? String, "09:30")
+        let appSettings = payload?["app_settings"] as? [String: Any]
+        XCTAssertEqual(appSettings?["startup_enabled"] as? Bool, true)
+        XCTAssertEqual(appSettings?["show_tray_icon"] as? Bool, false)
+        XCTAssertEqual(appSettings?["notifications_enabled"] as? Bool, false)
+        XCTAssertEqual(appSettings?["silent_startup_notifications"] as? Bool, true)
+        XCTAssertEqual(appSettings?["refresh_on_launch"] as? Bool, false)
         XCTAssertEqual(payload?["include_terms"] as? [String], ["solid electrolyte", "LLZO"])
         XCTAssertEqual(payload?["exclude_terms"] as? [String], ["solid-state laser"])
         XCTAssertEqual(payload?["journals"] as? [String], ["Nature", "Science"])
@@ -1878,6 +2303,11 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(crossref?["journal_titles"] as? [String], ["Nature", "Science"])
         XCTAssertEqual(crossref?["query"] as? String, "solid electrolyte")
         let openalex = sources?["openalex"] as? [String: Any]
+        XCTAssertEqual(openalex?["enabled"] as? Bool, true)
+        XCTAssertEqual(openalex?["days_back"] as? Int, 21)
+        XCTAssertEqual(openalex?["per_page"] as? Int, 50)
+        XCTAssertEqual(openalex?["max_pages"] as? Int, 4)
+        XCTAssertEqual(openalex?["api_key"] as? String, "openalex-key")
         XCTAssertEqual(openalex?["query"] as? String, "solid electrolyte LLZO")
     }
 
@@ -1979,6 +2409,8 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         settings.journalScope = JournalScope(topN: 2, selectedJournals: ["Nature", "Science"])
         settings.searchDirection.crossrefQuery = "solid electrolyte"
         settings.searchDirection.openalexQuery = "solid electrolyte LLZO"
+        settings.openAlex.apiKey = "secret"
+        settings.openAlex.enabled = true
 
         try SettingsStore(configURL: configURL).save(settings)
 
@@ -1992,7 +2424,24 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         XCTAssertEqual(crossref?["query"] as? String, "solid electrolyte")
         let openalex = sources?["openalex"] as? [String: Any]
         XCTAssertEqual(openalex?["api_key"] as? String, "secret")
+        XCTAssertEqual(openalex?["enabled"] as? Bool, true)
         XCTAssertEqual(openalex?["query"] as? String, "solid electrolyte LLZO")
+    }
+
+    func testSettingsStoreRejectsOpenAlexEnabledWithoutAPIKey() throws {
+        let directory = try makeTemporaryDirectory()
+        let configURL = directory.appendingPathComponent("config.json")
+        let originalJSON = #"{"sources":{"openalex":{"enabled":false}}}"#
+        try originalJSON.write(to: configURL, atomically: true, encoding: .utf8)
+        var settings = AppSettings.default
+        settings.journalScope = JournalScope(topN: 1, selectedJournals: ["Nature"])
+        settings.openAlex.enabled = true
+        settings.openAlex.apiKey = "   "
+
+        XCTAssertThrowsError(try SettingsStore(configURL: configURL).save(settings)) { error in
+            XCTAssertEqual(error as? SettingsStoreError, .missingOpenAlexAPIKey)
+        }
+        XCTAssertEqual(try String(contentsOf: configURL, encoding: .utf8), originalJSON)
     }
 
     func testSettingsStoreRejectsEmptySelectedJournals() throws {

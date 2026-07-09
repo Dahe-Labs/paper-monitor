@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 
 from .app_identity import DISPLAY_NAME
-from .date_utils import display_article_date, first_iso_date
+from .date_utils import display_article_date, first_iso_date, format_display_date
 from .journal_metrics import JournalMetrics
 from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
 
@@ -29,7 +29,8 @@ def render_dashboard(
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #1f2933; }
     header { border-bottom: 1px solid #d8dee4; margin-bottom: 24px; padding-bottom: 16px; }
-    .header-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+    .header-main { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+    .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
     h1 { font-size: 28px; margin: 0; }
     h2 { font-size: 18px; margin: 28px 0 12px; }
     .summary { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -49,6 +50,10 @@ def render_dashboard(
     .analysis-progress-label { color: #0969da; font-size: 11.5px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; }
     .primary-button { border: 0; border-radius: 7px; background: #1f2933; color: #ffffff; height: 36px; padding: 0 13px; font-weight: 700; cursor: pointer; }
     .primary-button:disabled { opacity: 0.58; cursor: default; }
+    .header-action-link, .header-action-button { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 13px; border: 1px solid #d8dee4; border-radius: 7px; background: #ffffff; color: #1f2933; font: inherit; font-weight: 700; text-decoration: none; }
+    .header-action-button { cursor: pointer; }
+    .header-action-button:disabled { opacity: 0.58; cursor: default; }
+    .header-action-link[hidden], .header-action-button[hidden] { display: none; }
     .analysis-panel { padding: 16px; }
     .analysis-grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; }
     .analysis-controls, .analysis-results { min-width: 0; }
@@ -87,6 +92,14 @@ def render_dashboard(
     .term-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d8dee4; border-radius: 6px; padding: 5px 7px; margin: 4px; background: #f6f8fa; font-size: 12px; }
     .checkbox-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; padding-right: 4px; }
     .analysis-journal-list { max-height: 240px; }
+    .analysis-dual-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .analysis-dual-pane { min-width: 0; border: 1px solid #d8dee4; border-radius: 8px; background: #ffffff; overflow: hidden; }
+    .analysis-dual-pane header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #d8dee4; background: #f6f8fa; }
+    .analysis-dual-pane h4 { margin: 0; font-size: 12px; }
+    .analysis-dual-listbox { display: grid; gap: 6px; min-height: 120px; max-height: 220px; overflow: auto; padding: 8px; }
+    .analysis-dual-listbox.drag-over { outline: 2px solid #0969da; outline-offset: -3px; background: #eff6ff; }
+    .analysis-dual-item { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; min-height: 30px; padding: 6px 8px; text-align: left; font: inherit; font-size: 12.5px; font-weight: 700; overflow-wrap: anywhere; }
+    .analysis-dual-item:hover { background: #f6f8fa; border-color: #afb8c1; }
     .checkbox-option { display: flex; gap: 7px; align-items: flex-start; font-size: 13px; line-height: 1.35; }
     .checkbox-option input { flex: 0 0 auto; margin-top: 2px; }
     .secondary-button, .mini-button { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; font-weight: 700; }
@@ -110,7 +123,7 @@ def render_dashboard(
     .analysis-paper-authors { width: 22%%; }
     .analysis-note { color: #57606a; font-size: 13px; margin: 8px 0; }
     .taxonomy-list { display: flex; flex-wrap: wrap; gap: 6px; }
-    @media (max-width: 780px) { .analysis-grid { grid-template-columns: 1fr; } .header-main, .analysis-header, .section-title-row, .candidate-header, .chart-heading { align-items: stretch; flex-direction: column; } .sort-control, .candidate-filter-toolbar { justify-content: flex-start; } .bar-row { grid-template-columns: 1fr; } }
+    @media (max-width: 780px) { .analysis-grid { grid-template-columns: 1fr; } .header-main, .analysis-header, .section-title-row, .candidate-header, .chart-heading { align-items: stretch; flex-direction: column; } .header-actions { margin-left: 0; justify-content: flex-start; } .sort-control, .candidate-filter-toolbar { justify-content: flex-start; } .bar-row { grid-template-columns: 1fr; } }
     .date-group { position: relative; margin: 24px 0 30px; padding-left: 20px; }
     .date-group::before { content: ""; position: absolute; left: 5px; top: 18px; bottom: -22px; width: 2px; background: #d8dee4; }
     .date-heading-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; min-height: 34px; margin: 0 0 10px; padding: 7px 10px 7px 0; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #d8dee4; backdrop-filter: blur(6px); }
@@ -132,7 +145,11 @@ def render_dashboard(
   <header>
     <div class="header-main">
       <h1>%s</h1>
-      <button type="button" id="keyword-analysis-nav" class="primary-button" aria-controls="keyword-analysis" aria-expanded="false">Keyword Analysis</button>
+      <div class="header-actions">
+        <a id="paper-monitor-settings-link" class="header-action-link" href="/settings" hidden>Settings</a>
+        <button type="button" id="paper-monitor-refresh-button" class="header-action-button">Refresh Now</button>
+        <button type="button" id="keyword-analysis-nav" class="primary-button" aria-controls="keyword-analysis" aria-expanded="false">Keyword Analysis</button>
+      </div>
     </div>
     <div class="meta">Last run: %s · Run ID: %s</div>
   </header>
@@ -193,7 +210,7 @@ def render_dashboard(
 """ % (
         escape(DISPLAY_NAME),
         escape(DISPLAY_NAME),
-        escape(str(run.get("finished_at") or run.get("started_at") or "")),
+        escape(format_display_date(run.get("finished_at") or run.get("started_at") or "")),
         escape(str(run.get("id") or "")),
         escape(str(run.get("fetched", 0))),
         escape(str(run.get("matched", 0))),
@@ -235,6 +252,7 @@ const keywordAnalysisState = {
   analysisProgress: 0,
   blockedTerms: [],
   customTaxonomy: [],
+  acceptedCandidateTerms: [],
   ignoredTerms: [],
   savedJournalScopeSignature: "",
   journalScopeSignature: ""
@@ -285,6 +303,7 @@ if (typeof window !== "undefined") {
 document.addEventListener("DOMContentLoaded", function () {
   loadSavedAnalysisState();
   initializeAnalysisDefaults();
+  wireDashboardRefreshEvents();
   wireAnalysisEvents();
   renderKeywordAnalysis();
 });
@@ -310,6 +329,7 @@ function loadSavedAnalysisState() {
     if (Array.isArray(saved.selectedPhraseLengths)) keywordAnalysisState.selectedPhraseLengths = normalizePhraseLengths(saved.selectedPhraseLengths);
     if (Array.isArray(saved.blockedTerms)) keywordAnalysisState.blockedTerms = saved.blockedTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (Array.isArray(saved.customTaxonomy)) keywordAnalysisState.customTaxonomy = sanitizeTaxonomy(saved.customTaxonomy);
+    if (Array.isArray(saved.acceptedCandidateTerms)) keywordAnalysisState.acceptedCandidateTerms = saved.acceptedCandidateTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (Array.isArray(saved.ignoredTerms)) keywordAnalysisState.ignoredTerms = saved.ignoredTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (typeof saved.paperListOpen === "boolean") keywordAnalysisState.paperListOpen = saved.paperListOpen;
     if (typeof saved.journalScopeSignature === "string") keywordAnalysisState.savedJournalScopeSignature = saved.journalScopeSignature;
@@ -333,6 +353,7 @@ function saveAnalysisState() {
       selectedPhraseLengths: normalizePhraseLengths(keywordAnalysisState.selectedPhraseLengths),
       blockedTerms: keywordAnalysisState.blockedTerms,
       customTaxonomy: keywordAnalysisState.customTaxonomy,
+      acceptedCandidateTerms: keywordAnalysisState.acceptedCandidateTerms,
       ignoredTerms: keywordAnalysisState.ignoredTerms,
       paperListOpen: Boolean(keywordAnalysisState.paperListOpen),
       journalScopeSignature: currentJournalScopeSignature()
@@ -384,10 +405,11 @@ function initializeAnalysisDefaults() {
     keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(scope.analysis_depth);
   }
   keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(keywordAnalysisState.analysisDepth);
-  keywordAnalysisState.selectedJournals = unique(keywordAnalysisState.selectedJournals);
+  keywordAnalysisState.selectedJournals = createDualListSelection(allAnalysisJournals(), keywordAnalysisState.selectedJournals).selected;
   keywordAnalysisState.selectedPhraseLengths = normalizePhraseLengths(keywordAnalysisState.selectedPhraseLengths);
-  keywordAnalysisState.blockedTerms = unique(keywordAnalysisState.blockedTerms);
-  keywordAnalysisState.ignoredTerms = unique(keywordAnalysisState.ignoredTerms);
+  keywordAnalysisState.blockedTerms = uniqueSelectionValues(keywordAnalysisState.blockedTerms);
+  keywordAnalysisState.acceptedCandidateTerms = uniqueSelectionValues(keywordAnalysisState.acceptedCandidateTerms);
+  keywordAnalysisState.ignoredTerms = uniqueSelectionValues(keywordAnalysisState.ignoredTerms);
   if (keywordAnalysisState.candidateTermsOpen && keywordAnalysisState.blockTermsOpen) {
     keywordAnalysisState.candidateTermsOpen = false;
   }
@@ -435,6 +457,142 @@ function isoDateFromDate(value) {
   ].join("-");
 }
 
+const ANALYSIS_DUAL_LIST_MIME = "application/x-paper-monitor-analysis-dual-list";
+
+function uniqueSelectionValues(values) {
+  const seen = new Set();
+  const result = [];
+  (Array.isArray(values) ? values : []).forEach(function (value) {
+    const clean = normalizeDisplayTerm(value);
+    const key = normalizePhrase(clean);
+    if (!clean || !key || seen.has(key)) return;
+    seen.add(key);
+    result.push(clean);
+  });
+  return result;
+}
+
+function createDualListSelection(candidates, selected) {
+  const candidateValues = uniqueSelectionValues(candidates);
+  const candidateByKey = {};
+  candidateValues.forEach(function (value) {
+    candidateByKey[normalizePhrase(value)] = value;
+  });
+  const selectedValues = uniqueSelectionValues((Array.isArray(selected) ? selected : []).map(function (value) {
+    const clean = normalizeDisplayTerm(value);
+    return candidateByKey[normalizePhrase(clean)] || clean;
+  }));
+  const selectedKeys = new Set(selectedValues.map(normalizePhrase).filter(Boolean));
+  return {
+    selected: selectedValues,
+    candidates: candidateValues.filter(function (value) {
+      return !selectedKeys.has(normalizePhrase(value));
+    })
+  };
+}
+
+function addDualListValue(values, value) {
+  const clean = normalizeDisplayTerm(value);
+  if (!clean) return uniqueSelectionValues(values);
+  return uniqueSelectionValues((Array.isArray(values) ? values : []).concat([clean]));
+}
+
+function removeDualListValue(values, value) {
+  const key = normalizePhrase(value);
+  return uniqueSelectionValues((Array.isArray(values) ? values : []).map(normalizeDisplayTerm).filter(function (item) {
+    return normalizePhrase(item) !== key;
+  }));
+}
+
+function dualListDragPayload(event, listId) {
+  if (!event || !event.dataTransfer) return null;
+  const raw = event.dataTransfer.getData(ANALYSIS_DUAL_LIST_MIME);
+  if (raw) {
+    try {
+      const payload = JSON.parse(raw);
+      if (payload && payload.listId === listId && normalizeDisplayTerm(payload.value)) return payload;
+    } catch (error) {
+      return null;
+    }
+  }
+  const fallback = normalizeDisplayTerm(event.dataTransfer.getData("text/plain"));
+  return fallback ? { listId: listId, value: fallback, source: "" } : null;
+}
+
+function setDualListDragPayload(event, listId, value, source) {
+  if (!event || !event.dataTransfer) return;
+  const clean = normalizeDisplayTerm(value);
+  event.dataTransfer.effectAllowed = "copyMove";
+  event.dataTransfer.setData(ANALYSIS_DUAL_LIST_MIME, JSON.stringify({ listId: listId, value: clean, source: source || "" }));
+  event.dataTransfer.setData("text/plain", clean);
+}
+
+function wireDashboardRefreshEvents() {
+  const button = document.getElementById("paper-monitor-refresh-button");
+  if (!button || button.dataset.paperMonitorRefreshWired === "1") return;
+  button.dataset.paperMonitorRefreshWired = "1";
+  button.addEventListener("click", function () {
+    requestDashboardRefresh(button);
+  });
+}
+
+function requestDashboardRefresh(button) {
+  const original = button.textContent || "Refresh Now";
+  button.disabled = true;
+  button.textContent = "Refreshing...";
+
+  const bridge = typeof window !== "undefined" && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperMonitor;
+  if (bridge) {
+    bridge.postMessage({ type: "refreshNow" });
+    return;
+  }
+
+  if (postToPaperMonitorBridge(
+    "/api/refresh-now",
+    {},
+    function () {
+      const base = getPaperMonitorBridgeBaseURL();
+      if (base) {
+        window.location.href = base + "/?t=" + Date.now();
+      } else {
+        window.location.reload();
+      }
+    },
+    function (message) {
+      const cleanMessage = message === "refresh_already_running" ? "Already Refreshing" : "Refresh Failed";
+      button.textContent = cleanMessage;
+      window.setTimeout(function () {
+        button.textContent = original;
+        button.disabled = false;
+      }, 1800);
+    }
+  )) {
+    return;
+  }
+
+  button.textContent = "Open App to Refresh";
+  window.setTimeout(function () {
+    button.textContent = original;
+    button.disabled = false;
+  }, 1800);
+}
+
+if (typeof window !== "undefined") {
+  window.paperMonitorRefreshFinished = function (ok, message) {
+    const button = document.getElementById("paper-monitor-refresh-button");
+    if (!button) return;
+    if (ok) {
+      window.location.reload();
+      return;
+    }
+    button.textContent = message || "Refresh Failed";
+    window.setTimeout(function () {
+      button.textContent = "Refresh Now";
+      button.disabled = false;
+    }, 1800);
+  };
+}
+
 function wireAnalysisEvents() {
   const nav = document.getElementById("keyword-analysis-nav");
   const shell = document.getElementById("keyword-analysis");
@@ -480,6 +638,17 @@ function wireAnalysisEvents() {
       handleAnalysisControlChange(event, true);
     });
     controls.addEventListener("click", function (event) {
+      const journalButton = event.target.closest("[data-analysis-journal-action]");
+      if (journalButton) {
+        event.preventDefault();
+        applyAnalysisJournalAction(
+          journalButton.getAttribute("data-analysis-journal-action") || "",
+          journalButton.getAttribute("data-journal") || ""
+        );
+        saveAnalysisState();
+        renderKeywordAnalysis();
+        return;
+      }
       const stepperButton = event.target.closest("[data-stepper-action]");
       if (stepperButton) {
         event.preventDefault();
@@ -496,6 +665,32 @@ function wireAnalysisEvents() {
       saveAnalysisState();
       renderKeywordAnalysis();
     });
+    controls.addEventListener("dragstart", function (event) {
+      const item = event.target.closest("[data-analysis-journal-action]");
+      if (!item) return;
+      setDualListDragPayload(event, "analysis-journals", item.getAttribute("data-journal") || "", item.getAttribute("data-analysis-journal-action") || "");
+    });
+    controls.addEventListener("dragover", function (event) {
+      const target = event.target.closest("[data-analysis-journal-drop]");
+      if (!target || !dualListDragPayload(event, "analysis-journals")) return;
+      event.preventDefault();
+      target.classList.add("drag-over");
+      event.dataTransfer.dropEffect = "move";
+    });
+    controls.addEventListener("dragleave", function (event) {
+      const target = event.target.closest("[data-analysis-journal-drop]");
+      if (target) target.classList.remove("drag-over");
+    });
+    controls.addEventListener("drop", function (event) {
+      const target = event.target.closest("[data-analysis-journal-drop]");
+      const payload = dualListDragPayload(event, "analysis-journals");
+      if (!target || !payload) return;
+      event.preventDefault();
+      target.classList.remove("drag-over");
+      applyAnalysisJournalAction(target.getAttribute("data-analysis-journal-drop") || "", payload.value);
+      saveAnalysisState();
+      renderKeywordAnalysis();
+    });
   }
 
   if (candidates) {
@@ -508,6 +703,18 @@ function wireAnalysisEvents() {
       handleAnalysisCandidateFilterChange(event, true);
     });
     candidates.addEventListener("click", function (event) {
+      const selectedTerm = event.target.closest("[data-accepted-candidate-term]");
+      if (selectedTerm && !event.target.closest("button")) {
+        event.preventDefault();
+        removeAcceptedCandidateTerm(selectedTerm.getAttribute("data-accepted-candidate-term") || "");
+        return;
+      }
+      const candidateTerm = event.target.closest("[data-candidate-term]");
+      if (candidateTerm && !event.target.closest("button")) {
+        event.preventDefault();
+        acceptCandidateTerm(candidateTerm.getAttribute("data-candidate-term") || "");
+        return;
+      }
       const filterButton = event.target.closest("[data-candidate-filter-action]");
       if (filterButton) {
         event.preventDefault();
@@ -523,6 +730,38 @@ function wireAnalysisEvents() {
       if (action === "accept-candidate") acceptCandidateTerm(term);
       if (action === "block-candidate") blockCandidateTerm(term);
       if (action === "add-search-term") addSearchTerm(term);
+    });
+    candidates.addEventListener("dragstart", function (event) {
+      const candidateTerm = event.target.closest("[data-candidate-term]");
+      const selectedTerm = event.target.closest("[data-accepted-candidate-term]");
+      const item = candidateTerm || selectedTerm;
+      if (!item) return;
+      setDualListDragPayload(
+        event,
+        "analysis-candidate-terms",
+        item.getAttribute("data-candidate-term") || item.getAttribute("data-accepted-candidate-term") || "",
+        candidateTerm ? "candidate" : "selected"
+      );
+    });
+    candidates.addEventListener("dragover", function (event) {
+      const target = event.target.closest("[data-candidate-term-drop]");
+      if (!target || !dualListDragPayload(event, "analysis-candidate-terms")) return;
+      event.preventDefault();
+      target.classList.add("drag-over");
+      event.dataTransfer.dropEffect = "move";
+    });
+    candidates.addEventListener("dragleave", function (event) {
+      const target = event.target.closest("[data-candidate-term-drop]");
+      if (target) target.classList.remove("drag-over");
+    });
+    candidates.addEventListener("drop", function (event) {
+      const target = event.target.closest("[data-candidate-term-drop]");
+      const payload = dualListDragPayload(event, "analysis-candidate-terms");
+      if (!target || !payload) return;
+      event.preventDefault();
+      target.classList.remove("drag-over");
+      if ((target.getAttribute("data-candidate-term-drop") || "") === "add") acceptCandidateTerm(payload.value);
+      else removeAcceptedCandidateTerm(payload.value);
     });
   }
 
@@ -599,12 +838,6 @@ function handleAnalysisControlChange(event, shouldRender) {
   if (target.matches("[data-date-part]")) {
     syncDateFromParts(target.getAttribute("data-date-boundary") || "");
   }
-  if (target.matches("[data-journal-option]")) {
-    keywordAnalysisState.selectedJournals = Array.from(controls.querySelectorAll("[data-journal-option]:checked")).map(function (checkbox) {
-      return checkbox.value;
-    });
-    keywordAnalysisState.hasJournalSelection = true;
-  }
   if (target.matches("[data-analysis-depth]")) {
     keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(target.value);
   }
@@ -640,6 +873,17 @@ function applyAnalysisControlAction(action) {
   }
   if (action === "clear-journals") {
     keywordAnalysisState.selectedJournals = [];
+    keywordAnalysisState.hasJournalSelection = true;
+  }
+}
+
+function applyAnalysisJournalAction(action, journal) {
+  if (action === "add") {
+    keywordAnalysisState.selectedJournals = addDualListValue(keywordAnalysisState.selectedJournals, journal);
+    keywordAnalysisState.hasJournalSelection = true;
+  }
+  if (action === "remove") {
+    keywordAnalysisState.selectedJournals = removeDualListValue(keywordAnalysisState.selectedJournals, journal);
     keywordAnalysisState.hasJournalSelection = true;
   }
 }
@@ -719,7 +963,7 @@ function allAnalysisJournals() {
   const catalogJournals = analysisJournalCatalog().map(function (entry) {
     return normalizeDisplayTerm(entry.journal);
   }).filter(Boolean);
-  if (catalogJournals.length) return unique(catalogJournals);
+  if (catalogJournals.length) return uniqueSelectionValues(catalogJournals);
   return fallbackAnalysisJournals();
 }
 
@@ -728,7 +972,7 @@ function fallbackAnalysisJournals() {
   const paperJournals = allAnalysisPapers().map(function (paper) {
     return normalizeDisplayTerm(paper.journal);
   }).filter(Boolean);
-  return unique(scopedJournals.concat(paperJournals)).sort(caseInsensitiveSort);
+  return uniqueSelectionValues(scopedJournals.concat(paperJournals)).sort(caseInsensitiveSort);
 }
 
 function analysisJournalCatalog() {
@@ -756,7 +1000,7 @@ function clampTopJournalCount(value) {
 function scopedAnalysisJournals() {
   const payload = keywordAnalysisState.payload || {};
   const scope = payload.scope || {};
-  return unique((Array.isArray(scope.selected_journals) ? scope.selected_journals : []).map(normalizeDisplayTerm).filter(Boolean));
+  return uniqueSelectionValues(Array.isArray(scope.selected_journals) ? scope.selected_journals : []);
 }
 
 function currentJournalScopeSignature() {
@@ -764,7 +1008,7 @@ function currentJournalScopeSignature() {
 }
 
 function journalScopeSignature(journals) {
-  return unique((Array.isArray(journals) ? journals : []).map(normalizePhrase).filter(Boolean)).sort().join("|");
+  return uniqueSelectionValues(Array.isArray(journals) ? journals : []).map(normalizePhrase).sort().join("|");
 }
 
 function adjacentSortMode(direction) {
@@ -923,9 +1167,23 @@ function acceptCandidateTerm(term) {
   if (!existing) {
     keywordAnalysisState.customTaxonomy.push({ name: clean, aliases: [clean] });
   }
+  keywordAnalysisState.acceptedCandidateTerms = addDualListValue(keywordAnalysisState.acceptedCandidateTerms, clean);
   keywordAnalysisState.ignoredTerms = keywordAnalysisState.ignoredTerms.filter(function (item) {
     return normalizePhrase(item) !== normalized;
   });
+  saveAnalysisState();
+  renderKeywordAnalysis();
+}
+
+function removeAcceptedCandidateTerm(term) {
+  const clean = normalizeDisplayTerm(term);
+  const normalized = normalizePhrase(clean);
+  if (!clean || !normalized) return;
+  keywordAnalysisState.acceptedCandidateTerms = removeDualListValue(keywordAnalysisState.acceptedCandidateTerms, clean);
+  keywordAnalysisState.customTaxonomy = sanitizeTaxonomy(keywordAnalysisState.customTaxonomy).filter(function (category) {
+    return normalizePhrase(category.name) !== normalized;
+  });
+  keywordAnalysisState.ignoredTerms = removeDualListValue(keywordAnalysisState.ignoredTerms, clean);
   saveAnalysisState();
   renderKeywordAnalysis();
 }
@@ -946,6 +1204,9 @@ function addSearchTerm(term) {
   const bridge = typeof window !== "undefined" && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperMonitor;
   if (bridge) {
     bridge.postMessage({ type: "addSearchTerm", term: clean });
+    return;
+  }
+  if (postToPaperMonitorBridge("/api/add-search-term", { term: clean }, function () {})) {
     return;
   }
   if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
@@ -993,18 +1254,71 @@ function requestKeywordAnalysis() {
   }
 
   const bridge = typeof window !== "undefined" && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.paperMonitor;
-  if (!bridge) {
-    keywordAnalysisState.analysisStatus = "error";
-    keywordAnalysisState.analysisError = "Open Paper Monitor to run Crossref analysis.";
-    renderKeywordAnalysis();
-    return;
-  }
-
   keywordAnalysisState.analysisStatus = "loading";
   keywordAnalysisState.analysisError = "";
   renderKeywordAnalysis();
   startAnalysisProgress();
+  if (!bridge) {
+    if (postToPaperMonitorBridge(
+      "/api/analyze-keywords",
+      request,
+      function (payload) {
+        receiveKeywordAnalysisPayload(payload);
+      },
+      function (message) {
+        const cleanMessage = message === "analysis_already_running"
+          ? "Keyword analysis is already running."
+          : (message || "Crossref analysis failed.");
+        receiveKeywordAnalysisPayload({ error: cleanMessage });
+      }
+    )) {
+      return;
+    }
+    receiveKeywordAnalysisPayload({ error: "Open Paper Monitor to run Crossref analysis." });
+    return;
+  }
   bridge.postMessage(request);
+}
+
+function getPaperMonitorBridgeBaseURL() {
+  if (typeof window === "undefined") return "";
+  return String(window.paperMonitorBridgeBaseURL || "").replace(/\/+$/, "");
+}
+
+function getPaperMonitorBridgeToken() {
+  if (typeof window === "undefined") return "";
+  return String(window.paperMonitorBridgeToken || "");
+}
+
+function postToPaperMonitorBridge(path, payload, onSuccess, onError) {
+  const baseURL = getPaperMonitorBridgeBaseURL();
+  if (!baseURL || typeof fetch !== "function") return false;
+  const headers = { "Content-Type": "application/json" };
+  const token = getPaperMonitorBridgeToken();
+  if (token) headers["X-Paper-Monitor-Token"] = token;
+  fetch(baseURL + path, {
+    method: "POST",
+    headers: headers,
+    body: JSON.stringify(payload || {})
+  }).then(function (response) {
+    return response.json().then(function (data) {
+      if (!response.ok || data.error) {
+        if (response.status === 409 && data && data.error === "analysis_already_running") {
+          throw new Error("analysis_already_running");
+        }
+        if (response.status === 409 && data && data.error === "refresh_already_running") {
+          throw new Error("refresh_already_running");
+        }
+        throw new Error(data.error || "Paper Monitor bridge request failed.");
+      }
+      return data;
+    });
+  }).then(function (data) {
+    if (typeof onSuccess === "function") onSuccess(data);
+  }).catch(function (error) {
+    if (typeof onError === "function") onError(String(error && error.message || error));
+  });
+  return true;
 }
 
 function syncAnalysisDateControlsBeforeRequest() {
@@ -1065,7 +1379,7 @@ function syncAnalysisStateFromPayloadScope(scope) {
   }
   keywordAnalysisState.topN = clampTopJournalCount(scope.top_n || keywordAnalysisState.topN);
   if (Array.isArray(scope.selected_journals)) {
-    keywordAnalysisState.selectedJournals = unique(scope.selected_journals.map(normalizeDisplayTerm).filter(Boolean));
+    keywordAnalysisState.selectedJournals = createDualListSelection(allAnalysisJournals(), scope.selected_journals).selected;
     keywordAnalysisState.hasJournalSelection = true;
   }
 }
@@ -1123,10 +1437,8 @@ function renderKeywordAnalysis() {
 
 function renderAnalysisControls() {
   const journals = allAnalysisJournals();
-  const selectedJournalKeys = new Set(keywordAnalysisState.selectedJournals.map(normalizePhrase));
-  const selectedJournalCount = journals.filter(function (journal) {
-    return selectedJournalKeys.has(normalizePhrase(journal));
-  }).length;
+  const journalSelection = createDualListSelection(journals, keywordAnalysisState.selectedJournals);
+  const selectedJournalCount = journalSelection.selected.length;
 
   return [
     '<div class="control-group">',
@@ -1141,9 +1453,26 @@ function renderAnalysisControls() {
     '<div class="control-group">',
     '<h3>Journals</h3>',
     '<div class="control-toolbar"><button type="button" class="mini-button" data-scope-action="select-all-journals">Select all</button><button type="button" class="mini-button" data-scope-action="clear-journals">Clear</button><span class="meta">' + escapeHtml(selectedJournalCount + " / " + journals.length + " selected") + '</span></div>',
-    '<div class="checkbox-list analysis-journal-list">' + journals.map(function (journal) {
-      return '<label class="checkbox-option"><input type="checkbox" data-journal-option value="' + escapeHtml(journal) + '"' + checkedAttribute(selectedJournalKeys.has(normalizePhrase(journal))) + '> <span>' + escapeHtml(journal) + '</span></label>';
-    }).join("") + '</div>',
+    renderAnalysisJournalDualList(journalSelection),
+    '</div>'
+  ].join("");
+}
+
+function renderAnalysisJournalDualList(selection) {
+  return [
+    '<div class="analysis-dual-list" data-dual-list="analysis-journals">',
+    '<section class="analysis-dual-pane"><header><h4>Selected</h4><span class="meta">' + escapeHtml(selection.selected.length) + '</span></header>',
+    '<div class="analysis-dual-listbox analysis-journal-list" data-analysis-journal-drop="add">',
+    selection.selected.length ? selection.selected.map(function (journal) {
+      return '<button type="button" class="analysis-dual-item" draggable="true" data-analysis-journal-action="remove" data-journal="' + escapeHtml(journal) + '">' + escapeHtml(journal) + '</button>';
+    }).join("") : '<p class="analysis-note">No journals selected.</p>',
+    '</div></section>',
+    '<section class="analysis-dual-pane"><header><h4>Candidates</h4><span class="meta">' + escapeHtml(selection.candidates.length) + '</span></header>',
+    '<div class="analysis-dual-listbox analysis-journal-list" data-analysis-journal-drop="remove">',
+    selection.candidates.length ? selection.candidates.map(function (journal) {
+      return '<button type="button" class="analysis-dual-item" draggable="true" data-analysis-journal-action="add" data-journal="' + escapeHtml(journal) + '">' + escapeHtml(journal) + '</button>';
+    }).join("") : '<p class="analysis-note">All journals are selected.</p>',
+    '</div></section>',
     '</div>'
   ].join("");
 }
@@ -1518,7 +1847,7 @@ function renderTrend(papers, categories) {
     }).slice(0, 4).map(function (name) {
       return name + " (" + rows[date].categories[name] + ")";
     }).join(", ");
-    return '<tr><td>' + escapeHtml(date) + '</td><td>' + escapeHtml(rows[date].count) + '</td><td>' + escapeHtml(topCategories || "No taxonomy match") + '</td></tr>';
+    return '<tr><td>' + escapeHtml(formatDisplayDate(date, "compact") || date) + '</td><td>' + escapeHtml(rows[date].count) + '</td><td>' + escapeHtml(topCategories || "No taxonomy match") + '</td></tr>';
   }).join("") + '</tbody></table></div>';
 }
 
@@ -1535,14 +1864,34 @@ function renderCandidateTerms(terms) {
   if (!termsOpen) {
     return '<section class="control-group">' + header + '</section>';
   }
-  if (!terms.length) {
-    return '<section class="control-group">' + header + '<p class="analysis-note">No repeated candidate terms meet the current threshold.</p></section>';
-  }
-
-  return '<section class="control-group">' + header + terms.map(function (term) {
+  const termSelection = createDualListSelection(
+    terms.map(function (term) { return normalizeDisplayTerm(term.term); }),
+    keywordAnalysisState.acceptedCandidateTerms
+  );
+  const termByKey = {};
+  terms.forEach(function (term) {
+    termByKey[normalizePhrase(term.term)] = term;
+  });
+  const selectedHtml = termSelection.selected.length ? termSelection.selected.map(function (term) {
+    return '<button type="button" class="analysis-dual-item" draggable="true" data-accepted-candidate-term="' + escapeHtml(term) + '">' + escapeHtml(term) + '</button>';
+  }).join("") : '<p class="analysis-note">No accepted candidate terms.</p>';
+  const candidateHtml = termSelection.candidates.length ? termSelection.candidates.map(function (termValue) {
+    const term = termByKey[normalizePhrase(termValue)] || { term: termValue, count: 0 };
     const displayTerm = normalizeDisplayTerm(term.term);
-    return '<div class="candidate-row"><div><strong>' + escapeHtml(displayTerm) + '</strong><div class="meta">' + escapeHtml(term.count) + ' papers</div></div><div class="candidate-actions"><button type="button" class="mini-button" data-action="accept-candidate" data-term="' + escapeHtml(displayTerm) + '">Accept</button><button type="button" class="mini-button" data-action="block-candidate" data-term="' + escapeHtml(displayTerm) + '">Block</button><button type="button" class="mini-button" data-action="add-search-term" data-term="' + escapeHtml(displayTerm) + '">Add to Search Terms</button></div></div>';
-  }).join("") + '</section>';
+    return '<div class="candidate-row" draggable="true" data-candidate-term="' + escapeHtml(displayTerm) + '"><div><strong>' + escapeHtml(displayTerm) + '</strong><div class="meta">' + escapeHtml(term.count) + ' papers</div></div><div class="candidate-actions"><button type="button" class="mini-button" data-action="accept-candidate" data-term="' + escapeHtml(displayTerm) + '">Accept</button><button type="button" class="mini-button" data-action="block-candidate" data-term="' + escapeHtml(displayTerm) + '">Block</button><button type="button" class="mini-button" data-action="add-search-term" data-term="' + escapeHtml(displayTerm) + '">Add to Search Terms</button></div></div>';
+  }).join("") : '<p class="analysis-note">No repeated candidate terms meet the current threshold.</p>';
+
+  return [
+    '<section class="control-group">',
+    header,
+    '<div class="analysis-dual-list" data-dual-list="analysis-candidate-terms">',
+    '<section class="analysis-dual-pane"><header><h4>Accepted</h4><span class="meta">' + escapeHtml(termSelection.selected.length) + '</span></header>',
+    '<div class="analysis-dual-listbox" data-candidate-term-drop="add">' + selectedHtml + '</div></section>',
+    '<section class="analysis-dual-pane"><header><h4>Candidates</h4><span class="meta">' + escapeHtml(termSelection.candidates.length) + '</span></header>',
+    '<div class="analysis-dual-listbox" data-candidate-term-drop="remove">' + candidateHtml + '</div></section>',
+    '</div>',
+    '</section>'
+  ].join("");
 }
 
 function renderCandidateTermsHeader() {
@@ -1753,6 +2102,30 @@ function compareString(left, right) {
   return String(left || "").localeCompare(String(right || ""));
 }
 
+const DISPLAY_DATE_FORMATTERS = {
+  compact: new Intl.DateTimeFormat("en-US", { calendar: "gregory", month: "short", day: "numeric", year: "numeric" }),
+  long: new Intl.DateTimeFormat("en-US", { calendar: "gregory", month: "long", day: "numeric", year: "numeric" }),
+  shortNoYear: new Intl.DateTimeFormat("en-US", { calendar: "gregory", month: "short", day: "numeric" })
+};
+
+function isoDateParts(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  const dateValue = new Date(year, month - 1, day);
+  if (dateValue.getFullYear() !== year || dateValue.getMonth() !== month - 1 || dateValue.getDate() !== day) return null;
+  return { year: year, month: month, day: day, date: dateValue };
+}
+
+function formatDisplayDate(value, style) {
+  const parts = isoDateParts(value);
+  if (!parts) return String(value || "");
+  const formatter = DISPLAY_DATE_FORMATTERS[style || "compact"] || DISPLAY_DATE_FORMATTERS.compact;
+  return formatter.format(parts.date);
+}
+
 function coercePositiveInt(value, fallback) {
   const parsed = parseInt(value, 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
@@ -1804,6 +2177,7 @@ def _matched_papers_payload_json(candidates: List[Dict[str, object]], metrics: J
                 "html": _render_candidate(candidate, metrics),
                 "detected": _date_group_sort_value(candidate),
                 "detected_label": _date_group_label(candidate),
+                "detected_short_label": _date_group_short_label(_date_group_sort_value(candidate)),
                 "impact_factor": _candidate_impact_factor(candidate, metrics),
                 "relevance": len(candidate.get("matched_terms", []) if isinstance(candidate.get("matched_terms"), list) else []),
                 "index": index,
@@ -1868,28 +2242,31 @@ function sortedMatchedPaperItems(items, sortMode) {
 function renderMatchedPaperDateGroups(items) {
   const sections = [];
   let currentLabel = null;
+  let currentShortLabel = null;
   let currentHtml = [];
 
   items.forEach(function (item) {
     const label = matchedPaperString(item.detected_label) || "Unknown date";
+    const shortLabel = matchedPaperString(item.detected_short_label) || dateHeadingShortLabel(label);
     if (currentLabel !== null && label !== currentLabel) {
-      sections.push(renderMatchedPaperDateGroup(currentLabel, currentHtml));
+      sections.push(renderMatchedPaperDateGroup(currentLabel, currentShortLabel, currentHtml));
       currentHtml = [];
     }
     currentLabel = label;
+    currentShortLabel = shortLabel;
     currentHtml.push(matchedPaperHtml(item));
   });
 
   if (currentLabel !== null) {
-    sections.push(renderMatchedPaperDateGroup(currentLabel, currentHtml));
+    sections.push(renderMatchedPaperDateGroup(currentLabel, currentShortLabel, currentHtml));
   }
   return sections.join("\n");
 }
 
-function renderMatchedPaperDateGroup(label, htmlItems) {
+function renderMatchedPaperDateGroup(label, shortLabel, htmlItems) {
   const count = Array.isArray(htmlItems) ? htmlItems.length : 0;
   return '<section class="date-group"><div class="date-heading-bar"><span class="date-marker" aria-hidden="true"></span><span class="date-short-label">' +
-    escapeMatchedPaperText(dateHeadingShortLabel(label)) + '</span><h3 class="date-heading">' +
+    escapeMatchedPaperText(shortLabel || dateHeadingShortLabel(label)) + '</span><h3 class="date-heading">' +
     escapeMatchedPaperText(label) + '</h3><span class="date-count">' + escapeMatchedPaperText(paperCountLabel(count)) +
     '</span></div>' + htmlItems.join("\n") + '</section>';
 }
@@ -1907,15 +2284,28 @@ function matchedPaperNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+const MATCHED_PAPER_SHORT_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  calendar: "gregory",
+  month: "short",
+  day: "numeric"
+});
+
+function matchedPaperIsoDateParts(value) {
+  const match = matchedPaperString(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return { date: date };
+}
+
 function dateHeadingShortLabel(label) {
   const value = matchedPaperString(label);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value || "Unknown date";
-
-  const parts = value.split("-").map(function (part) {
-    return parseInt(part, 10);
-  });
-  const date = new Date(parts[0], parts[1] - 1, parts[2]);
-  if (!Number.isFinite(date.getTime())) return value;
+  const parts = matchedPaperIsoDateParts(value);
+  if (!parts) return value || "Unknown date";
+  const date = parts.date;
 
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
@@ -1923,8 +2313,7 @@ function dateHeadingShortLabel(label) {
   if (dayDiff === 0) return "Today";
   if (dayDiff === 1) return "Yesterday";
 
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return months[date.getMonth()] + " " + date.getDate();
+  return MATCHED_PAPER_SHORT_DATE_FORMATTER.format(date) || value;
 }
 
 function paperCountLabel(count) {
@@ -1957,22 +2346,23 @@ def _render_candidate_groups(candidates: List[Dict[str, object]], metrics: Journ
         return '<p class="meta">%s</p>' % escape(empty_text)
 
     sections = []
-    current_label = None
+    current_group = None
     current_candidates = []
     for candidate in _sort_candidates_by_detected_date(candidates):
-        label = _date_group_label(candidate)
-        if current_label is not None and label != current_label:
-            sections.append(_render_date_group(current_label, current_candidates, metrics))
+        group = _date_group_sort_value(candidate)
+        if current_group is not None and group != current_group:
+            sections.append(_render_date_group(current_group, current_candidates, metrics))
             current_candidates = []
-        current_label = label
+        current_group = group
         current_candidates.append(candidate)
 
-    if current_label is not None:
-        sections.append(_render_date_group(current_label, current_candidates, metrics))
+    if current_group is not None:
+        sections.append(_render_date_group(current_group, current_candidates, metrics))
     return "\n".join(sections)
 
 
-def _render_date_group(label: str, candidates: List[Dict[str, object]], metrics: JournalMetrics) -> str:
+def _render_date_group(group_value: str, candidates: List[Dict[str, object]], metrics: JournalMetrics) -> str:
+    label = _date_group_display_label(group_value)
     return """<section class="date-group">
   <div class="date-heading-bar">
     <span class="date-marker" aria-hidden="true"></span>
@@ -1982,25 +2372,31 @@ def _render_date_group(label: str, candidates: List[Dict[str, object]], metrics:
   </div>
   %s
 </section>""" % (
-        escape(_date_group_short_label(label)),
+        escape(_date_group_short_label(group_value)),
         escape(label),
         escape(_paper_count_label(len(candidates))),
         "\n".join(_render_candidate(candidate, metrics) for candidate in candidates),
     )
 
 
-def _date_group_short_label(label: str) -> str:
-    try:
-        group_date = date.fromisoformat(label)
-    except ValueError:
-        return label or "Unknown date"
+def _date_group_display_label(value: object) -> str:
+    group_date = first_iso_date(value)
+    if group_date is None:
+        return "Unknown date"
+    return format_display_date(group_date, style="long")
+
+
+def _date_group_short_label(value: object) -> str:
+    group_date = first_iso_date(value)
+    if group_date is None:
+        return "Unknown date"
 
     today = date.today()
     if group_date == today:
         return "Today"
     if (today - group_date).days == 1:
         return "Yesterday"
-    return group_date.strftime("%b %d").replace(" 0", " ")
+    return format_display_date(group_date, style="short")
 
 
 def _paper_count_label(count: int) -> str:
@@ -2075,10 +2471,7 @@ def _detected_sort_key(candidate: Dict[str, object]):
 
 
 def _date_group_label(candidate: Dict[str, object]) -> str:
-    detected_date = first_iso_date(_candidate_detected_value(candidate))
-    if detected_date is None:
-        return "Unknown date"
-    return detected_date.isoformat()
+    return _date_group_display_label(_candidate_detected_value(candidate))
 
 
 def _date_group_sort_value(candidate: Dict[str, object]) -> str:

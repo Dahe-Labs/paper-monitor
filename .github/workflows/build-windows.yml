@@ -1,26 +1,27 @@
-name: Build Windows executable
-
-permissions:
-  contents: write
+name: Build Windows release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, with or without the v prefix"
+        description: Release version, with or without the v prefix
         required: true
-        default: "0.1.5"
+        default: "0.1.6"
       upload_release:
-        description: "Upload the executable to the matching GitHub Release"
+        description: Upload assets to an existing matching GitHub Release
         required: false
         type: boolean
         default: false
   release:
     types:
       - published
-  push:
-    tags:
-      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
 
 jobs:
   build-windows:
@@ -28,56 +29,112 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-windows.txt
-
-      - name: Build executable
-        shell: pwsh
-        run: .\scripts\build_windows_app.ps1
-
-      - name: Package release asset
-        id: package
+      - name: Resolve release version
+        id: version
         shell: pwsh
         env:
-          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+          REQUESTED_VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           $version = $env:REQUESTED_VERSION
-          if (-not $version) {
+          if ([string]::IsNullOrWhiteSpace($version)) {
             $version = $env:RELEASE_TAG
           }
-          if (-not $version) {
-            $version = $env:REF_NAME.TrimStart("v")
+          $version = $version.Trim().TrimStart("v")
+          if ($version -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$') {
+            throw "Invalid release version: $version"
           }
-          $version = $version.TrimStart("v")
-          $tagName = "v$version"
-          $assetName = "Paper-Monitor-Windows-$version.exe"
-          New-Item -ItemType Directory -Force -Path "dist\release" | Out-Null
-          Copy-Item "dist\windows\PaperMonitor.exe" "dist\release\$assetName"
-          "asset_name=$assetName" >> $env:GITHUB_OUTPUT
-          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
 
-      - name: Upload executable artifact
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-windows.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-windows.txt
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Import optional signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            "thumbprint=" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "paper-monitor-signing.pfx"
+          try {
+            [System.IO.File]::WriteAllBytes(
+              $certificatePath,
+              [System.Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64)
+            )
+            $password = ConvertTo-SecureString $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $imported = @(Import-PfxCertificate -FilePath $certificatePath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+            $certificate = $imported | Where-Object HasPrivateKey | Select-Object -First 1
+            if ($null -eq $certificate) {
+              throw "The imported PFX does not contain a certificate with a private key."
+            }
+          } finally {
+            if (Test-Path -LiteralPath $certificatePath) {
+              Remove-Item -LiteralPath $certificatePath -Force
+            }
+          }
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+
+      - name: Build complete Windows release
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          SIGNING_THUMBPRINT: ${{ steps.signing.outputs.thumbprint }}
+        run: |
+          $parameters = @{
+            Version = $env:RELEASE_VERSION
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_THUMBPRINT)) {
+            $parameters.CodeSigningCertificateThumbprint = $env:SIGNING_THUMBPRINT
+            $parameters.TimestampUrl = "http://timestamp.digicert.com"
+            $parameters.RequireSignature = $true
+          }
+          .\scripts\package_windows_release.ps1 @parameters
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.asset_name }}
-          path: dist/release/${{ steps.package.outputs.asset_name }}
+          name: PaperMonitor-Windows-${{ steps.version.outputs.version }}
           if-no-files-found: error
+          path: |
+            public_release/Paper-Monitor-Windows-${{ steps.version.outputs.version }}.exe
+            public_release/Paper-Monitor-Windows-${{ steps.version.outputs.version }}.zip
+            public_release/Paper-Monitor-Windows-${{ steps.version.outputs.version }}-Setup.exe
+            public_release/SHA256SUMS-${{ steps.version.outputs.version }}.txt
 
-      - name: Upload executable to GitHub Release
-        if: ${{ github.event_name == 'release' || github.event.inputs.upload_release == 'true' }}
+      - name: Upload assets to GitHub Release
+        if: ${{ github.event_name == 'release' || inputs.upload_release }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          gh release upload "${{ steps.package.outputs.tag_name }}" "dist\release\${{ steps.package.outputs.asset_name }}#${{ steps.package.outputs.asset_name }}" --clobber
+          $assets = @(
+            "public_release\Paper-Monitor-Windows-$env:RELEASE_VERSION.exe",
+            "public_release\Paper-Monitor-Windows-$env:RELEASE_VERSION.zip",
+            "public_release\Paper-Monitor-Windows-$env:RELEASE_VERSION-Setup.exe",
+            "public_release\SHA256SUMS-$env:RELEASE_VERSION.txt"
+          )
+          gh release upload $env:RELEASE_TAG @assets --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub Release upload failed with exit code $LASTEXITCODE"
+          }

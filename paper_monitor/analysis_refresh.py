@@ -9,7 +9,6 @@ from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
 from .models import Article
 from .sources import fetch_all_sources
 
-
 FetchArticles = Callable[[Dict[str, object]], List[Article]]
 
 
@@ -155,12 +154,24 @@ def _crossref_only_source_config(
     if cache_dir is not None:
         crossref["cache_dir"] = str(cache_dir)
     if selected_journals is not None:
-        crossref["journal_titles"] = [str(journal) for journal in selected_journals if str(journal).strip()]
+        crossref["journal_titles"] = _formal_crossref_journal_titles(selected_journals)
     return {
         "rss": [],
         "crossref": crossref,
         "openalex": {"enabled": False},
     }
+
+
+def _formal_crossref_journal_titles(values: Sequence[str]) -> List[str]:
+    return [
+        str(journal).strip()
+        for journal in values
+        if str(journal).strip() and _normalized_key(journal) != "arxiv"
+    ]
+
+
+def _normalized_key(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
 def _int_setting(value: object, fallback: int) -> int:

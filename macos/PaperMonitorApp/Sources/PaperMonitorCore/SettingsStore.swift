@@ -1,8 +1,23 @@
 import Foundation
 
-public enum SettingsStoreError: Error, Equatable {
+public enum SettingsStoreError: Error, Equatable, LocalizedError {
     case noSelectedJournals
     case invalidInterval
+    case invalidRefreshStartTime
+    case missingOpenAlexAPIKey
+
+    public var errorDescription: String? {
+        switch self {
+        case .noSelectedJournals:
+            return "Select at least one journal or source."
+        case .invalidInterval:
+            return "Refresh interval must be greater than zero."
+        case .invalidRefreshStartTime:
+            return "Refresh start time must be empty or in HH:MM format."
+        case .missingOpenAlexAPIKey:
+            return "OpenAlex API key is required when OpenAlex is enabled."
+        }
+    }
 }
 
 public final class SettingsStore {
@@ -37,7 +52,10 @@ public final class SettingsStore {
         if let intervalSeconds = Self.intValue(payload["interval_seconds"]), intervalSeconds > 0 {
             settings.intervalSeconds = intervalSeconds
         }
-        settings.refreshStartTime = AppRefreshSettings.normalizedStartTime(Self.stringValue(payload["refresh_start_time"])) ?? ""
+        if let refreshStartTime = Self.refreshStartTimeValue(payload["refresh_start_time"]) {
+            settings.refreshStartTime = refreshStartTime
+        }
+        settings.runtime = Self.runtimeAppSettings(payload["app_settings"], fallback: settings.runtime)
 
         if let includeTerms = Self.stringArray(payload["include_terms"]) {
             settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(includeTerms)
@@ -50,21 +68,11 @@ public final class SettingsStore {
         let sourcesPayload = Self.dictionary(payload["sources"]) ?? [:]
         let crossrefPayload = Self.dictionary(sourcesPayload["crossref"]) ?? [:]
         let openalexPayload = Self.dictionary(sourcesPayload["openalex"]) ?? [:]
+        settings.openAlex = Self.openAlexSourceSettings(openalexPayload, fallback: settings.openAlex)
 
         var searchDirection = settings.searchDirection
         searchDirection.preset = Self.nonEmptyString(searchDirectionPayload["preset"]) ?? searchDirection.preset
         searchDirection.label = Self.nonEmptyString(searchDirectionPayload["label"]) ?? searchDirection.label
-        let directionKeywords = SettingsNormalizer.dedupeNonEmpty(
-            Self.stringArray(searchDirectionPayload["keywords"]) ?? []
-        )
-        if !directionKeywords.isEmpty {
-            searchDirection.keywords = directionKeywords
-            if searchDirection.preset == SearchDirectionEditor.customPresetIdentifier {
-                settings.includeTerms = directionKeywords
-            }
-        } else {
-            searchDirection.keywords = settings.includeTerms
-        }
         searchDirection.crossrefQuery = Self.nonEmptyString(searchDirectionPayload["crossref_query"])
             ?? Self.nonEmptyString(crossrefPayload["query"])
             ?? searchDirection.crossrefQuery
@@ -73,6 +81,23 @@ public final class SettingsStore {
             ?? searchDirection.openalexQuery
         searchDirection.queryManuallyEdited = Self.boolValue(searchDirectionPayload["query_manually_edited"])
             ?? searchDirection.queryManuallyEdited
+        let requestedPresetID = searchDirection.preset
+        if let preset = SearchPresetCatalog.bundled.definition(for: requestedPresetID),
+           preset.isCustom {
+            searchDirection.preset = preset.id
+            searchDirection.queryManuallyEdited = true
+        } else if let preset = SearchPresetCatalog.bundled.definition(for: requestedPresetID),
+                  !preset.isCustom {
+            let wasLegacyAlias = preset.id != requestedPresetID
+            searchDirection.preset = preset.id
+            searchDirection.label = preset.label
+            if wasLegacyAlias && !searchDirection.queryManuallyEdited {
+                searchDirection.crossrefQuery = preset.crossrefQuery
+                searchDirection.openalexQuery = preset.openalexQuery
+                settings.includeTerms = SettingsNormalizer.dedupeNonEmpty(preset.includeTerms)
+                settings.excludeTerms = SettingsNormalizer.dedupeNonEmpty(preset.excludeTerms)
+            }
+        }
         settings.searchDirection = searchDirection
 
         return settings
@@ -94,22 +119,34 @@ public final class SettingsStore {
         guard settings.intervalSeconds > 0 else {
             throw SettingsStoreError.invalidInterval
         }
+        guard let refreshStartTime = SettingsNormalizer.normalizedRefreshStartTime(settings.refreshStartTime) else {
+            throw SettingsStoreError.invalidRefreshStartTime
+        }
+        if settings.openAlex.enabled && settings.openAlex.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw SettingsStoreError.missingOpenAlexAPIKey
+        }
 
         var payload = try loadPayloadIfPresent()
-        payload["settings_schema_version"] = settings.schemaVersion
+        payload["settings_schema_version"] = max(settings.schemaVersion, 2)
         var journalScope = Self.dictionary(payload["journal_scope"]) ?? [:]
         journalScope["top_n"] = SettingsNormalizer.clampedTopN(settings.journalScope.topN)
         journalScope["selected_journals"] = selectedJournals
         payload["journal_scope"] = journalScope
         payload["interval_seconds"] = settings.intervalSeconds
-        payload["refresh_start_time"] = AppRefreshSettings.normalizedStartTime(settings.refreshStartTime) ?? ""
+        payload["refresh_start_time"] = refreshStartTime
+        payload["app_settings"] = [
+            "startup_enabled": settings.runtime.startupEnabled,
+            "show_tray_icon": settings.runtime.showTrayIcon,
+            "notifications_enabled": settings.runtime.notificationsEnabled,
+            "silent_startup_notifications": settings.runtime.silentStartupNotifications,
+            "refresh_on_launch": settings.runtime.refreshOnLaunch,
+        ]
         payload["include_terms"] = SettingsNormalizer.dedupeNonEmpty(settings.includeTerms)
         payload["exclude_terms"] = SettingsNormalizer.dedupeNonEmpty(settings.excludeTerms)
         payload["journals"] = selectedJournals
         var searchDirection = Self.dictionary(payload["search_direction"]) ?? [:]
         searchDirection["preset"] = settings.searchDirection.preset
         searchDirection["label"] = settings.searchDirection.label
-        searchDirection["keywords"] = SettingsNormalizer.dedupeNonEmpty(settings.searchDirection.keywords)
         searchDirection["crossref_query"] = settings.searchDirection.crossrefQuery
         searchDirection["openalex_query"] = settings.searchDirection.openalexQuery
         searchDirection["query_manually_edited"] = settings.searchDirection.queryManuallyEdited
@@ -122,6 +159,11 @@ public final class SettingsStore {
         sources["crossref"] = crossref
 
         var openalex = Self.dictionary(sources["openalex"]) ?? [:]
+        openalex["enabled"] = settings.openAlex.enabled
+        openalex["days_back"] = SettingsNormalizer.clampedOpenAlexDaysBack(settings.openAlex.daysBack)
+        openalex["per_page"] = SettingsNormalizer.clampedOpenAlexPerPage(settings.openAlex.perPage)
+        openalex["max_pages"] = SettingsNormalizer.clampedOpenAlexMaxPages(settings.openAlex.maxPages)
+        openalex["api_key"] = settings.openAlex.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         openalex["query"] = settings.searchDirection.openalexQuery
         sources["openalex"] = openalex
         var arxiv = Self.dictionary(sources["arxiv"]) ?? [:]
@@ -260,7 +302,39 @@ public final class SettingsStore {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func refreshStartTimeValue(_ value: Any?) -> String? {
+        guard value != nil else {
+            return nil
+        }
+        return AppRefreshSettings.normalizedRefreshStartTime(value) ?? ""
+    }
+
+    private static func runtimeAppSettings(_ value: Any?, fallback: RuntimeAppSettings) -> RuntimeAppSettings {
+        let payload = dictionary(value) ?? [:]
+        return RuntimeAppSettings(
+            startupEnabled: boolValue(payload["startup_enabled"]) ?? fallback.startupEnabled,
+            showTrayIcon: boolValue(payload["show_tray_icon"]) ?? fallback.showTrayIcon,
+            notificationsEnabled: boolValue(payload["notifications_enabled"]) ?? fallback.notificationsEnabled,
+            silentStartupNotifications: boolValue(payload["silent_startup_notifications"]) ?? fallback.silentStartupNotifications,
+            refreshOnLaunch: boolValue(payload["refresh_on_launch"]) ?? fallback.refreshOnLaunch
+        )
+    }
+
+    private static func openAlexSourceSettings(_ payload: [String: Any], fallback: OpenAlexSourceSettings) -> OpenAlexSourceSettings {
+        OpenAlexSourceSettings(
+            enabled: boolValue(payload["enabled"]) ?? fallback.enabled,
+            daysBack: SettingsNormalizer.clampedOpenAlexDaysBack(intValue(payload["days_back"]) ?? fallback.daysBack),
+            perPage: SettingsNormalizer.clampedOpenAlexPerPage(intValue(payload["per_page"]) ?? fallback.perPage),
+            maxPages: SettingsNormalizer.clampedOpenAlexMaxPages(intValue(payload["max_pages"]) ?? fallback.maxPages),
+            apiKey: (stringValue(payload["api_key"]) ?? fallback.apiKey)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
     private static func stringValue(_ value: Any?) -> String? {
-        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let string = value as? String else {
+            return nil
+        }
+        return string
     }
 }

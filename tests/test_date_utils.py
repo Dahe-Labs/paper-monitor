@@ -11,7 +11,7 @@ class DateUtilsTests(unittest.TestCase):
         self.assertIsNone(first_iso_date("not a date"))
 
     def test_display_article_date_normalizes_full_dates_and_preserves_partial_dates(self):
-        self.assertEqual(display_article_date("Published: 2026-10-15"), "2026-10-15")
+        self.assertEqual(display_article_date("Published: 2026-10-15"), "Oct 15, 2026")
         self.assertEqual(display_article_date("2026-10"), "2026-10")
         self.assertEqual(display_article_date(None), "")
 

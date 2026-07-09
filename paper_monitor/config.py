@@ -1,12 +1,13 @@
-import json
 import copy
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
 
 from .filtering import FilterConfig
+from .journal_metrics import load_journal_metrics
 from .monitor import MonitorConfig
-
+from .search_presets import DEFAULT_SEARCH_DIRECTION
 
 SOURCE_ONLY_JOURNAL_KEYS = {"arxiv"}
 
@@ -15,10 +16,17 @@ DEFAULT_CONFIG = {
     "database_path": "work/paper-monitor/articles.sqlite3",
     "dashboard_path": "work/paper-monitor/dashboard/latest.html",
     "journal_metrics_path": "journal_metrics.json",
-    "settings_schema_version": 1,
+    "settings_schema_version": 2,
     "interval_seconds": 43200,
     "refresh_start_time": "",
     "max_notifications": 5,
+    "app_settings": {
+        "startup_enabled": False,
+        "show_tray_icon": True,
+        "notifications_enabled": True,
+        "silent_startup_notifications": True,
+        "refresh_on_launch": True,
+    },
     "include_terms": [
         "all-solid-state battery",
         "all-solid-state batteries",
@@ -101,25 +109,7 @@ DEFAULT_CONFIG = {
             "Joule",
         ],
     },
-    "search_direction": {
-        "preset": "solid_state_battery_general",
-        "label": "Solid-state battery general",
-        "keywords": [
-            "solid electrolyte",
-            "electrolyte",
-            "all-solid-state battery",
-            "solid-state battery",
-            "electrode",
-            "LLZTO",
-            "LLZO",
-            "silicon anode",
-            "Si anode",
-            "NCM",
-        ],
-        "crossref_query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
-        "openalex_query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
-        "query_manually_edited": False,
-    },
+    "search_direction": copy.deepcopy(DEFAULT_SEARCH_DIRECTION),
     "sources": {
         "rss": [
             {
@@ -146,15 +136,18 @@ DEFAULT_CONFIG = {
             "rows_per_journal": 25,
             "timeout_seconds": 20,
             "max_workers": 3,
+            "retry_count": 2,
+            "min_request_interval_seconds": None,
             "journal_titles": [],
-            "query": "solid electrolyte OR electrolyte OR all-solid-state battery OR solid-state battery OR electrode OR LLZTO OR LLZO OR silicon anode OR Si anode OR NCM",
+            "query": DEFAULT_SEARCH_DIRECTION["crossref_query"],
             "mailto": "",
         },
         "openalex": {
             "enabled": False,
             "days_back": 15,
             "per_page": 100,
-            "query": "solid electrolyte electrolyte all-solid-state battery solid-state battery electrode LLZTO LLZO silicon anode Si anode NCM",
+            "max_pages": 3,
+            "query": DEFAULT_SEARCH_DIRECTION["openalex_query"],
             "api_key": "",
         },
         "arxiv": {
@@ -170,6 +163,15 @@ DEFAULT_CONFIG = {
 
 
 @dataclass(frozen=True)
+class RuntimeAppSettings:
+    startup_enabled: bool
+    show_tray_icon: bool
+    notifications_enabled: bool
+    silent_startup_notifications: bool
+    refresh_on_launch: bool
+
+
+@dataclass(frozen=True)
 class AppConfig:
     database_path: Path
     dashboard_path: Path
@@ -179,6 +181,7 @@ class AppConfig:
     monitor_config: MonitorConfig
     source_config: Dict[str, object]
     journal_scope_top_n: int
+    app_settings: RuntimeAppSettings
 
 
 def write_default_config(path: Path) -> None:
@@ -189,19 +192,20 @@ def write_default_config(path: Path) -> None:
 
 def load_app_config(path: Path) -> AppConfig:
     path = Path(path)
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
     database_path = _resolve_path(path.parent, str(raw.get("database_path") or DEFAULT_CONFIG["database_path"]))
     dashboard_path = _resolve_path(path.parent, str(raw.get("dashboard_path") or DEFAULT_CONFIG["dashboard_path"]))
     journal_metrics_path = _resolve_path(
         path.parent,
         str(raw.get("journal_metrics_path") or DEFAULT_CONFIG["journal_metrics_path"]),
     )
-    include_terms = _include_terms(raw)
+    selected_journals = _selected_journals(raw)
     monitor_config = MonitorConfig(
         filter_config=FilterConfig(
-            include_terms=include_terms,
+            include_terms=_dedupe_nonempty(raw.get("include_terms", DEFAULT_CONFIG["include_terms"])),
             exclude_terms=_dedupe_nonempty(raw.get("exclude_terms", DEFAULT_CONFIG["exclude_terms"])),
-            journals=_selected_journals(raw),
+            journals=selected_journals,
+            journal_aliases=_journal_aliases(journal_metrics_path, selected_journals),
         ),
         max_notifications=int(raw.get("max_notifications", DEFAULT_CONFIG["max_notifications"])),
     )
@@ -226,10 +230,11 @@ def load_app_config(path: Path) -> AppConfig:
         dashboard_path=dashboard_path,
         journal_metrics_path=journal_metrics_path,
         interval_seconds=int(raw.get("interval_seconds", DEFAULT_CONFIG["interval_seconds"])),
-        refresh_start_time=_normalized_start_time(raw.get("refresh_start_time")) or "",
+        refresh_start_time=_refresh_start_time(raw),
         monitor_config=monitor_config,
         source_config=source_config,
         journal_scope_top_n=_journal_scope_top_n(raw, len(journals)),
+        app_settings=_app_settings(raw),
     )
 
 
@@ -267,6 +272,20 @@ def _contains_source_candidate(values, source_key: str) -> bool:
     return any(_normalize_key(value) == normalized for value in values)
 
 
+def _journal_aliases(path: Path, journals) -> Dict[str, list]:
+    try:
+        metrics = load_journal_metrics(path)
+    except Exception:
+        return {}
+    aliases = {}
+    for journal in journals:
+        names = metrics.names_for(journal)
+        values = [name for name in names if _normalize_key(name) != _normalize_key(journal)]
+        if values:
+            aliases[journal] = values
+    return aliases
+
+
 def _normalize_key(value) -> str:
     return " ".join(str(value or "").casefold().split())
 
@@ -287,34 +306,14 @@ def _search_direction_queries(raw):
         return None, None
     crossref_query = str(direction.get("crossref_query") or "").strip()
     openalex_query = str(direction.get("openalex_query") or "").strip()
-    keywords = _search_direction_keywords(raw)
-    if keywords and not bool(direction.get("query_manually_edited")):
-        crossref_query = crossref_query or " OR ".join(keywords)
-        openalex_query = openalex_query or " ".join(keywords)
     return crossref_query or None, openalex_query or None
 
 
-def _include_terms(raw):
-    direction_keywords = _search_direction_keywords(raw)
-    direction = raw.get("search_direction")
-    preset = direction.get("preset") if isinstance(direction, dict) else ""
-    if direction_keywords and _normalize_key(preset) == "custom":
-        return direction_keywords
-    return _dedupe_nonempty(raw.get("include_terms", DEFAULT_CONFIG["include_terms"]))
-
-
-def _search_direction_keywords(raw):
-    direction = raw.get("search_direction")
-    if not isinstance(direction, dict):
-        return []
-    return _dedupe_nonempty(direction.get("keywords", []))
-
-
-def _normalized_start_time(value):
-    text = str(value or "").strip()
-    if not text:
+def _refresh_start_time(raw) -> str:
+    value = str(raw.get("refresh_start_time") or "").strip()
+    if not value:
         return ""
-    parts = text.split(":")
+    parts = value.split(":")
     if len(parts) != 2:
         return ""
     try:
@@ -322,9 +321,36 @@ def _normalized_start_time(value):
         minute = int(parts[1])
     except ValueError:
         return ""
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
         return ""
     return f"{hour:02d}:{minute:02d}"
+
+
+def _app_settings(raw) -> RuntimeAppSettings:
+    defaults = DEFAULT_CONFIG["app_settings"]
+    values = raw.get("app_settings") if isinstance(raw.get("app_settings"), dict) else {}
+    return RuntimeAppSettings(
+        startup_enabled=_bool_value(values.get("startup_enabled"), bool(defaults["startup_enabled"])),
+        show_tray_icon=_bool_value(values.get("show_tray_icon"), bool(defaults["show_tray_icon"])),
+        notifications_enabled=_bool_value(values.get("notifications_enabled"), bool(defaults["notifications_enabled"])),
+        silent_startup_notifications=_bool_value(
+            values.get("silent_startup_notifications"),
+            bool(defaults["silent_startup_notifications"]),
+        ),
+        refresh_on_launch=_bool_value(values.get("refresh_on_launch"), bool(defaults["refresh_on_launch"])),
+    )
+
+
+def _bool_value(value, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off"}:
+            return False
+    return fallback
 
 
 def _resolve_path(base_dir: Path, value: str) -> Path:

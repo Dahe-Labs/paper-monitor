@@ -5,19 +5,27 @@ import WebKit
 public final class DashboardCommandController: NSObject, WKScriptMessageHandler {
     public nonisolated static let maximumSearchTermLength = 120
     public typealias KeywordAnalysisRunner = @Sendable (KeywordAnalysisRequest) throws -> String
+    public typealias RefreshRunner = @Sendable () throws -> RefreshResult
 
     private let settingsStore: SettingsStore
     private let keywordAnalysisRunner: KeywordAnalysisRunner?
+    private let refreshRunner: RefreshRunner?
+    private let refreshResultHandler: (@MainActor @Sendable (RefreshResult) -> Void)?
     private var evaluateJavaScript: ((String) -> Void)?
     private var keywordAnalysisTask: Task<Void, Never>?
+    private var refreshTask: Task<Void, Never>?
 
     public init(
         settingsStore: SettingsStore,
         keywordAnalysisRunner: KeywordAnalysisRunner? = nil,
+        refreshRunner: RefreshRunner? = nil,
+        refreshResultHandler: (@MainActor @Sendable (RefreshResult) -> Void)? = nil,
         evaluateJavaScript: ((String) -> Void)? = nil
     ) {
         self.settingsStore = settingsStore
         self.keywordAnalysisRunner = keywordAnalysisRunner
+        self.refreshRunner = refreshRunner
+        self.refreshResultHandler = refreshResultHandler
         self.evaluateJavaScript = evaluateJavaScript
     }
 
@@ -42,6 +50,9 @@ public final class DashboardCommandController: NSObject, WKScriptMessageHandler 
         }
         if type == "analyzeKeywords" {
             return handleKeywordAnalysis(payload)
+        }
+        if type == "refreshNow" {
+            return handleRefreshNow()
         }
         return false
     }
@@ -90,6 +101,34 @@ public final class DashboardCommandController: NSObject, WKScriptMessageHandler 
         return true
     }
 
+    private func handleRefreshNow() -> Bool {
+        guard let refreshRunner else {
+            return false
+        }
+        if refreshTask != nil {
+            evaluateJavaScript?(Self.refreshFinishedCallbackScript(ok: false, message: "Already Refreshing"))
+            return true
+        }
+
+        refreshTask = Task { [weak self, refreshRunner] in
+            defer {
+                self?.refreshTask = nil
+            }
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try refreshRunner()
+                }.value
+                self?.refreshResultHandler?(result)
+                self?.evaluateJavaScript?(Self.refreshFinishedCallbackScript(ok: true, message: ""))
+            } catch {
+                self?.evaluateJavaScript?(
+                    Self.refreshFinishedCallbackScript(ok: false, message: "Refresh failed")
+                )
+            }
+        }
+        return true
+    }
+
     public nonisolated static func keywordAnalysisRequest(from payload: [String: Any]) -> KeywordAnalysisRequest? {
         guard payload["type"] as? String == "analyzeKeywords",
               let dateFrom = normalizedSearchTerm(payload["date_from"] as? String ?? ""),
@@ -120,6 +159,12 @@ public final class DashboardCommandController: NSObject, WKScriptMessageHandler 
         let data = (try? JSONSerialization.data(withJSONObject: ["error": message], options: [])) ?? Data()
         let json = String(data: data, encoding: .utf8) ?? #"{"error":"Keyword analysis failed"}"#
         return keywordAnalysisCallbackScript(jsonPayload: json)
+    }
+
+    public nonisolated static func refreshFinishedCallbackScript(ok: Bool, message: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: [ok, message], options: [])) ?? Data()
+        let json = String(data: data, encoding: .utf8) ?? #"[false,"Refresh failed"]"#
+        return "window.paperMonitorRefreshFinished.apply(window, \(json));"
     }
 
     public nonisolated static func normalizedSearchTerm(_ term: String) -> String? {

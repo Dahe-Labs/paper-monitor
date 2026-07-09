@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.paper-monitor/config.schema.json",
+  "title": "Paper Monitor config",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "database_path",
+    "dashboard_path",
+    "journal_metrics_path",
+    "settings_schema_version",
+    "interval_seconds",
+    "include_terms",
+    "exclude_terms",
+    "journals",
+    "journal_scope",
+    "search_direction",
+    "sources"
+  ],
+  "properties": {
+    "database_path": {
+      "type": "string"
+    },
+    "dashboard_path": {
+      "type": "string"
+    },
+    "journal_metrics_path": {
+      "type": "string"
+    },
+    "settings_schema_version": {
+      "type": "integer",
+      "minimum": 2
+    },
+    "interval_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 2592000
+    },
+    "refresh_start_time": {
+      "type": "string",
+      "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+    },
+    "max_notifications": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "app_settings": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "startup_enabled": {
+          "type": "boolean"
+        },
+        "show_tray_icon": {
+          "type": "boolean"
+        },
+        "notifications_enabled": {
+          "type": "boolean"
+        },
+        "silent_startup_notifications": {
+          "type": "boolean"
+        },
+        "refresh_on_launch": {
+          "type": "boolean"
+        }
+      }
+    },
+    "include_terms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "maxItems": 500
+    },
+    "exclude_terms": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "maxItems": 500
+    },
+    "journals": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "maxItems": 300
+    },
+    "journal_scope": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "top_n": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "selected_journals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "maxItems": 300
+        }
+      }
+    },
+    "search_direction": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "preset": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "crossref_query": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "openalex_query": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "query_manually_edited": {
+          "type": "boolean"
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "rss": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "crossref": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "days_back": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            },
+            "rows": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "rows_per_journal": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            },
+            "max_workers": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 16
+            },
+            "retry_count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10
+            },
+            "min_request_interval_seconds": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "journal_titles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "query": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "mailto": {
+              "type": "string",
+              "maxLength": 254
+            }
+          }
+        },
+        "openalex": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "days_back": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            },
+            "per_page": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "max_pages": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "description": "Maximum OpenAlex cursor pages to fetch for one refresh."
+            },
+            "query": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "api_key": {
+              "type": "string",
+              "maxLength": 500,
+              "description": "Required when sources.openalex.enabled is true."
+            }
+          }
+        },
+        "arxiv": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "days_back": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            },
+            "max_results": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000
+            },
+            "query": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "search_field": {
+              "enum": [
+                "title",
+                "all"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            }
+          }
+        }
+      }
+    }
+  }
+}

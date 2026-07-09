@@ -1,11 +1,11 @@
 import Foundation
 
 public enum BundledRuntimeInstaller {
-    public static func installFromMainBundle(appSupportDirectory: URL) {
+    public static func installFromMainBundle(appSupportDirectory: URL) throws {
         guard let resourcesURL = Bundle.main.resourceURL else {
             return
         }
-        try? install(resourcesURL: resourcesURL, appSupportDirectory: appSupportDirectory)
+        try install(resourcesURL: resourcesURL, appSupportDirectory: appSupportDirectory)
     }
 
     public static func install(resourcesURL: URL, appSupportDirectory: URL) throws {

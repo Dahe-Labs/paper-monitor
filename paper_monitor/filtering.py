@@ -1,6 +1,6 @@
 import re
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 from .models import Article
 
@@ -10,6 +10,7 @@ class FilterConfig:
     include_terms: List[str]
     exclude_terms: List[str]
     journals: List[str]
+    journal_aliases: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,7 @@ def match_article(article: Article, config: FilterConfig) -> MatchResult:
     if excluded:
         return MatchResult(False, "excluded-term", [], None)
 
-    journal_match = _match_journal(article.journal, config.journals)
+    journal_match = _match_journal(article.journal, config.journals, config.journal_aliases)
     if config.journals and journal_match is None:
         return MatchResult(False, "journal-not-allowed", [], None)
 
@@ -43,13 +44,17 @@ def _searchable_text(article: Article) -> str:
 
 def _contains_term(text: str, term: str) -> bool:
     normalized = _normalize_search_text(term)
-    return bool(normalized) and normalized in text
+    if not normalized:
+        return False
+    return bool(re.search(r"(?:^| )%s(?: |$)" % re.escape(normalized), text))
 
 
-def _match_journal(journal: str, allowlist: List[str]) -> Optional[str]:
+def _match_journal(journal: str, allowlist: List[str], aliases: Optional[Dict[str, List[str]]] = None) -> Optional[str]:
     normalized_journal = _normalize_name(journal)
+    alias_map = aliases or {}
     for allowed in allowlist:
-        if _normalize_name(allowed) == normalized_journal:
+        allowed_names = [allowed] + list(alias_map.get(allowed, []))
+        if any(_normalize_name(candidate) == normalized_journal for candidate in allowed_names):
             return allowed
     return None
 
