@@ -111,8 +111,12 @@ jobs:
             public_release/SHA256SUMS-0.0.0-ci.${{ github.run_number }}.txt
 
   macos-swift-tests:
-    name: macOS Swift tests
-    runs-on: macos-latest
+    name: macOS Swift tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
 
     steps:
       - name: Checkout
