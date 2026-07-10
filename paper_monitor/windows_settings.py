@@ -19,7 +19,7 @@ class SettingsError(ValueError):
 INT_RANGES = {
     "interval_seconds": (60, 60 * 60 * 24 * 30),
     "max_notifications": (1, 100),
-    "journal_scope.top_n": (1, 50),
+    "journal_scope.top_n": (1, 300),
     "sources.crossref.days_back": (1, 3650),
     "sources.crossref.rows": (1, 1000),
     "sources.crossref.rows_per_journal": (1, 1000),
@@ -36,7 +36,7 @@ INT_RANGES = {
 LIST_LIMITS = {
     "include_terms": (500, 160),
     "exclude_terms": (500, 160),
-    "journal_scope.selected_journals": (300, 200),
+    "journal_scope.selected_journals": (500, 200),
 }
 
 REFRESH_FREQUENCY_OPTIONS = [
@@ -123,17 +123,19 @@ def _settings_payload_from_raw(raw: Mapping[str, object], config_path: Optional[
     default_openalex = _source_mapping(default_sources, "openalex")
     default_arxiv = _source_mapping(default_sources, "arxiv")
 
-    selected_journals = _dedupe_list(
-        scope.get("selected_journals", []),
-        "journal_scope.selected_journals",
-    )
-    if not selected_journals:
+    if "selected_journals" in scope:
+        selected_journals = _dedupe_list(
+            scope.get("selected_journals", []),
+            "journal_scope.selected_journals",
+        )
+    else:
         selected_journals = _dedupe_list(
             raw.get("journals", default_scope.get("selected_journals", [])),
             "journal_scope.selected_journals",
         )
     arxiv_raw_enabled = arxiv.get("enabled", default_arxiv.get("enabled", False))
     arxiv_enabled = _bool_value(arxiv_raw_enabled) or _contains_normalized(selected_journals, "arxiv")
+    selected_journals = _sync_arxiv_selection(selected_journals, arxiv_enabled)
 
     crossref_query = _clean_text(
         search_direction.get("crossref_query")
@@ -235,10 +237,15 @@ def _journal_catalog_payload(raw: Mapping[str, object], config_path: Optional[Pa
     entries = [
         {
             "journal": metric.journal,
+            "aliases": list(metric.aliases),
             "rank": metric.rank,
             "impact_factor": metric.impact_factor,
             "impact_factor_year": metric.impact_factor_year,
+            "impact_metric": metric.impact_metric,
+            "impact_label": metric.impact_label,
+            "category": metric.category,
             "level": metric.level,
+            "source_url": metric.source_url,
             "default_selected": metric.default_selected,
         }
         for metric in metrics

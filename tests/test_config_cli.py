@@ -97,21 +97,41 @@ class ConfigAndCliTests(unittest.TestCase):
 
         self.assertEqual(example["journals"], expected)
         metric_names = [item["journal"] for item in metrics["journals"]]
-        self.assertEqual(metric_names[:30], expected)
-        self.assertEqual(len(metric_names), 51)
+        self.assertTrue(set(expected).issubset(metric_names))
+        formal_metrics = [item for item in metrics["journals"] if item["default_selected"]]
+        self.assertEqual(len(formal_metrics), 300)
+        self.assertEqual(len(metric_names), 301)
+        self.assertTrue(all(item["impact_factor"] > 0 for item in formal_metrics))
+        self.assertTrue(all(item["category"] for item in formal_metrics))
+        self.assertGreaterEqual(len({item["category"] for item in formal_metrics}), 10)
+        self.assertEqual(metrics["metric"]["name"], "OpenAlex 2-year mean citedness")
         self.assertIn("arXiv", metric_names)
         arxiv_metric = next(item for item in metrics["journals"] if item["journal"] == "arXiv")
         self.assertIsNone(arxiv_metric["impact_factor"])
         self.assertFalse(arxiv_metric["default_selected"])
         self.assertNotIn("arXiv", example["journals"])
         self.assertNotIn("arXiv", example["journal_scope"]["selected_journals"])
-        self.assertEqual([item["rank"] for item in metrics["journals"][:50]], list(range(1, 51)))
+        self.assertEqual([item["rank"] for item in metrics["journals"]], list(range(1, 302)))
         self.assertEqual(example["journal_scope"]["top_n"], 15)
         self.assertEqual(example["journal_scope"]["selected_journals"], default_selected)
         if active is not None:
             self.assertEqual(active["journals"], expected)
             self.assertEqual(active["journal_scope"]["top_n"], 15)
             self.assertEqual(active["journal_scope"]["selected_journals"], default_selected)
+
+    def test_explicit_empty_journal_selection_does_not_fall_back_to_legacy_journals(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            payload = json.loads(json.dumps(DEFAULT_CONFIG))
+            payload["journals"] = ["Nature Energy"]
+            payload["journal_scope"]["selected_journals"] = []
+            payload["sources"]["arxiv"]["enabled"] = False
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            config = load_app_config(config_path)
+
+        self.assertEqual(config.monitor_config.filter_config.journals, [])
+        self.assertEqual(config.source_config["crossref"]["journal_titles"], [])
 
     def test_loads_user_overrides_from_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -213,13 +233,6 @@ class ConfigAndCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config.json"
             payloads = [
-                {
-                    "journal_scope": {"top_n": 10, "selected_journals": []},
-                    "journals": ["Nature", "Science"],
-                    "include_terms": ["solid electrolyte"],
-                    "exclude_terms": [],
-                    "sources": {"rss": [], "crossref": {"enabled": True, "journal_titles": []}},
-                },
                 {
                     "journal_scope": {"top_n": 10},
                     "journals": ["Nature", "Science"],

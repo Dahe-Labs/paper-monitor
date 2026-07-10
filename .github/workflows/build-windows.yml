@@ -6,7 +6,7 @@ on:
       version:
         description: Release version, with or without the v prefix
         required: true
-        default: "0.1.6"
+        default: "0.1.7"
       upload_release:
         description: Upload assets to an existing matching GitHub Release
         required: false

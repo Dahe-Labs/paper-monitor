@@ -2,7 +2,7 @@
 
 [中文说明](README.zh-CN.md)
 
-Paper Monitor is a local desktop monitor for newly published research papers. The current build focuses on solid-state battery literature and combines journal-scoped Crossref/RSS/arXiv retrieval, local deduplication, keyword analysis, and native Windows and macOS apps.
+Paper Monitor is a local desktop monitor for newly published research papers. Its default query focuses on solid-state battery literature, while its 300-journal interdisciplinary catalog covers AI, computing, engineering, health, life science, physical science, and social science fields.
 
 The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default. arXiv is available as an optional preprint source, but it is not selected by default.
 
@@ -17,10 +17,11 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 - Settings Apply workflow with visible unsaved/saved state.
 - Custom search directions with editable names and keyword-derived queries.
 - Refresh schedules with 1 day / 2 days intervals and an optional daily start time.
-- HTML dashboard grouped by detected date, with sorting by time, impact factor, and relevance.
+- HTML dashboard grouped by detected date, with sorting by time, two-year impact, and relevance.
 - Keyword analysis with date range, journal scope, candidate term filtering, block terms, taxonomy editing, and compact analysis paper list.
 - Configurable search terms, excluded terms, journal scope, refresh interval, and Top N journal selection.
-- Journal metric metadata from `journal_metrics.json`.
+- Searchable and category-filtered metadata for 300 formal journals from `journal_metrics.json`.
+- A frozen OpenAlex two-year mean citedness snapshot labeled `2Y Impact`; it is not Clarivate JIF.
 - Latest Releases list macOS and Windows assets under the same version number when both builds are available.
 
 ## Download
@@ -58,7 +59,7 @@ Build the complete Windows release:
 
 ```powershell
 python -m pip install -r requirements-windows.txt
-.\scripts\package_windows_release.ps1 -Version 0.1.6
+.\scripts\package_windows_release.ps1 -Version 0.1.7
 ```
 
 Run the native macOS tests:

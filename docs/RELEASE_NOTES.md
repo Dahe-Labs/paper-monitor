@@ -1,5 +1,26 @@
 # Paper Monitor Release Notes
 
+## 0.1.7
+
+### Interdisciplinary Journal Catalog
+
+- The bundled catalog now contains 300 formal journals across AI and computer science, engineering, medicine, life sciences, physics, chemistry, materials and energy, environmental science, mathematics, social science, economics, and multidisciplinary research.
+- Every formal journal includes a frozen OpenAlex two-year mean citedness value, category, source record, catalog rank, and display label.
+- The catalog generator retains the original battery and materials titles, balances subject coverage, rejects implausible merged source records, and normalizes display names.
+
+### Compact Journal Selection
+
+- Windows Settings and Keyword Analysis now support category filtering and journal name/alias search.
+- Selected and candidate journals use compact single-line rows with the journal name and `2Y Impact` value.
+- Long catalogs scroll inside a bounded pane instead of expanding the entire page.
+- Matched-paper cards use tighter spacing, and desktop/narrow layouts were verified without horizontal overflow.
+
+### Selection Reliability
+
+- Removing a journal no longer triggers candidate synchronization during redraw, preventing it from being silently re-selected.
+- Explicit empty journal selections are retained instead of falling back to the legacy `journals` field.
+- Behavior tests cover add/remove round trips, save/reload persistence, and Dashboard analysis selection.
+
 ## 0.1.6
 
 ### Windows Window And Tray Reliability

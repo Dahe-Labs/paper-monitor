@@ -232,14 +232,19 @@
       if (!journal) {
         return null;
       }
-      const impact = Number(entry.impact_factor);
+      const impact = entry.impact_factor == null ? null : Number(entry.impact_factor);
       const rank = Number(entry.rank);
       return {
         journal: journal,
+        aliases: Array.isArray(entry.aliases) ? entry.aliases.map(normalizeJournalName).filter(Boolean) : [],
         rank: Number.isFinite(rank) ? rank : null,
-        impact_factor: Number.isFinite(impact) ? impact : null,
+        impact_factor: impact != null && Number.isFinite(impact) ? impact : null,
         impact_factor_year: entry.impact_factor_year || null,
+        impact_metric: String(entry.impact_metric || "Journal Impact Factor"),
+        impact_label: String(entry.impact_label || "IF"),
+        category: String(entry.category || "Uncategorized"),
         level: String(entry.level || ""),
+        source_url: String(entry.source_url || ""),
         default_selected: entry.default_selected !== false,
         custom: Boolean(entry.custom)
       };
@@ -267,12 +272,25 @@
             return entry && entry.journal;
           },
           makeCandidate: function (journal) {
-            return { journal: journal, rank: null, impact_factor: null, custom: true };
+            return {
+              journal: journal,
+              aliases: [],
+              rank: null,
+              impact_factor: null,
+              impact_label: "Manual",
+              category: "Manual",
+              custom: true
+            };
           }
         });
       }
-      journalDualList.setCandidates(rawJournalEntries());
       return journalDualList;
+    }
+
+    function syncJournalCandidates() {
+      const model = ensureJournalDualList();
+      model.setCandidates(rawJournalEntries());
+      return model;
     }
 
     function catalogEntries() {
@@ -288,7 +306,10 @@
 
     function impactLabel(entry) {
       if (entry && entry.impact_factor != null) {
-        return "IF " + Number(entry.impact_factor).toFixed(1);
+        return String(entry.impact_label || "Impact") + " " + Number(entry.impact_factor).toFixed(1);
+      }
+      if (entry && entry.impact_label) {
+        return String(entry.impact_label);
       }
       if (entry && entry.rank != null) {
         return "#" + entry.rank;
@@ -336,7 +357,13 @@
       button.dataset.dualListItem = "journal-filter";
       button.dataset.dualListSource = selected ? "selected" : "candidate";
       button.draggable = true;
-      button.title = selected ? "Remove " + entry.journal : "Add " + entry.journal;
+      button.setAttribute("aria-label", (selected ? "Remove " : "Add ") + entry.journal);
+      button.title = [
+        selected ? "Remove " + entry.journal : "Add " + entry.journal,
+        entry.category || "",
+        entry.impact_metric || "",
+        entry.impact_factor_year || ""
+      ].filter(Boolean).join(" · ");
       button.addEventListener("click", function () {
         if (selected) {
           removeSelectedJournal(entry.journal);
@@ -369,8 +396,11 @@
       selectedJournals = model.selected();
       const selectedEntries = model.selectedEntries();
       const query = field("journal_search") ? journalKey(field("journal_search").value) : "";
+      const category = field("journal_category") ? field("journal_category").value : "";
       const candidates = model.availableEntries(function (entry) {
-        return !query || journalKey(entry.journal).includes(query) || String(entry.level || "").toLowerCase().includes(query);
+        const matchesCategory = !category || entry.category === category;
+        const searchable = [entry.journal, entry.category, entry.level].concat(entry.aliases || []).join(" ");
+        return matchesCategory && (!query || journalKey(searchable).includes(query));
       }).sort(compareJournalEntries);
 
       selectedList.textContent = "";
@@ -406,16 +436,48 @@
 
     function setJournalPicker(catalog, selected) {
       journalCatalog = (Array.isArray(catalog) ? catalog : []).map(normalizeJournalEntry).filter(Boolean);
-      const model = ensureJournalDualList();
-      model.setSelected(selected);
-      selectedJournals = model.selected();
       const catalogKeys = new Set(journalCatalog.map(function (entry) { return journalKey(entry.journal); }));
-      extraJournalCandidates = selectedJournals.filter(function (journal) {
+      extraJournalCandidates = dedupeJournals(selected).filter(function (journal) {
         return !catalogKeys.has(journalKey(journal));
       }).map(function (journal) {
-        return { journal: journal, rank: null, impact_factor: null, custom: true };
+        return {
+          journal: journal,
+          aliases: [],
+          rank: null,
+          impact_factor: null,
+          impact_label: "Manual",
+          category: "Manual",
+          custom: true
+        };
       });
+      const model = syncJournalCandidates();
+      model.setSelected(selected);
+      selectedJournals = model.selected();
+      fillJournalCategoryOptions();
       renderJournalPicker();
+    }
+
+    function fillJournalCategoryOptions() {
+      const select = field("journal_category");
+      if (!select) return;
+      const current = select.value;
+      const categories = Array.from(new Set(journalCatalog.map(function (entry) {
+        return entry.category;
+      }).filter(Boolean))).sort(function (left, right) {
+        return left.localeCompare(right);
+      });
+      select.textContent = "";
+      const all = document.createElement("option");
+      all.value = "";
+      all.textContent = "All categories";
+      select.appendChild(all);
+      categories.forEach(function (category) {
+        const option = document.createElement("option");
+        option.value = category;
+        option.textContent = category;
+        select.appendChild(option);
+      });
+      select.value = categories.includes(current) ? current : "";
     }
 
     function addSelectedJournal(journal) {
@@ -425,11 +487,22 @@
       }
       const key = journalKey(clean);
       if (!rawJournalEntries().some(function (entry) { return journalKey(entry.journal) === key; })) {
-        extraJournalCandidates.push({ journal: clean, rank: null, impact_factor: null, custom: true });
+        extraJournalCandidates.push({
+          journal: clean,
+          aliases: [],
+          rank: null,
+          impact_factor: null,
+          impact_label: "Manual",
+          category: "Manual",
+          custom: true
+        });
       }
-      const model = ensureJournalDualList();
+      const model = syncJournalCandidates();
       model.add(clean);
       selectedJournals = model.selected();
+      if (journalKey(clean) === "arxiv" && field("arxiv_enabled")) {
+        field("arxiv_enabled").checked = true;
+      }
       renderJournalPicker();
     }
 
@@ -437,6 +510,9 @@
       const model = ensureJournalDualList();
       model.remove(journal);
       selectedJournals = model.selected();
+      if (journalKey(journal) === "arxiv" && field("arxiv_enabled")) {
+        field("arxiv_enabled").checked = false;
+      }
       renderJournalPicker();
     }
 
@@ -745,6 +821,14 @@
       }
     });
     field("journal_search").addEventListener("input", renderJournalPicker);
+    field("journal_category").addEventListener("change", renderJournalPicker);
+    field("arxiv_enabled").addEventListener("change", function () {
+      if (field("arxiv_enabled").checked) {
+        addSelectedJournal("arXiv");
+      } else {
+        removeSelectedJournal("arXiv");
+      }
+    });
     field("journal_sort_mode").addEventListener("change", renderJournalPicker);
     field("add_manual_journal").addEventListener("click", addManualJournal);
     field("manual_journal_name").addEventListener("keydown", function (event) {

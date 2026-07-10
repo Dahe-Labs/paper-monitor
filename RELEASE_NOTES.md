@@ -1,3 +1,22 @@
+# Paper Monitor 0.1.7
+
+Interdisciplinary journal catalog and compact selection update.
+
+## Included
+
+- Expanded the bundled catalog from 50 to 300 formal journals across 12 interdisciplinary categories.
+- Added a frozen OpenAlex two-year mean citedness snapshot with a `2Y Impact` label and source metadata for every formal journal.
+- Added journal category filters and name/alias search to Windows Settings and Keyword Analysis.
+- Replaced large journal cards with compact single-line name and impact rows using bounded, internally scrolling lists.
+- Reduced matched-paper card spacing and improved responsive layouts for desktop and narrow Windows app viewports.
+- Fixed selected journals reappearing after removal by separating catalog synchronization from rendering and preserving explicit empty selections.
+- Added behavior tests for removal, candidate return, empty-selection save/reload, catalog coverage, and responsive UI contracts.
+
+## Notes
+
+- `2Y Impact` is OpenAlex two-year mean citedness, not Clarivate Journal Impact Factor.
+- Windows `v0.1.7` artifacts are unsigned until a trusted Authenticode certificate is configured.
+
 # Paper Monitor 0.1.6
 
 Windows reliability and release hardening update.

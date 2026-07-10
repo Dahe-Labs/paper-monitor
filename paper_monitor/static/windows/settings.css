@@ -321,7 +321,7 @@
     }
 
     .journal-box {
-      max-width: 760px;
+      max-width: 980px;
       margin: 0 auto;
       display: grid;
       gap: 10px;
@@ -337,9 +337,10 @@
 
     .journal-board {
       display: grid;
-      grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
-      gap: 16px;
-      min-height: 468px;
+      grid-template-columns: minmax(260px, 0.8fr) minmax(420px, 1.2fr);
+      gap: 12px;
+      height: min(680px, calc(100vh - 210px));
+      min-height: 420px;
     }
 
     .journal-pane {
@@ -390,6 +391,10 @@
       gap: 8px;
     }
 
+    .journal-filter-row {
+      grid-template-columns: minmax(150px, 1fr) minmax(150px, 0.72fr) minmax(112px, 0.5fr);
+    }
+
     .journal-toolbar select,
     .journal-toolbar input {
       max-width: none;
@@ -400,7 +405,7 @@
     .journal-list {
       min-height: 0;
       overflow: auto;
-      padding: 8px;
+      padding: 0;
     }
 
     .journal-list.drag-over {
@@ -412,8 +417,9 @@
     .journal-item {
       appearance: none;
       width: 100%;
-      border: 1px solid #e4e4e8;
-      border-radius: 7px;
+      border: 0;
+      border-bottom: 1px solid #e4e4e8;
+      border-radius: 0;
       background: #ffffff;
       color: #252529;
       cursor: pointer;
@@ -421,15 +427,21 @@
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
-      min-height: 38px;
-      margin: 0 0 7px;
-      padding: 7px 9px;
+      min-height: 30px;
+      margin: 0;
+      padding: 4px 8px;
       text-align: left;
     }
 
     .journal-item:hover {
-      border-color: #c8c8ce;
       background: #f7f7f8;
+    }
+
+    .journal-item:focus-visible {
+      position: relative;
+      z-index: 1;
+      outline: 2px solid var(--blue);
+      outline-offset: -2px;
     }
 
     .journal-name {
@@ -437,13 +449,13 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 750;
     }
 
     .journal-meta {
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 700;
       white-space: nowrap;
     }
@@ -454,6 +466,16 @@
       font-weight: 700;
       padding: 14px 8px;
       text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .journal-filter-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      }
+
+      .journal-filter-row input {
+        grid-column: 1 / -1;
+      }
     }
 
     .actions {
@@ -575,6 +597,13 @@
 
       .journal-board {
         grid-template-columns: 1fr;
+        height: auto;
+        min-height: 0;
+      }
+
+      .journal-pane {
+        height: min(520px, calc(100vh - 180px));
+        min-height: 360px;
       }
 
       .advanced summary {
