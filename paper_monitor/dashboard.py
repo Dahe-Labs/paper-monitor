@@ -55,7 +55,7 @@ def render_dashboard(
     .header-action-button:disabled { opacity: 0.58; cursor: default; }
     .header-action-link[hidden], .header-action-button[hidden] { display: none; }
     .analysis-panel { padding: 16px; }
-    .analysis-grid { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; }
+    .analysis-grid { display: grid; grid-template-columns: minmax(360px, 430px) 1fr; gap: 16px; }
     .analysis-controls, .analysis-results { min-width: 0; }
     .control-group { border: 1px solid #d8dee4; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
     .control-group h3 { margin: 0 0 10px; font-size: 14px; }
@@ -91,15 +91,20 @@ def render_dashboard(
     .analysis-table th, .analysis-table td { border-bottom: 1px solid #d8dee4; padding: 8px; text-align: left; }
     .term-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #d8dee4; border-radius: 6px; padding: 5px 7px; margin: 4px; background: #f6f8fa; font-size: 12px; }
     .checkbox-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; padding-right: 4px; }
-    .analysis-journal-list { max-height: 240px; }
+    .analysis-journal-list { max-height: 280px; }
+    .analysis-journal-toolbar { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 0.8fr); gap: 6px; margin-bottom: 8px; }
+    .analysis-journal-toolbar input, .analysis-journal-toolbar select { min-width: 0; height: 30px; border: 1px solid #d8dee4; border-radius: 6px; padding: 0 7px; background: #ffffff; color: #1f2933; font: inherit; font-size: 12px; }
     .analysis-dual-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .analysis-dual-pane { min-width: 0; border: 1px solid #d8dee4; border-radius: 8px; background: #ffffff; overflow: hidden; }
     .analysis-dual-pane header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #d8dee4; background: #f6f8fa; }
     .analysis-dual-pane h4 { margin: 0; font-size: 12px; }
-    .analysis-dual-listbox { display: grid; gap: 6px; min-height: 120px; max-height: 220px; overflow: auto; padding: 8px; }
+    .analysis-dual-listbox { display: grid; align-content: start; gap: 0; min-height: 120px; max-height: 280px; overflow: auto; padding: 0; }
     .analysis-dual-listbox.drag-over { outline: 2px solid #0969da; outline-offset: -3px; background: #eff6ff; }
-    .analysis-dual-item { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; min-height: 30px; padding: 6px 8px; text-align: left; font: inherit; font-size: 12.5px; font-weight: 700; overflow-wrap: anywhere; }
+    .analysis-dual-item { border: 0; border-bottom: 1px solid #e4e4e8; border-radius: 0; background: #ffffff; color: #1f2933; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 29px; padding: 4px 7px; text-align: left; font: inherit; font-size: 12px; font-weight: 700; }
     .analysis-dual-item:hover { background: #f6f8fa; border-color: #afb8c1; }
+    .analysis-dual-item:focus-visible { position: relative; z-index: 1; outline: 2px solid #0969da; outline-offset: -2px; }
+    .analysis-journal-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .analysis-journal-impact { color: #57606a; font-size: 11px; font-weight: 700; white-space: nowrap; }
     .checkbox-option { display: flex; gap: 7px; align-items: flex-start; font-size: 13px; line-height: 1.35; }
     .checkbox-option input { flex: 0 0 auto; margin-top: 2px; }
     .secondary-button, .mini-button { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; font-weight: 700; }
@@ -123,19 +128,20 @@ def render_dashboard(
     .analysis-paper-authors { width: 22%%; }
     .analysis-note { color: #57606a; font-size: 13px; margin: 8px 0; }
     .taxonomy-list { display: flex; flex-wrap: wrap; gap: 6px; }
-    @media (max-width: 780px) { .analysis-grid { grid-template-columns: 1fr; } .header-main, .analysis-header, .section-title-row, .candidate-header, .chart-heading { align-items: stretch; flex-direction: column; } .header-actions { margin-left: 0; justify-content: flex-start; } .sort-control, .candidate-filter-toolbar { justify-content: flex-start; } .bar-row { grid-template-columns: 1fr; } }
-    .date-group { position: relative; margin: 24px 0 30px; padding-left: 20px; }
+    @media (max-width: 980px) { .analysis-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 780px) { .analysis-dual-list { grid-template-columns: 1fr; } .header-main, .analysis-header, .section-title-row, .candidate-header, .chart-heading { align-items: stretch; flex-direction: column; } .header-actions { margin-left: 0; justify-content: flex-start; } .sort-control, .candidate-filter-toolbar { justify-content: flex-start; } .bar-row { grid-template-columns: 1fr; } }
+    .date-group { position: relative; margin: 16px 0 20px; padding-left: 20px; }
     .date-group::before { content: ""; position: absolute; left: 5px; top: 18px; bottom: -22px; width: 2px; background: #d8dee4; }
     .date-heading-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; min-height: 34px; margin: 0 0 10px; padding: 7px 10px 7px 0; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid #d8dee4; backdrop-filter: blur(6px); }
     .date-marker { position: relative; z-index: 1; flex: 0 0 auto; width: 10px; height: 10px; margin-left: -20px; border: 2px solid #ffffff; border-radius: 999px; background: #0969da; box-shadow: 0 0 0 2px #0969da; }
     .date-short-label { flex: 0 0 auto; border: 1px solid #d8dee4; border-radius: 999px; padding: 3px 8px; background: #f6f8fa; color: #1f2933; font-size: 12px; font-weight: 800; }
     .date-heading { font-size: 15px; margin: 0; color: #1f2933; }
     .date-count { margin-left: auto; color: #57606a; font-size: 12px; font-weight: 700; white-space: nowrap; }
-    .paper { border: 1px solid #d8dee4; border-radius: 8px; padding: 12px 13px; margin: 8px 0; }
-    .paper h3 { font-size: 15px; line-height: 1.3; margin: 0 0 6px; }
-    .meta { color: #57606a; font-size: 12.5px; line-height: 1.38; }
+    .paper { border: 1px solid #d8dee4; border-radius: 6px; padding: 8px 10px; margin: 5px 0; }
+    .paper h3 { font-size: 13.5px; line-height: 1.28; margin: 0 0 4px; }
+    .meta { color: #57606a; font-size: 11.5px; line-height: 1.32; }
     .journal-name { color: #1f2933; font-weight: 700; }
-    .terms { margin-top: 6px; font-size: 12.5px; line-height: 1.35; }
+    .terms { margin-top: 4px; font-size: 11.5px; line-height: 1.32; }
     .rejected-candidates { margin-top: 8px; }
     .rejected-candidates summary { cursor: pointer; color: #57606a; font-size: 13px; margin-bottom: 10px; }
     a { color: #0969da; }
@@ -166,7 +172,7 @@ def render_dashboard(
       <label class="sort-control" for="matched-papers-sort">Sort
         <select id="matched-papers-sort">
           <option value="time">Time</option>
-          <option value="impact_factor">Impact factor</option>
+          <option value="impact_factor">2Y Impact</option>
         </select>
       </label>
     </div>
@@ -242,6 +248,8 @@ const keywordAnalysisState = {
   dateFrom: "",
   dateTo: "",
   selectedJournals: [],
+  journalSearch: "",
+  journalCategory: "",
   selectedPhraseLengths: [2, 3],
   candidateTermsOpen: false,
   blockTermsOpen: false,
@@ -263,10 +271,13 @@ const DEFAULT_CANDIDATE_PHRASE_LENGTHS = [2, 3];
 const ALLOWED_CANDIDATE_PHRASE_LENGTHS = [1, 2, 3, 4];
 const ANALYSIS_SORT_MODES = [
   ["time", "Time"],
-  ["impact_factor", "Impact factor"],
+  ["impact_factor", "2Y Impact"],
   ["relevance", "Relevance"]
 ];
 let keywordAnalysisProgressTimer = null;
+let analysisJournalCatalogCachePayload = null;
+let analysisJournalCatalogCache = [];
+let analysisJournalCatalogIndex = new Map();
 const DOMAIN_ANCHOR_TERMS = new Set([
   "anode", "argyrodite", "cathode", "cei", "ceramic", "coating", "composite", "conductivity",
   "current", "degradation", "dendrite", "dendrites", "density", "deposition", "diffusion",
@@ -326,6 +337,8 @@ function loadSavedAnalysisState() {
       keywordAnalysisState.selectedJournals = saved.selectedJournals.map(normalizeDisplayTerm).filter(Boolean);
       keywordAnalysisState.hasJournalSelection = saved.hasJournalSelection !== false;
     }
+    if (typeof saved.journalSearch === "string") keywordAnalysisState.journalSearch = saved.journalSearch;
+    if (typeof saved.journalCategory === "string") keywordAnalysisState.journalCategory = saved.journalCategory;
     if (Array.isArray(saved.selectedPhraseLengths)) keywordAnalysisState.selectedPhraseLengths = normalizePhraseLengths(saved.selectedPhraseLengths);
     if (Array.isArray(saved.blockedTerms)) keywordAnalysisState.blockedTerms = saved.blockedTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (Array.isArray(saved.customTaxonomy)) keywordAnalysisState.customTaxonomy = sanitizeTaxonomy(saved.customTaxonomy);
@@ -350,6 +363,8 @@ function saveAnalysisState() {
       dateTo: keywordAnalysisState.dateTo,
       hasJournalSelection: Boolean(keywordAnalysisState.hasJournalSelection),
       selectedJournals: keywordAnalysisState.selectedJournals,
+      journalSearch: keywordAnalysisState.journalSearch,
+      journalCategory: keywordAnalysisState.journalCategory,
       selectedPhraseLengths: normalizePhraseLengths(keywordAnalysisState.selectedPhraseLengths),
       blockedTerms: keywordAnalysisState.blockedTerms,
       customTaxonomy: keywordAnalysisState.customTaxonomy,
@@ -630,11 +645,23 @@ function wireAnalysisEvents() {
 
   if (controls) {
     controls.addEventListener("input", function (event) {
+      if (event.target.id === "analysis-journal-search") {
+        keywordAnalysisState.journalSearch = event.target.value;
+        saveAnalysisState();
+        refreshAnalysisJournalList();
+        return;
+      }
       if (event.target.matches("[data-date-part]")) {
         handleAnalysisControlChange(event, false);
       }
     });
     controls.addEventListener("change", function (event) {
+      if (event.target.id === "analysis-journal-category") {
+        keywordAnalysisState.journalCategory = event.target.value;
+        saveAnalysisState();
+        refreshAnalysisJournalList();
+        return;
+      }
       handleAnalysisControlChange(event, true);
     });
     controls.addEventListener("click", function (event) {
@@ -977,14 +1004,37 @@ function fallbackAnalysisJournals() {
 
 function analysisJournalCatalog() {
   const payload = keywordAnalysisState.payload || {};
+  if (payload === analysisJournalCatalogCachePayload) return analysisJournalCatalogCache;
   const catalog = Array.isArray(payload.journal_catalog) ? payload.journal_catalog : [];
-  return catalog.map(function (entry) {
+  analysisJournalCatalogCache = catalog.map(function (entry) {
     if (typeof entry === "string") return { journal: entry };
-    if (entry && typeof entry === "object") return { journal: normalizeDisplayTerm(entry.journal), impact_factor: Number(entry.impact_factor) };
+    if (entry && typeof entry === "object") {
+      const rawImpact = entry.impact_factor;
+      const impact = rawImpact == null ? null : Number(rawImpact);
+      return {
+        journal: normalizeDisplayTerm(entry.journal),
+        aliases: Array.isArray(entry.aliases) ? entry.aliases.map(normalizeDisplayTerm).filter(Boolean) : [],
+        impact_factor: Number.isFinite(impact) ? impact : null,
+        impact_label: normalizeDisplayTerm(entry.impact_label) || "Impact",
+        impact_metric: normalizeDisplayTerm(entry.impact_metric),
+        category: normalizeDisplayTerm(entry.category) || "Uncategorized"
+      };
+    }
     return { journal: "" };
   }).filter(function (entry) {
     return Boolean(entry.journal);
   });
+  analysisJournalCatalogIndex = new Map(analysisJournalCatalogCache.map(function (entry) {
+    return [normalizePhrase(entry.journal), entry];
+  }));
+  analysisJournalCatalogCachePayload = payload;
+  return analysisJournalCatalogCache;
+}
+
+function analysisJournalEntry(journal) {
+  const key = normalizePhrase(journal);
+  analysisJournalCatalog();
+  return analysisJournalCatalogIndex.get(key) || { journal: normalizeDisplayTerm(journal), aliases: [], impact_factor: null, impact_label: "", category: "Manual" };
 }
 
 function topNAnalysisJournals() {
@@ -994,7 +1044,7 @@ function topNAnalysisJournals() {
 
 function clampTopJournalCount(value) {
   const parsed = coercePositiveInt(value, 30);
-  return Math.max(1, Math.min(50, parsed));
+  return Math.max(1, Math.min(300, parsed));
 }
 
 function scopedAnalysisJournals() {
@@ -1439,6 +1489,9 @@ function renderAnalysisControls() {
   const journals = allAnalysisJournals();
   const journalSelection = createDualListSelection(journals, keywordAnalysisState.selectedJournals);
   const selectedJournalCount = journalSelection.selected.length;
+  const categories = Array.from(new Set(analysisJournalCatalog().map(function (entry) {
+    return entry.category;
+  }).filter(Boolean))).sort(caseInsensitiveSort);
 
   return [
     '<div class="control-group">',
@@ -1452,29 +1505,80 @@ function renderAnalysisControls() {
     '</div>',
     '<div class="control-group">',
     '<h3>Journals</h3>',
-    '<div class="control-toolbar"><button type="button" class="mini-button" data-scope-action="select-all-journals">Select all</button><button type="button" class="mini-button" data-scope-action="clear-journals">Clear</button><span class="meta">' + escapeHtml(selectedJournalCount + " / " + journals.length + " selected") + '</span></div>',
+    '<div class="control-toolbar"><button type="button" class="mini-button" data-scope-action="select-all-journals">Select all</button><button type="button" class="mini-button" data-scope-action="clear-journals">Clear</button><span id="analysis-journal-selection-count" class="meta">' + escapeHtml(selectedJournalCount + " / " + journals.length + " selected") + '</span></div>',
+    renderAnalysisJournalFilterToolbar(categories),
     renderAnalysisJournalDualList(journalSelection),
     '</div>'
   ].join("");
 }
 
+function renderAnalysisJournalFilterToolbar(categories) {
+  const selectedCategory = normalizeDisplayTerm(keywordAnalysisState.journalCategory);
+  const options = ['<option value="">All categories</option>'].concat(categories.map(function (category) {
+    return '<option value="' + escapeHtml(category) + '"' + (category === selectedCategory ? ' selected' : '') + '>' + escapeHtml(category) + '</option>';
+  }));
+  return '<div class="analysis-journal-toolbar">' +
+    '<input id="analysis-journal-search" type="search" value="' + escapeHtml(keywordAnalysisState.journalSearch || "") + '" placeholder="Search journals" autocomplete="off" aria-label="Search journals">' +
+    '<select id="analysis-journal-category" aria-label="Journal category">' + options.join("") + '</select>' +
+    '</div>';
+}
+
+function filteredAnalysisCandidates(selection) {
+  const query = normalizePhrase(keywordAnalysisState.journalSearch);
+  const category = normalizeDisplayTerm(keywordAnalysisState.journalCategory);
+  return selection.candidates.filter(function (journal) {
+    const entry = analysisJournalEntry(journal);
+    const searchable = [entry.journal, entry.category].concat(entry.aliases || []).join(" ");
+    return (!category || entry.category === category) && (!query || normalizePhrase(searchable).includes(query));
+  });
+}
+
 function renderAnalysisJournalDualList(selection) {
+  const candidates = filteredAnalysisCandidates(selection);
+  const candidateCount = candidates.length === selection.candidates.length
+    ? String(candidates.length)
+    : candidates.length + " / " + selection.candidates.length;
   return [
     '<div class="analysis-dual-list" data-dual-list="analysis-journals">',
     '<section class="analysis-dual-pane"><header><h4>Selected</h4><span class="meta">' + escapeHtml(selection.selected.length) + '</span></header>',
     '<div class="analysis-dual-listbox analysis-journal-list" data-analysis-journal-drop="add">',
     selection.selected.length ? selection.selected.map(function (journal) {
-      return '<button type="button" class="analysis-dual-item" draggable="true" data-analysis-journal-action="remove" data-journal="' + escapeHtml(journal) + '">' + escapeHtml(journal) + '</button>';
+      return renderAnalysisJournalItem(journal, "remove");
     }).join("") : '<p class="analysis-note">No journals selected.</p>',
     '</div></section>',
-    '<section class="analysis-dual-pane"><header><h4>Candidates</h4><span class="meta">' + escapeHtml(selection.candidates.length) + '</span></header>',
+    '<section class="analysis-dual-pane"><header><h4>Candidates</h4><span class="meta">' + escapeHtml(candidateCount) + '</span></header>',
     '<div class="analysis-dual-listbox analysis-journal-list" data-analysis-journal-drop="remove">',
-    selection.candidates.length ? selection.candidates.map(function (journal) {
-      return '<button type="button" class="analysis-dual-item" draggable="true" data-analysis-journal-action="add" data-journal="' + escapeHtml(journal) + '">' + escapeHtml(journal) + '</button>';
-    }).join("") : '<p class="analysis-note">All journals are selected.</p>',
+    candidates.length ? candidates.map(function (journal) {
+      return renderAnalysisJournalItem(journal, "add");
+    }).join("") : '<p class="analysis-note">No matching candidate journals.</p>',
     '</div></section>',
     '</div>'
   ].join("");
+}
+
+function renderAnalysisJournalItem(journal, action) {
+  const entry = analysisJournalEntry(journal);
+  const impact = entry.impact_factor == null
+    ? (entry.impact_label || "-")
+    : (entry.impact_label || "Impact") + " " + Number(entry.impact_factor).toFixed(1);
+  const actionLabel = action === "remove" ? "Remove " : "Add ";
+  const actionAttribute = action === "remove"
+    ? 'data-analysis-journal-action="remove"'
+    : 'data-analysis-journal-action="add"';
+  const tooltip = [actionLabel + entry.journal, entry.category, entry.impact_metric].filter(Boolean).join(" · ");
+  return '<button type="button" class="analysis-dual-item" draggable="true" title="' + escapeHtml(tooltip) + '" aria-label="' + escapeHtml(actionLabel + entry.journal) + '" ' + actionAttribute + ' data-journal="' + escapeHtml(entry.journal) + '">' +
+    '<span class="analysis-journal-name">' + escapeHtml(entry.journal) + '</span>' +
+    '<span class="analysis-journal-impact">' + escapeHtml(impact) + '</span>' +
+    '</button>';
+}
+
+function refreshAnalysisJournalList() {
+  const current = document.querySelector('[data-dual-list="analysis-journals"]');
+  if (!current) return;
+  const selection = createDualListSelection(allAnalysisJournals(), keywordAnalysisState.selectedJournals);
+  current.outerHTML = renderAnalysisJournalDualList(selection);
+  const count = document.getElementById("analysis-journal-selection-count");
+  if (count) count.textContent = selection.selected.length + " / " + allAnalysisJournals().length + " selected";
 }
 
 function updateAnalysisHeaderAction() {
@@ -2509,7 +2613,8 @@ def _metric_text(metric) -> str:
         return "Journal metrics: not available in local metrics file"
     parts = []
     if metric.impact_factor is not None:
-        parts.append("Impact factor: %.1f" % metric.impact_factor)
+        label = "Impact factor" if metric.impact_label == "IF" else metric.impact_label
+        parts.append("%s: %.1f" % (label, metric.impact_factor))
     if metric.five_year_impact_factor is not None:
         parts.append("5-year: %.1f" % metric.five_year_impact_factor)
     if metric.level:

@@ -10,6 +10,9 @@ public struct JournalCatalogEntry: Equatable, Decodable {
     public let level: String
     public let sourceURL: String
     public let defaultSelected: Bool
+    public let category: String
+    public let impactMetric: String
+    public let impactLabel: String
 
     public init(
         rank: Int,
@@ -20,7 +23,10 @@ public struct JournalCatalogEntry: Equatable, Decodable {
         fiveYearImpactFactor: Double?,
         level: String,
         sourceURL: String,
-        defaultSelected: Bool = true
+        defaultSelected: Bool = true,
+        category: String = "",
+        impactMetric: String = "Journal Impact Factor",
+        impactLabel: String = "IF"
     ) {
         self.rank = rank
         self.journal = journal
@@ -31,6 +37,9 @@ public struct JournalCatalogEntry: Equatable, Decodable {
         self.level = level
         self.sourceURL = sourceURL
         self.defaultSelected = defaultSelected
+        self.category = category
+        self.impactMetric = impactMetric
+        self.impactLabel = impactLabel
     }
 
     enum CodingKeys: String, CodingKey {
@@ -43,6 +52,9 @@ public struct JournalCatalogEntry: Equatable, Decodable {
         case level
         case sourceURL = "source_url"
         case defaultSelected = "default_selected"
+        case category
+        case impactMetric = "impact_metric"
+        case impactLabel = "impact_label"
     }
 
     public init(from decoder: Decoder) throws {
@@ -56,7 +68,10 @@ public struct JournalCatalogEntry: Equatable, Decodable {
             fiveYearImpactFactor: try container.decodeIfPresent(Double.self, forKey: .fiveYearImpactFactor),
             level: try container.decodeIfPresent(String.self, forKey: .level) ?? "",
             sourceURL: try container.decodeIfPresent(String.self, forKey: .sourceURL) ?? "",
-            defaultSelected: try container.decodeIfPresent(Bool.self, forKey: .defaultSelected) ?? true
+            defaultSelected: try container.decodeIfPresent(Bool.self, forKey: .defaultSelected) ?? true,
+            category: try container.decodeIfPresent(String.self, forKey: .category) ?? "",
+            impactMetric: try container.decodeIfPresent(String.self, forKey: .impactMetric) ?? "Journal Impact Factor",
+            impactLabel: try container.decodeIfPresent(String.self, forKey: .impactLabel) ?? "IF"
         )
     }
 }

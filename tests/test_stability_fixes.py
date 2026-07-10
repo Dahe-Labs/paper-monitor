@@ -1241,8 +1241,12 @@ class StabilityFixTests(unittest.TestCase):
             entry for entry in defaults["journal_catalog"]
             if str(entry["journal"]).casefold() != "arxiv"
         ]
-        self.assertGreaterEqual(len(formal_candidates), 50)
-        self.assertEqual(defaults["journal_catalog"][0]["journal"], "Nature Energy")
+        self.assertEqual(len(formal_candidates), 300)
+        self.assertTrue(all(entry["category"] for entry in formal_candidates))
+        self.assertEqual(
+            float(defaults["journal_catalog"][0]["impact_factor"]),
+            max(float(entry["impact_factor"]) for entry in formal_candidates),
+        )
         self.assertGreaterEqual(
             float(defaults["journal_catalog"][0]["impact_factor"]),
             float(defaults["journal_catalog"][1]["impact_factor"]),

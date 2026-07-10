@@ -457,7 +457,11 @@ def _journal_catalog_payload(metrics: JournalMetrics) -> List[Dict[str, object]]
     return [
         {
             "journal": metric.journal,
+            "aliases": list(metric.aliases),
             "impact_factor": metric.impact_factor,
+            "impact_metric": metric.impact_metric,
+            "impact_label": metric.impact_label,
+            "category": metric.category,
         }
         for metric in ordered
         if metric.journal

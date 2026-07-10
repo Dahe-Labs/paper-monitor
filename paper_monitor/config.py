@@ -252,10 +252,8 @@ def _dedupe_nonempty(values):
 
 def _selected_journals(raw):
     scope = raw.get("journal_scope")
-    if isinstance(scope, dict):
-        selected = _dedupe_nonempty(scope.get("selected_journals", []))
-        if selected:
-            return selected
+    if isinstance(scope, dict) and "selected_journals" in scope:
+        return _dedupe_nonempty(scope.get("selected_journals", []))
     return _dedupe_nonempty(raw.get("journals", DEFAULT_CONFIG["journals"]))
 
 
@@ -297,7 +295,7 @@ def _journal_scope_top_n(raw, fallback: int) -> int:
         top_n = int(value)
     except (TypeError, ValueError):
         top_n = fallback
-    return min(50, max(1, top_n))
+    return min(300, max(1, top_n))
 
 
 def _search_direction_queries(raw):

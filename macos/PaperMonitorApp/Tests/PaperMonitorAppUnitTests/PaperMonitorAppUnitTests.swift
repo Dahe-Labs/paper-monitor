@@ -930,7 +930,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         {
           "settings_schema_version": 1,
           "journal_scope": {
-            "top_n": 55,
+            "top_n": 305,
             "selected_journals": ["Nature Energy", "", "Nature Energy", "Advanced Materials"]
           },
           "interval_seconds": 3600,
@@ -962,7 +962,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         let settings = try store.load()
 
         XCTAssertEqual(settings.schemaVersion, 2)
-        XCTAssertEqual(settings.journalScope.topN, 50)
+        XCTAssertEqual(settings.journalScope.topN, 300)
         XCTAssertEqual(settings.journalScope.selectedJournals, ["Nature Energy", "Advanced Materials"])
         XCTAssertEqual(settings.intervalSeconds, 3600)
         XCTAssertEqual(settings.runtime.startupEnabled, true)

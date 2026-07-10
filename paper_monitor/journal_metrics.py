@@ -15,6 +15,10 @@ class JournalMetric:
     source_url: str
     rank: Optional[int] = None
     default_selected: bool = True
+    category: str = ""
+    impact_metric: str = "Journal Impact Factor"
+    impact_label: str = "IF"
+    cited_by_count: Optional[int] = None
 
 
 class JournalMetrics:
@@ -52,6 +56,10 @@ def load_journal_metrics(path: Path) -> JournalMetrics:
             source_url=str(item.get("source_url", "")),
             rank=_optional_int(item.get("rank")),
             default_selected=bool(item.get("default_selected", True)),
+            category=str(item.get("category", "")),
+            impact_metric=str(item.get("impact_metric", "Journal Impact Factor")),
+            impact_label=str(item.get("impact_label", "IF")),
+            cited_by_count=_optional_int(item.get("cited_by_count")),
         )
         for item in payload.get("journals", [])
         if item.get("journal")

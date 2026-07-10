@@ -318,7 +318,7 @@ class DashboardAndMetricsTests(unittest.TestCase):
         self.assertIn('<span class="date-short-label">Jun 20</span>', html)
         self.assertIn('<span class="date-count">2 papers</span>', html)
         self.assertIn('<h3 class="date-heading">June 20, 2026</h3>', html)
-        self.assertIn(".paper { border: 1px solid #d8dee4; border-radius: 8px; padding: 12px 13px; margin: 8px 0; }", html)
+        self.assertIn(".paper { border: 1px solid #d8dee4; border-radius: 6px; padding: 8px 10px; margin: 5px 0; }", html)
 
     def test_dashboard_groups_matched_papers_by_date_in_descending_order(self):
         html = render_dashboard(
@@ -705,7 +705,7 @@ if (timeHtml.indexOf("Low") > timeHtml.indexOf("High")) {{
         self.assertIn('id="analysis-progress-label"', html)
         self.assertIn('class="analysis-progress-fill"', html)
         self.assertIn(">Keyword Analysis</button>", html)
-        self.assertIn(".analysis-journal-list { max-height: 240px; }", html)
+        self.assertIn(".analysis-journal-list { max-height: 280px; }", html)
         self.assertIn("Back to Dashboard", html)
         self.assertNotIn("Analyze Keywords", html)
         self.assertIn('data-chart-view="bars"', html)
@@ -1996,6 +1996,16 @@ const controls = renderAnalysisControls();
 if (!controls.includes('data-journal="Joule"') || !controls.includes("2 / 2 selected")) {{
   throw new Error("scope journals should render in controls: " + controls);
 }}
+applyAnalysisJournalAction("remove", " nature energy ");
+if (keywordAnalysisState.selectedJournals.join(",") !== "Joule") {{
+  throw new Error("removed analysis journal should stay unselected: " + keywordAnalysisState.selectedJournals.join(","));
+}}
+const removedControls = renderAnalysisControls();
+if (!removedControls.includes('data-analysis-journal-action="add" data-journal="Nature Energy"')) {{
+  throw new Error("removed journal should return to the candidate list: " + removedControls);
+}}
+applyAnalysisJournalAction("add", "Nature Energy");
+keywordAnalysisState.selectedJournals = ["Nature Energy", "Joule"];
 keywordAnalysisState.dateFrom = "2026-06-01";
 keywordAnalysisState.dateTo = "2026-06-24";
 requestKeywordAnalysis();

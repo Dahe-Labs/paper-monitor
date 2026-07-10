@@ -170,13 +170,13 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         formatter.numberStyle = .none
         formatter.allowsFloats = false
         formatter.minimum = 1
-        formatter.maximum = 50
+        formatter.maximum = 300
         return formatter
     }
 
     private func configureTopNControls() {
         topNStepper.minValue = 1
-        topNStepper.maxValue = 50
+        topNStepper.maxValue = 300
         topNStepper.increment = 1
         topNStepper.target = self
         topNStepper.action = #selector(topNChanged)
@@ -225,7 +225,7 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         tableView.addTableColumn(journalColumn)
 
         let impactColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("impactFactor"))
-        impactColumn.title = "IF"
+        impactColumn.title = "Impact"
         impactColumn.width = 70
         impactColumn.minWidth = 60
         tableView.addTableColumn(impactColumn)
@@ -426,6 +426,7 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
         } else {
             filteredEntries = entries.filter { entry in
                 entry.journal.lowercased().contains(query)
+                    || entry.category.lowercased().contains(query)
                     || entry.level.lowercased().contains(query)
                     || entry.aliases.contains { $0.lowercased().contains(query) }
             }
@@ -511,7 +512,7 @@ final class JournalFilterViewController: NSViewController, NSSearchFieldDelegate
 
     private func selectedButtonTitle(for journal: String) -> String {
         if let entry = catalog.entry(named: journal), let impact = entry.impactFactor {
-            return "\(entry.journal)  IF \(String(format: "%.1f", impact))"
+            return "\(entry.journal)  \(entry.impactLabel) \(String(format: "%.1f", impact))"
         }
         return journal
     }

@@ -167,7 +167,7 @@ final class SettingsEditingState {
 
 public enum SettingsNormalizer {
     public static func clampedTopN(_ value: Int) -> Int {
-        min(50, max(1, value))
+        min(300, max(1, value))
     }
 
     public static func dedupeNonEmpty(_ values: [String]) -> [String] {
