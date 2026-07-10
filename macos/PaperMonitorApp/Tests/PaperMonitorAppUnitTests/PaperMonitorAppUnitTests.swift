@@ -930,7 +930,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
         {
           "settings_schema_version": 1,
           "journal_scope": {
-            "top_n": 55,
+            "top_n": 305,
             "selected_journals": ["Nature Energy", "", "Nature Energy", "Advanced Materials"]
           },
           "interval_seconds": 3600,
