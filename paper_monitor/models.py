@@ -13,6 +13,7 @@ class Article:
     source: str
     detected: str = ""
     authors: Tuple[str, ...] = ()
+    source_id: str = ""
 
     @property
     def identity(self) -> str:

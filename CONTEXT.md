@@ -12,6 +12,10 @@ _Avoid_: Result, item, paper record
 The set of exact stable identifiers used to determine whether results from one or more sources refer to the same Article. Similar wording alone never establishes identity.
 _Avoid_: Listing ID, fuzzy title match, URL-only identity
 
+**Article Detection**:
+A matched Article submitted during a Refresh Run with its Article Listing and exact identity inputs. It contains no abstract.
+_Avoid_: Search result, cached response, notification payload
+
 **Article Lifecycle**:
 The progression of an Article from detection through listing, presentation or notification, and eventual replacement by a Retired Article Fingerprint.
 _Avoid_: Dashboard state, notification queue, article cache
