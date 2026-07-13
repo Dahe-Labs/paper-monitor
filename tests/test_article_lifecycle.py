@@ -231,7 +231,13 @@ class ArticleLifecycleTests(unittest.TestCase):
         )
 
         self.assertEqual(len(legacy_store.recent_articles()), 1)
-        self.assertEqual(len(lifecycle.dashboard_snapshot().articles), 1)
+        migrated = lifecycle.dashboard_snapshot().articles
+        self.assertEqual(len(migrated), 2)
+        self.assertEqual(
+            {article.title for article in migrated},
+            {"Legacy article", "Solid electrolyte interface"},
+        )
+        self.assertTrue(all(not hasattr(article, "abstract") for article in migrated))
 
 
 if __name__ == "__main__":

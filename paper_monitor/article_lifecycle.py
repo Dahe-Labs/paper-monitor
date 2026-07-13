@@ -23,6 +23,7 @@ from .models import normalize_doi
 _BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_RETENTION_DAYS = 30
 _PRESENTATION_TOKEN_RETENTION_DAYS = 7
+_LEGACY_MIGRATION_NAME = "legacy-article-store-v1"
 
 
 class RefreshRunStatus(str, Enum):
@@ -434,11 +435,7 @@ class ArticleLifecycle:
         normalized = _normalize_detection(detection)
         alias_hashes = _identity_alias_hashes(normalized)
         placeholders = ",".join("?" for _ in alias_hashes)
-        existing_rows = connection.execute(
-            f"SELECT DISTINCT article_id FROM lifecycle_article_aliases WHERE alias_hash IN ({placeholders})",
-            alias_hashes,
-        ).fetchall()
-        existing_ids = {str(row["article_id"]) for row in existing_rows}
+        existing_ids = self._article_ids_for_aliases(connection, alias_hashes)
         if len(existing_ids) > 1:
             raise ArticleIdentityConflict("exact Article aliases point to multiple active Articles")
 
@@ -565,6 +562,233 @@ class ArticleLifecycle:
             (run_id, state, article_count, now, state, now, _compact_error(last_error)),
         )
 
+    def _migrate_legacy_state(self, connection: sqlite3.Connection, now: str) -> None:
+        if connection.execute(
+            "SELECT 1 FROM lifecycle_migrations WHERE name = ?",
+            (_LEGACY_MIGRATION_NAME,),
+        ).fetchone():
+            return
+        if not _table_exists(connection, "articles"):
+            return
+
+        _require_columns(
+            connection,
+            "articles",
+            {
+                "identity",
+                "doi",
+                "title",
+                "journal",
+                "url",
+                "published",
+                "detected",
+                "source",
+                "first_seen_at",
+            },
+        )
+        migrated_at = _parse_timestamp(now, fallback=self._clock())
+        cutoff = migrated_at - dt.timedelta(days=self.retention_days)
+        counts = {
+            "active_imported": 0,
+            "retired_imported": 0,
+            "pending_eligible": 0,
+            "attempted_suppressed": 0,
+            "skipped": 0,
+        }
+        rows = connection.execute(
+            """
+            SELECT identity, doi, title, journal, url, published, detected, source, first_seen_at
+            FROM articles
+            ORDER BY identity ASC
+            """
+        ).fetchall()
+        for row in rows:
+            result = self._migrate_legacy_article(connection, row, migrated_at, cutoff, now)
+            counts[result] += 1
+
+        outbox_counts = self._migrate_legacy_outbox(connection)
+        counts["pending_eligible"] += outbox_counts["pending_eligible"]
+        counts["attempted_suppressed"] += outbox_counts["attempted_suppressed"]
+        counts["skipped"] += outbox_counts["skipped"]
+        connection.execute(
+            """
+            INSERT INTO lifecycle_migrations (name, applied_at, details_json)
+            VALUES (?, ?, ?)
+            """,
+            (_LEGACY_MIGRATION_NAME, now, _json_dumps(counts)),
+        )
+
+    def _migrate_legacy_article(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        migrated_at: dt.datetime,
+        cutoff: dt.datetime,
+        now: str,
+    ) -> str:
+        doi = normalize_doi(str(row["doi"] or ""))
+        url = str(row["url"] or "").strip()
+        if (not url or not _canonical_url(url)) and doi:
+            url = "https://doi.org/" + doi
+        try:
+            detection = _normalize_detection(
+                ArticleDetection(
+                    title=str(row["title"] or ""),
+                    authors=(),
+                    journal=str(row["journal"] or ""),
+                    impact_reference=None,
+                    url=url,
+                    doi=doi,
+                    source=str(row["source"] or ""),
+                    source_id=_legacy_source_id(str(row["identity"] or "")),
+                    published=str(row["published"] or ""),
+                )
+            )
+            alias_hashes = _identity_alias_hashes(detection)
+        except (TypeError, ValueError):
+            return "skipped"
+
+        existing_ids = self._article_ids_for_aliases(connection, alias_hashes)
+        if len(existing_ids) > 1:
+            raise ArticleIdentityConflict("legacy aliases point to multiple active Articles")
+        if existing_ids:
+            article_id = next(iter(existing_ids))
+            connection.execute(
+                "UPDATE lifecycle_articles SET notification_state = 'consumed' WHERE article_id = ?",
+                (article_id,),
+            )
+            return "active_imported"
+
+        first_seen = _parse_timestamp(
+            str(row["first_seen_at"] or row["detected"] or row["published"] or ""),
+            fallback=migrated_at,
+        )
+        if first_seen < cutoff:
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO retired_article_fingerprints (alias_hash, retired_at)
+                VALUES (?, ?)
+                """,
+                ((alias_hash, now) for alias_hash in alias_hashes),
+            )
+            return "retired_imported"
+
+        committed = self._commit_detection(connection, detection, _timestamp(first_seen))
+        if committed is None:
+            return "retired_imported"
+        article_id, _was_new = committed
+        connection.execute(
+            "UPDATE lifecycle_articles SET notification_state = 'consumed' WHERE article_id = ?",
+            (article_id,),
+        )
+        return "active_imported"
+
+    def _migrate_legacy_outbox(self, connection: sqlite3.Connection) -> Mapping[str, int]:
+        counts = {"pending_eligible": 0, "attempted_suppressed": 0, "skipped": 0}
+        if not _table_exists(connection, "notification_outbox"):
+            return counts
+        _require_columns(
+            connection,
+            "notification_outbox",
+            {"id", "payload_json", "attempt_count"},
+        )
+        rows = connection.execute(
+            """
+            SELECT payload_json, attempt_count
+            FROM notification_outbox
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        pending_article_ids = set()
+        attempted_article_ids = set()
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except (TypeError, ValueError):
+                counts["skipped"] += 1
+                continue
+            if not isinstance(payload, Mapping):
+                counts["skipped"] += 1
+                continue
+            doi = normalize_doi(str(payload.get("doi") or ""))
+            url = str(payload.get("url") or "").strip()
+            if (not url or not _canonical_url(url)) and doi:
+                url = "https://doi.org/" + doi
+            raw_authors = payload.get("authors")
+            authors = (
+                tuple(str(author) for author in raw_authors)
+                if isinstance(raw_authors, (list, tuple))
+                else ()
+            )
+            try:
+                detection = _normalize_detection(
+                    ArticleDetection(
+                        title=str(payload.get("title") or ""),
+                        authors=authors,
+                        journal=str(payload.get("journal") or ""),
+                        impact_reference=None,
+                        url=url,
+                        doi=doi,
+                        source=str(payload.get("source") or ""),
+                        source_id=str(payload.get("source_id") or ""),
+                        published=str(payload.get("published") or ""),
+                    )
+                )
+                article_ids = self._article_ids_for_aliases(
+                    connection,
+                    _identity_alias_hashes(detection),
+                )
+            except (TypeError, ValueError):
+                counts["skipped"] += 1
+                continue
+            if len(article_ids) != 1:
+                if len(article_ids) > 1:
+                    raise ArticleIdentityConflict(
+                        "legacy notification aliases point to multiple active Articles"
+                    )
+                counts["skipped"] += 1
+                continue
+            article_id = next(iter(article_ids))
+            if int(row["attempt_count"] or 0) > 0:
+                attempted_article_ids.add(article_id)
+                continue
+            pending_article_ids.add(article_id)
+
+        if attempted_article_ids:
+            placeholders = ",".join("?" for _ in attempted_article_ids)
+            connection.execute(
+                f"""
+                UPDATE lifecycle_articles
+                SET notification_state = 'consumed'
+                WHERE article_id IN ({placeholders})
+                """,
+                tuple(attempted_article_ids),
+            )
+        counts["attempted_suppressed"] = len(attempted_article_ids)
+        for article_id in sorted(pending_article_ids - attempted_article_ids):
+            cursor = connection.execute(
+                """
+                UPDATE lifecycle_articles
+                SET notification_state = 'eligible'
+                WHERE article_id = ? AND presented_at IS NULL AND notified_at IS NULL
+                """,
+                (article_id,),
+            )
+            counts["pending_eligible"] += max(cursor.rowcount, 0)
+        return counts
+
+    @staticmethod
+    def _article_ids_for_aliases(
+        connection: sqlite3.Connection,
+        alias_hashes: Sequence[bytes],
+    ) -> set[str]:
+        placeholders = ",".join("?" for _ in alias_hashes)
+        rows = connection.execute(
+            f"SELECT DISTINCT article_id FROM lifecycle_article_aliases WHERE alias_hash IN ({placeholders})",
+            tuple(alias_hashes),
+        ).fetchall()
+        return {str(row["article_id"]) for row in rows}
+
     def _prune_expired(self, connection: sqlite3.Connection, now: str) -> None:
         cutoff = _timestamp(self._clock() - dt.timedelta(days=self.retention_days))
         expired = connection.execute(
@@ -598,7 +822,6 @@ class ArticleLifecycle:
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL").fetchone()
-            connection.execute("BEGIN IMMEDIATE")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS lifecycle_articles (
@@ -670,6 +893,12 @@ class ArticleLifecycle:
                     last_error TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS lifecycle_migrations (
+                    name TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_lifecycle_articles_first_detected
                 ON lifecycle_articles(first_detected_at DESC);
 
@@ -677,6 +906,8 @@ class ArticleLifecycle:
                 ON lifecycle_refresh_articles(article_id);
                 """
             )
+            connection.execute("BEGIN IMMEDIATE")
+            self._migrate_legacy_state(connection, self._now())
 
     def _now(self) -> str:
         return _timestamp(self._clock())
@@ -818,3 +1049,42 @@ def _timestamp(value: dt.datetime) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=dt.timezone.utc)
     return value.astimezone(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: object, *, fallback: dt.datetime) -> dt.datetime:
+    if isinstance(value, dt.datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        try:
+            parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = fallback
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _legacy_source_id(identity: str) -> str:
+    prefix = "source-id:"
+    normalized = str(identity or "").strip()
+    return normalized[len(prefix) :] if normalized.casefold().startswith(prefix) else ""
+
+
+def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone() is not None
+
+
+def _require_columns(
+    connection: sqlite3.Connection,
+    table: str,
+    required: set[str],
+) -> None:
+    rows = connection.execute("SELECT name FROM pragma_table_info(?)", (table,)).fetchall()
+    existing = {str(row["name"]) for row in rows}
+    missing = sorted(required - existing)
+    if missing:
+        raise RuntimeError(f"Legacy table {table} is missing required columns: {', '.join(missing)}")
