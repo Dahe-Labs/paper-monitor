@@ -44,9 +44,9 @@ def _main() -> int:
         from paper_monitor.windows_background import main as background_main
 
         return background_main(sys.argv[2:])
-    from paper_monitor import windows_tray
+    from paper_monitor import windows_app
 
-    return windows_tray.main()
+    return windows_app.main()
 
 
 if __name__ == "__main__":

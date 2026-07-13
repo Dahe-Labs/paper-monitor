@@ -235,6 +235,7 @@ class WindowsDashboardServer:
     def handle_api_request(self, path: str, payload: Dict[str, object]) -> Tuple[int, Dict[str, object]]:
         if path == "/api/settings":
             from .config_store import update_config_atomic
+            from .windows_native_tray import reconcile_native_tray
             from .windows_runtime_settings import sync_windows_runtime_settings
             from .windows_settings import save_settings
 
@@ -268,6 +269,7 @@ class WindowsDashboardServer:
                             f"settings were rolled back: {exc}"
                         )
                     }
+                reconcile_native_tray(self.config_path)
             return (200 if response.get("ok") else 400), response
 
         if path == "/api/add-search-term":

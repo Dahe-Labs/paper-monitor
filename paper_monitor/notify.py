@@ -104,11 +104,11 @@ def notify_article(article: Article, match: MatchResult, dashboard_path: Path = 
 
 
 def _notify_windows_article(article: Article, dashboard_path: Path = None) -> bool:
-    from .windows_tray import WindowsToastNotifier, windows_icon_path
+    from .windows_notification import WindowsArticleNotificationAdapter
 
-    notifier = WindowsToastNotifier(icon_path=windows_icon_path())
+    notifier = WindowsArticleNotificationAdapter()
     dashboard_path = dashboard_path or Path.cwd()
-    return notifier.notify_article(
+    return notifier.deliver(
         {
             "title": article.title,
             "journal": article.journal,

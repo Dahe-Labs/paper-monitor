@@ -76,6 +76,41 @@ class WindowsNativeTrayTests(unittest.TestCase):
                 )
             popen.assert_not_called()
 
+    def test_reconcile_starts_or_stops_the_native_tray_from_the_saved_setting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            visible_config = self._config_path(directory, visible=True)
+            with (
+                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "ensure_native_tray", return_value=True) as ensure,
+            ):
+                self.assertTrue(
+                    windows_native_tray.reconcile_native_tray(
+                        visible_config,
+                        executable_path=Path("PaperMonitor.exe"),
+                    )
+                )
+            ensure.assert_called_once_with(
+                visible_config.resolve(),
+                executable_path=Path("PaperMonitor.exe"),
+            )
+
+            hidden_config = self._config_path(directory, visible=False)
+            with (
+                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "stop_native_tray", return_value=True) as stop,
+            ):
+                self.assertTrue(windows_native_tray.reconcile_native_tray(hidden_config))
+            stop.assert_called_once_with()
+
+    def test_stop_native_tray_posts_close_only_when_the_mutex_exists(self):
+        with (
+            patch.object(windows_native_tray.os, "name", "nt"),
+            patch.object(windows_native_tray, "is_mutex_running", return_value=True),
+            patch.object(windows_native_tray, "_post_native_tray_close", return_value=True) as post,
+        ):
+            self.assertTrue(windows_native_tray.stop_native_tray())
+        post.assert_called_once_with()
+
     def test_bundled_onefile_tray_is_materialized_to_stable_versioned_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

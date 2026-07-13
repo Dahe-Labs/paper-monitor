@@ -257,8 +257,6 @@ class RefreshExecutionModuleTests(unittest.TestCase):
                         "startup_enabled": False,
                         "show_tray_icon": True,
                         "notifications_enabled": False,
-                        "silent_startup_notifications": True,
-                        "refresh_on_launch": False,
                     },
                     "sources": {
                         "rss": [{"name": "Nature Energy", "url": "https://feed.example/rss"}],

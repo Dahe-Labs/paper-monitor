@@ -9,7 +9,10 @@ from paper_monitor.article_lifecycle import (
     NotificationDelivery,
     RefreshNotification,
 )
-from paper_monitor.windows_notification import WindowsSummaryNotificationAdapter
+from paper_monitor.windows_notification import (
+    WindowsArticleNotificationAdapter,
+    WindowsSummaryNotificationAdapter,
+)
 
 
 def notification(*, heading="3 new articles detected", body="Article A; Article B; Article C"):
@@ -23,6 +26,32 @@ def notification(*, heading="3 new articles detected", body="Article A; Article 
 
 
 class WindowsNotificationTests(unittest.TestCase):
+    def test_article_adapter_prefers_url_then_doi_then_dashboard_target(self):
+        sender = Mock()
+        adapter = WindowsArticleNotificationAdapter(
+            sender=sender,
+            icon_path=Path("missing.ico"),
+        )
+        dashboard = Path("work/dashboard/latest.html")
+
+        cases = (
+            ({"title": "A", "url": "https://example.org/a", "doi": "10.1/a"}, "https://example.org/a"),
+            ({"title": "B", "url": "", "doi": "10.1/b"}, "https://doi.org/10.1/b"),
+            ({"title": "C", "url": "", "doi": ""}, dashboard.resolve().as_uri()),
+        )
+        for article, target in cases:
+            with self.subTest(target=target):
+                self.assertTrue(adapter.deliver(article, dashboard))
+                self.assertEqual(sender.call_args.kwargs["on_click"], target)
+
+    def test_article_adapter_contains_runtime_delivery_failures(self):
+        adapter = WindowsArticleNotificationAdapter(
+            sender=Mock(side_effect=RuntimeError("toast failed")),
+            icon_path=Path("missing.ico"),
+        )
+
+        self.assertFalse(adapter.deliver({"title": "Paper"}, Path("dashboard.html")))
+
     def test_summary_adapter_submits_one_bounded_notification(self):
         sender = Mock()
         with tempfile.TemporaryDirectory() as directory:

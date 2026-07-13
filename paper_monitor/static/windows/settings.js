@@ -8,11 +8,6 @@
     let journalDualList = null;
     let settingsLoaded = false;
     let settingsDirty = false;
-    let legacyResidentSettings = {
-      show_tray_icon: true,
-      silent_startup_notifications: true,
-      refresh_on_launch: true
-    };
     const DUAL_LIST_MIME = "application/x-paper-monitor-dual-list";
 
     function field(id) {
@@ -664,7 +659,7 @@
       return body;
     }
 
-    function fillForm(payload, preserveLegacyResidentSettings) {
+    function fillForm(payload) {
       const sources = payload.sources || {};
       const crossref = sources.crossref || {};
       const openalex = sources.openalex || {};
@@ -673,24 +668,14 @@
       const direction = payload.search_direction || {};
       const appSettings = payload.app_settings || {};
 
-      if (!preserveLegacyResidentSettings) {
-        legacyResidentSettings = {
-          show_tray_icon: Boolean(appSettings.show_tray_icon),
-          silent_startup_notifications: Boolean(appSettings.silent_startup_notifications),
-          refresh_on_launch: Boolean(appSettings.refresh_on_launch)
-        };
-      }
-
       fillFrequencyOptions(payload.refresh_frequency_options, payload.interval_seconds);
       setValue("refresh_start_time", payload.refresh_start_time || "");
       setValue("max_notifications", payload.max_notifications);
       setValue("journal_scope_top_n", journalScope.top_n);
       fillSearchDirection(direction);
       setChecked("startup_enabled", appSettings.startup_enabled);
-      setChecked("show_tray_icon", legacyResidentSettings.show_tray_icon);
+      setChecked("show_tray_icon", appSettings.show_tray_icon);
       setChecked("notifications_enabled", appSettings.notifications_enabled);
-      setChecked("silent_startup_notifications", legacyResidentSettings.silent_startup_notifications);
-      setChecked("refresh_on_launch", legacyResidentSettings.refresh_on_launch);
 
       setLines("include_terms", payload.include_terms);
       setLines("exclude_terms", payload.exclude_terms);
@@ -737,10 +722,8 @@
         max_notifications: numberValue("max_notifications"),
         app_settings: {
           startup_enabled: field("startup_enabled").checked,
-          show_tray_icon: legacyResidentSettings.show_tray_icon,
-          notifications_enabled: field("notifications_enabled").checked,
-          silent_startup_notifications: legacyResidentSettings.silent_startup_notifications,
-          refresh_on_launch: legacyResidentSettings.refresh_on_launch
+          show_tray_icon: field("show_tray_icon").checked,
+          notifications_enabled: field("notifications_enabled").checked
         },
         search_direction: {
           preset: preset,
@@ -801,7 +784,7 @@
       setStatus("Loading defaults...", "");
       try {
         const payload = await request("/api/settings/defaults");
-        fillForm(payload, true);
+        fillForm(payload);
         settingsDirty = true;
         setStatus("Defaults loaded. Save to apply.", "ok");
       } catch (error) {

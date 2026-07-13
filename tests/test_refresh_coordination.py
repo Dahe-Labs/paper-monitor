@@ -1,4 +1,3 @@
-import json
 import tempfile
 import threading
 import time
@@ -6,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from paper_monitor import app_refresh, windows_app_window, windows_tray
-from paper_monitor.config import DEFAULT_CONFIG, write_default_config
+from paper_monitor import app_refresh, windows_app, windows_app_window
+from paper_monitor.config import write_default_config
 from paper_monitor.models import Article
 from paper_monitor.refresh_status import begin_refresh, finish_refresh, read_refresh_status, refresh_status_path
 from paper_monitor.sources import SourceFetchError, SourceFetchResult
@@ -146,86 +145,6 @@ class RefreshStatusTests(unittest.TestCase):
         self.assertIn("offline", failed_state["error"])
 
 
-class TrayLifecycleTests(unittest.TestCase):
-    def _config_path(self, directory: str) -> Path:
-        config_path = Path(directory) / "config.json"
-        config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
-        return config_path
-
-    def test_notification_failures_are_visible_in_tray_status(self):
-        class FailingNotifier:
-            def notify_article(self, _article, _dashboard_path):
-                return False
-
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = self._config_path(directory)
-            app = windows_tray.WindowsTrayApp(
-                config_path,
-                notifier=FailingNotifier(),
-                refresh_function=lambda _path: {
-                    "fetched": 1,
-                    "matched": 1,
-                    "new_matches": 1,
-                    "articles": [{"title": "Paper"}],
-                },
-            )
-            app.refresh_now()
-
-        self.assertEqual(app.status.notification_attempts, 1)
-        self.assertEqual(app.status.notification_failures, 1)
-        self.assertIn("Notifications 0 sent / 1 failed", app.status.last_result)
-
-    def test_default_window_control_receives_refresh_complete_action(self):
-        class RunningProcess:
-            def poll(self):
-                return None
-
-        app = windows_tray.WindowsTrayApp(Path("config.json"))
-        app._window_process = RunningProcess()
-        with patch.object(app, "_send_window_control", return_value=True) as send:
-            app._reload_open_window()
-
-        send.assert_called_once_with("refresh-complete")
-
-    def test_quit_waits_off_ui_thread_and_blocks_new_refreshes(self):
-        class FakeIcon:
-            def __init__(self):
-                self.stopped = threading.Event()
-
-            def stop(self):
-                self.stopped.set()
-
-        started = threading.Event()
-        release = threading.Event()
-
-        def refresh(_path):
-            started.set()
-            release.wait(timeout=3)
-            return {"fetched": 0, "matched": 0, "new_matches": 0, "articles": []}
-
-        with tempfile.TemporaryDirectory() as directory:
-            app = windows_tray.WindowsTrayApp(
-                self._config_path(directory),
-                refresh_function=refresh,
-                control_window=lambda *_args: True,
-            )
-            icon = FakeIcon()
-            app._icon = icon
-            self.assertTrue(app.start_manual_refresh())
-            self.assertTrue(started.wait(timeout=1))
-
-            before = time.monotonic()
-            app.quit()
-            elapsed = time.monotonic() - before
-            self.assertLess(elapsed, 0.5)
-            self.assertFalse(icon.stopped.is_set())
-            self.assertFalse(app.start_manual_refresh())
-
-            release.set()
-            self.assertTrue(icon.stopped.wait(timeout=2))
-            app._wait_for_background_work(2)
-
-
 class WindowControlSafetyTests(unittest.TestCase):
     def test_window_keeps_desktop_default_with_smaller_supported_minimum(self):
         self.assertEqual((windows_app_window.DEFAULT_WIDTH, windows_app_window.DEFAULT_HEIGHT), (1180, 760))
@@ -285,8 +204,8 @@ class WindowControlSafetyTests(unittest.TestCase):
 
 class FrozenSmokeTests(unittest.TestCase):
     def test_self_test_reads_bundled_resources_without_user_app_setup(self):
-        with patch("paper_monitor.windows_tray.ensure_windows_app_files") as ensure_files:
-            self.assertEqual(windows_tray.main(["self-test"]), 0)
+        with patch("paper_monitor.windows_app.ensure_windows_app_files") as ensure_files:
+            self.assertEqual(windows_app.main(["self-test"]), 0)
         ensure_files.assert_not_called()
         self.assertFalse(refresh_status_path(Path("config.json")).name.startswith("."))
 

@@ -489,10 +489,6 @@ def _app_settings_payload(value: object) -> Dict[str, bool]:
         "startup_enabled": _bool_value(mapping.get("startup_enabled", defaults["startup_enabled"])),
         "show_tray_icon": _bool_value(mapping.get("show_tray_icon", defaults["show_tray_icon"])),
         "notifications_enabled": _bool_value(mapping.get("notifications_enabled", defaults["notifications_enabled"])),
-        "silent_startup_notifications": _bool_value(
-            mapping.get("silent_startup_notifications", defaults["silent_startup_notifications"]),
-        ),
-        "refresh_on_launch": _bool_value(mapping.get("refresh_on_launch", defaults["refresh_on_launch"])),
     }
 
 
@@ -502,11 +498,6 @@ def _validated_app_settings(value: object) -> Dict[str, bool]:
         "startup_enabled": _required_bool(mapping.get("startup_enabled"), "app_settings.startup_enabled"),
         "show_tray_icon": _required_bool(mapping.get("show_tray_icon"), "app_settings.show_tray_icon"),
         "notifications_enabled": _required_bool(mapping.get("notifications_enabled"), "app_settings.notifications_enabled"),
-        "silent_startup_notifications": _required_bool(
-            mapping.get("silent_startup_notifications"),
-            "app_settings.silent_startup_notifications",
-        ),
-        "refresh_on_launch": _required_bool(mapping.get("refresh_on_launch"), "app_settings.refresh_on_launch"),
     }
 
 

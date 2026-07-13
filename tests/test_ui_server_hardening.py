@@ -100,6 +100,25 @@ class UIServerHardeningTests(unittest.TestCase):
         self.assertFalse(saved["app_settings"]["startup_enabled"])
         self.assertEqual(sync.call_count, 2)
 
+    def test_settings_endpoint_reconciles_native_tray_after_successful_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(json.dumps(copy.deepcopy(DEFAULT_CONFIG)), encoding="utf-8")
+            server = WindowsDashboardServer(config_path)
+
+            with (
+                patch("paper_monitor.windows_runtime_settings.sync_windows_runtime_settings"),
+                patch("paper_monitor.windows_native_tray.reconcile_native_tray") as reconcile,
+            ):
+                status, response = server.handle_api_request(
+                    "/api/settings",
+                    {"app_settings": {"show_tray_icon": False}},
+                )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {"ok": True})
+        reconcile.assert_called_once_with(config_path)
+
     def test_keyword_analysis_rejects_active_urls_and_hardens_external_links(self):
         candidates = [
             {"title": "Unsafe", "url": "javascript:alert(1)", "matched": True},

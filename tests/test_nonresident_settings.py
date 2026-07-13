@@ -23,21 +23,18 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertIn("Background Monitoring", html)
         self.assertIn("Run short scheduled refresh tasks without keeping Paper Monitor in memory", html)
         self.assertIn('id="startup_enabled"', html)
-        self.assertEqual(html.count("hidden data-legacy-resident-setting"), 3)
+        self.assertIn("Keep the lightweight native tray available after the window closes", html)
+        self.assertNotIn("data-legacy-resident-setting", html)
         self.assertIn("[hidden]", css)
         self.assertIn("display: none !important", css)
 
-    def test_hidden_resident_values_are_preserved_by_settings_javascript(self):
+    def test_settings_javascript_uses_only_current_runtime_values(self):
         javascript = read_text("paper_monitor/static/windows/settings.js")
 
-        self.assertIn("let legacyResidentSettings = {", javascript)
-        self.assertIn("fillForm(payload, true)", javascript)
-        self.assertIn("show_tray_icon: legacyResidentSettings.show_tray_icon", javascript)
-        self.assertIn(
-            "silent_startup_notifications: legacyResidentSettings.silent_startup_notifications",
-            javascript,
-        )
-        self.assertIn("refresh_on_launch: legacyResidentSettings.refresh_on_launch", javascript)
+        self.assertIn('show_tray_icon: field("show_tray_icon").checked', javascript)
+        self.assertNotIn("legacyResidentSettings", javascript)
+        self.assertNotIn("silent_startup_notifications", javascript)
+        self.assertNotIn("refresh_on_launch", javascript)
 
     def test_installer_removes_legacy_login_startup(self):
         installer = read_text("windows/PaperMonitor.iss")
@@ -61,6 +58,34 @@ class NonResidentSettingsContractTests(unittest.TestCase):
 
 
 class RuntimeScheduleSettingsTests(unittest.TestCase):
+    def test_legacy_login_entry_cleanup_only_deletes_the_obsolete_value(self):
+        class FakeRegistry:
+            HKEY_CURRENT_USER = object()
+            KEY_SET_VALUE = 2
+
+            def __init__(self):
+                self.opened = []
+                self.deleted = []
+                self.closed = []
+
+            def OpenKey(self, root, path, reserved, access):
+                self.opened.append((root, path, reserved, access))
+                return self
+
+            def DeleteValue(self, key, name):
+                self.deleted.append((key, name))
+
+            def CloseKey(self, key):
+                self.closed.append(key)
+
+        registry = FakeRegistry()
+
+        windows_runtime_settings.remove_legacy_startup_entry(registry_module=registry)
+
+        self.assertEqual(registry.opened[0][1], windows_runtime_settings.RUN_KEY_PATH)
+        self.assertEqual(registry.deleted, [(registry, "Paper Monitor")])
+        self.assertEqual(registry.closed, [registry])
+
     def test_runtime_settings_replace_login_startup_with_scheduled_refresh(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -80,12 +105,12 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
 
             with (
                 patch.dict(sys.modules, {scheduler.__name__: scheduler}),
-                patch("paper_monitor.windows_tray.set_startup_enabled") as legacy_startup,
+                patch.object(windows_runtime_settings, "remove_legacy_startup_entry") as cleanup,
                 patch.object(windows_runtime_settings, "os", types.SimpleNamespace(name="nt")),
             ):
                 windows_runtime_settings.sync_windows_runtime_settings(config_path, executable)
 
-            legacy_startup.assert_called_once_with(False, executable.resolve())
+            cleanup.assert_called_once_with()
             scheduler.sync_scheduled_refresh.assert_called_once_with(
                 config_path.resolve(),
                 True,
@@ -110,7 +135,7 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
 
             with (
                 patch.dict(sys.modules, {scheduler.__name__: scheduler}),
-                patch("paper_monitor.windows_tray.set_startup_enabled") as legacy_startup,
+                patch.object(windows_runtime_settings, "remove_legacy_startup_entry") as cleanup,
                 patch.object(windows_runtime_settings, "os", types.SimpleNamespace(name="nt")),
             ):
                 with self.assertRaises(RuntimeError):
@@ -121,7 +146,7 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
                     windows_runtime_settings.sync_windows_runtime_settings(config_path)
 
             scheduler.sync_scheduled_refresh.assert_not_called()
-            legacy_startup.assert_not_called()
+            cleanup.assert_not_called()
 
 
 if __name__ == "__main__":

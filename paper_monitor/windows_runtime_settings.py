@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Optional
 
 SECONDS_PER_HOUR = 60 * 60
+RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+LEGACY_RUN_VALUE_NAME = "Paper Monitor"
 
 
 def sync_windows_runtime_settings(
@@ -23,7 +25,6 @@ def sync_windows_runtime_settings(
     start_time = str(payload.get("refresh_start_time") or "").strip()
 
     from .windows_scheduled_task import sync_scheduled_refresh
-    from .windows_tray import set_startup_enabled
 
     executable = Path(executable_path or sys.executable).resolve()
     scheduler_kwargs = {"executable": executable} if executable_path is not None else {}
@@ -37,10 +38,31 @@ def sync_windows_runtime_settings(
         **scheduler_kwargs,
     )
     if cleanup_legacy_startup:
+        remove_legacy_startup_entry()
+
+
+def remove_legacy_startup_entry(*, registry_module=None) -> None:
+    """Remove the obsolete Python tray login entry if an older release left it behind."""
+
+    if registry_module is None:
+        import winreg as registry_module
+
+    try:
+        key = registry_module.OpenKey(
+            registry_module.HKEY_CURRENT_USER,
+            RUN_KEY_PATH,
+            0,
+            registry_module.KEY_SET_VALUE,
+        )
+    except FileNotFoundError:
+        return
+    try:
         try:
-            set_startup_enabled(False, executable)
-        except FileNotFoundError:
+            registry_module.DeleteValue(key, LEGACY_RUN_VALUE_NAME)
+        except (FileNotFoundError, OSError):
             pass
+    finally:
+        registry_module.CloseKey(key)
 
 
 def _config_payload(config_path: Path) -> Mapping[str, object]:

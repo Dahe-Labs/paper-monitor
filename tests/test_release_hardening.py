@@ -44,6 +44,18 @@ class ReleaseHardeningTests(unittest.TestCase):
         frozen_build = package_script.index("-PrebuiltNativeTrayPath $DistNativeTray")
         self.assertLess(pre_sign, frozen_build)
 
+    def test_retired_python_tray_is_absent_from_source_and_frozen_runtime(self):
+        build_script = (ROOT / "scripts" / "build_windows_app.ps1").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements-windows.txt").read_text(encoding="utf-8")
+        launcher = (ROOT / "windows" / "PaperMonitor.pyw").read_text(encoding="utf-8")
+
+        self.assertFalse((ROOT / "paper_monitor" / "windows_tray.py").exists())
+        self.assertIn("from paper_monitor import windows_app", launcher)
+        self.assertNotIn("pystray", requirements.casefold())
+        self.assertNotIn('"pystray"', build_script)
+        self.assertNotIn('"PIL.Image"', build_script)
+        self.assertNotIn('"PIL.ImageDraw"', build_script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from paper_monitor import windows_app_window, windows_tray
+from paper_monitor import windows_app, windows_app_window
 
 
 class _FakeEvent:
@@ -51,11 +51,12 @@ class NonResidentLifecycleTests(unittest.TestCase):
             with patch(
                 "paper_monitor.windows_runtime_settings.sync_windows_runtime_settings"
             ) as sync:
-                windows_tray.set_background_monitoring_enabled(
-                    config_path,
-                    True,
-                    executable_path=executable,
-                )
+                with patch("paper_monitor.windows_runtime_settings.remove_legacy_startup_entry"):
+                    windows_app.set_background_monitoring_enabled(
+                        config_path,
+                        True,
+                        executable_path=executable,
+                    )
 
             saved = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertTrue(saved["app_settings"]["startup_enabled"])
@@ -80,7 +81,7 @@ class NonResidentLifecycleTests(unittest.TestCase):
                 side_effect=RuntimeError("task registration failed"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "task registration failed"):
-                    windows_tray.set_background_monitoring_enabled(config_path, True)
+                    windows_app.set_background_monitoring_enabled(config_path, True)
 
             saved = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertFalse(saved["app_settings"]["startup_enabled"])
@@ -90,18 +91,16 @@ class NonResidentLifecycleTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             for command in ("window", "settings", "run"):
                 with self.subTest(command=command):
-                    with patch("paper_monitor.windows_tray._is_windows_platform", return_value=False):
-                        with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
-                            with patch("paper_monitor.windows_native_tray.ensure_native_tray") as ensure_native:
-                                with patch("paper_monitor.windows_tray._sync_windows_runtime_settings") as sync:
-                                    with patch(
-                                        "paper_monitor.windows_app_window.open_dashboard_window",
-                                        return_value=0,
-                                    ) as open_window:
-                                        status = windows_tray.main([command, "--config", str(config_path)])
+                    with patch("paper_monitor.windows_app._is_windows_platform", return_value=False):
+                        with patch("paper_monitor.windows_native_tray.ensure_native_tray") as ensure_native:
+                            with patch("paper_monitor.windows_app._sync_windows_runtime_settings") as sync:
+                                with patch(
+                                    "paper_monitor.windows_app_window.open_dashboard_window",
+                                    return_value=0,
+                                ) as open_window:
+                                    status = windows_app.main([command, "--config", str(config_path)])
 
                     self.assertEqual(status, 0)
-                    ensure_tray.assert_not_called()
                     ensure_native.assert_called_once_with(config_path)
                     sync.assert_called_once_with(config_path)
                     expected_path = "/settings" if command == "settings" else "/"
@@ -166,44 +165,38 @@ class NonResidentLifecycleTests(unittest.TestCase):
         self.assertEqual(fake_webview.window.hide_calls, 0)
         self.assertEqual(fake_server.stop_count, 1)
 
-    def test_explicit_tray_command_remains_available(self):
-        config_path = Path("config.json")
-        with patch("paper_monitor.windows_tray.WindowsTrayApp") as tray_app_class:
-            status = windows_tray.main(["tray", "--quiet", "--config", str(config_path)])
+    def test_obsolete_python_tray_command_is_rejected(self):
+        with patch.object(windows_app.sys, "stderr"):
+            with self.assertRaises(SystemExit) as raised:
+                windows_app.main(["tray", "--quiet", "--config", "config.json"])
 
-        self.assertEqual(status, 0)
-        tray_app_class.assert_called_once_with(config_path=config_path)
-        tray_app_class.return_value.run.assert_called_once_with(refresh_on_start=True, quiet=True)
+        self.assertEqual(raised.exception.code, 2)
 
     def test_scheduled_refresh_command_does_not_construct_tray(self):
         config_path = Path("config.json")
-        with patch("paper_monitor.windows_tray.run_scheduled_refresh", return_value=0) as run_once:
-            with patch("paper_monitor.windows_tray.WindowsTrayApp") as tray_app_class:
-                status = windows_tray.main(["scheduled-refresh", "--config", str(config_path)])
+        with patch("paper_monitor.windows_app.run_scheduled_refresh", return_value=0) as run_once:
+            status = windows_app.main(["scheduled-refresh", "--config", str(config_path)])
 
         self.assertEqual(status, 0)
         run_once.assert_called_once_with(config_path)
-        tray_app_class.assert_not_called()
 
     def test_installer_runtime_sync_command_does_not_open_window_or_tray(self):
         config_path = Path("config.json")
         with patch(
             "paper_monitor.windows_runtime_settings.sync_windows_runtime_settings"
         ) as sync:
-            with patch("paper_monitor.windows_tray.WindowsTrayApp") as tray_app_class:
-                with patch(
-                    "paper_monitor.windows_app_window.open_dashboard_window"
-                ) as open_window:
-                    status = windows_tray.main(
-                        ["sync-runtime", "--config", str(config_path)]
-                    )
+            with patch(
+                "paper_monitor.windows_app_window.open_dashboard_window"
+            ) as open_window:
+                status = windows_app.main(
+                    ["sync-runtime", "--config", str(config_path)]
+                )
 
         self.assertEqual(status, 0)
         sync.assert_called_once_with(
             config_path,
-            executable_path=Path(windows_tray.sys.executable).resolve(),
+            executable_path=Path(windows_app.sys.executable).resolve(),
         )
-        tray_app_class.assert_not_called()
         open_window.assert_not_called()
 
     def test_runtime_settings_sync_failure_is_logged_but_not_raised(self):
@@ -213,8 +206,8 @@ class NonResidentLifecycleTests(unittest.TestCase):
             "paper_monitor.windows_runtime_settings.sync_windows_runtime_settings",
             side_effect=error,
         ):
-            with patch("paper_monitor.windows_tray._log_app_error") as log_error:
-                windows_tray._sync_windows_runtime_settings(config_path)
+            with patch("paper_monitor.windows_app._log_app_error") as log_error:
+                windows_app._sync_windows_runtime_settings(config_path)
 
         log_error.assert_called_once_with(
             config_path,

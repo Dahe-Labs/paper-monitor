@@ -1,39 +1,14 @@
 import importlib
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
 
-class FakeWinReg:
-    HKEY_CURRENT_USER = object()
-    KEY_SET_VALUE = 0x0002
-    REG_SZ = 1
-
-    def __init__(self):
-        self.values = []
-        self.deleted = []
-        self.opened = []
-
-    def OpenKey(self, root, path, reserved, access):
-        self.opened.append((root, path, reserved, access))
-        return self
-
-    def SetValueEx(self, key, name, reserved, value_type, value):
-        self.values.append((name, reserved, value_type, value))
-
-    def DeleteValue(self, key, name):
-        self.deleted.append(name)
-
-    def CloseKey(self, key):
-        pass
-
-
-class WindowsTrayTests(unittest.TestCase):
+class WindowsAppTests(unittest.TestCase):
     def test_default_windows_app_dir_uses_appdata(self):
-        from paper_monitor.windows_tray import default_windows_app_dir
+        from paper_monitor.windows_app import default_windows_app_dir
 
         env = {"APPDATA": r"C:\Users\Example\AppData\Roaming"}
 
@@ -42,114 +17,11 @@ class WindowsTrayTests(unittest.TestCase):
             PureWindowsPath(r"C:\Users\Example\AppData\Roaming\PaperMonitor"),
         )
 
-    def test_builds_refresh_command_for_existing_app_refresh_entrypoint(self):
-        from paper_monitor.windows_tray import build_refresh_command
-
-        command = build_refresh_command(
-            python_executable=PureWindowsPath(r"C:\Python313\python.exe"),
-            config_path=PureWindowsPath(r"C:\Users\Example\AppData\Roaming\PaperMonitor\config.json"),
-        )
-
-        self.assertEqual(
-            command,
-            [
-                r"C:\Python313\python.exe",
-                "-m",
-                "paper_monitor.cli",
-                "app-refresh",
-                "--config",
-                r"C:\Users\Example\AppData\Roaming\PaperMonitor\config.json",
-            ],
-        )
-
-    def test_notification_target_prefers_article_url_then_doi_then_dashboard(self):
-        from paper_monitor.windows_tray import notification_target
-
-        dashboard = Path("/tmp/paper-monitor/latest.html")
-
-        self.assertEqual(
-            notification_target({"url": "https://example.org/article", "doi": "10.1000/example"}, dashboard),
-            "https://example.org/article",
-        )
-        self.assertEqual(
-            notification_target({"url": "", "doi": "10.1000/example"}, dashboard),
-            "https://doi.org/10.1000/example",
-        )
-        self.assertTrue(notification_target({"url": "", "doi": ""}, dashboard).startswith("file://"))
-
-    def test_windows_toast_notifier_passes_click_target_to_win11toast(self):
-        from paper_monitor.windows_tray import WindowsToastNotifier
-
-        calls = []
-        fake_module = types.SimpleNamespace(
-            notify=lambda title, body, **kwargs: calls.append((title, body, kwargs))
-        )
-        original = sys.modules.get("win11toast")
-        sys.modules["win11toast"] = fake_module
-        try:
-            delivered = WindowsToastNotifier().notify_article(
-                {"title": "Solid electrolyte breakthrough", "journal": "Nature Energy", "url": "https://example.org/a"},
-                Path("/tmp/latest.html"),
-            )
-        finally:
-            if original is None:
-                sys.modules.pop("win11toast", None)
-            else:
-                sys.modules["win11toast"] = original
-
-        self.assertTrue(delivered)
-        self.assertEqual(calls[0][2]["on_click"], "https://example.org/a")
-        self.assertNotIn("app_id", calls[0][2])
-
-    def test_startup_registry_value_quotes_executable_and_uses_quiet_flag(self):
-        from paper_monitor.windows_tray import build_startup_registry_value
-
-        self.assertEqual(
-            build_startup_registry_value(PureWindowsPath(r"C:\Program Files\PaperMonitor\PaperMonitor.exe")),
-            r'"C:\Program Files\PaperMonitor\PaperMonitor.exe" tray --quiet',
-        )
-
-    def test_set_startup_enabled_writes_current_user_run_key(self):
-        from paper_monitor.windows_tray import set_startup_enabled
-
-        fake = FakeWinReg()
-
-        set_startup_enabled(
-            True,
-            PureWindowsPath(r"C:\Apps\PaperMonitor.exe"),
-            registry_module=fake,
-        )
-
-        self.assertEqual(
-            fake.opened[0][1],
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-        )
-        self.assertEqual(
-            fake.values,
-            [
-                (
-                    "Paper Monitor",
-                    0,
-                    fake.REG_SZ,
-                    r'"C:\Apps\PaperMonitor.exe" tray --quiet',
-                )
-            ],
-        )
-
-    def test_set_startup_disabled_deletes_current_user_run_key(self):
-        from paper_monitor.windows_tray import set_startup_enabled
-
-        fake = FakeWinReg()
-
-        set_startup_enabled(False, PureWindowsPath(r"C:\Apps\PaperMonitor.exe"), registry_module=fake)
-
-        self.assertEqual(fake.deleted, ["Paper Monitor"])
-
     def test_windows_launcher_is_quiet_entrypoint(self):
         launcher = Path("windows/PaperMonitor.pyw").read_text(encoding="utf-8")
 
         self.assertIn("windows_background", launcher)
-        self.assertIn("windows_tray", launcher)
+        self.assertIn("windows_app", launcher)
         self.assertIn("main(", launcher)
         self.assertNotIn("open-dashboard", launcher)
 
@@ -177,7 +49,7 @@ class WindowsTrayTests(unittest.TestCase):
                 "requirements-windows.lock.txt",
                 "config.example.json",
                 "journal_metrics.json",
-                "paper_monitor/windows_tray.py",
+                "paper_monitor/windows_app.py",
                 "paper_monitor/cli.py",
                 "windows/PaperMonitor.pyw",
                 "windows/assets/PaperMonitor.ico",

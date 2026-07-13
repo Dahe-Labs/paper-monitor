@@ -1,8 +1,8 @@
 # Paper Monitor 当前功能逻辑与实现原理总结
 
-生成日期：2026-07-09
+生成日期：2026-07-14
 
-本文档覆盖并替换旧版总结，按当前仓库状态说明 Paper Monitor 每个主要功能的实现逻辑、模块边界和平台差异。当前架构不是 Electron，也不是纯网页应用；它是共享 Python core 加 Windows pywebview/pystray 壳，加 macOS Swift/AppKit 壳。
+本文档覆盖并替换旧版总结，按当前仓库状态说明 Paper Monitor 每个主要功能的实现逻辑、模块边界和平台差异。当前架构不是 Electron，也不是纯网页应用；它是共享 Python core 加 Windows pywebview 窗口与原生 C 托盘，再加 macOS Swift/AppKit 壳。
 
 ## 1. 总体架构
 
@@ -11,7 +11,7 @@ Paper Monitor 的业务核心集中在 `paper_monitor/` Python 包中。Windows 
 整体分层如下：
 
 - Python core：读取配置，抓取论文源，过滤匹配，写 SQLite，生成 Dashboard HTML，执行关键词分析。
-- Windows 壳：`PaperMonitor.exe` 由 PyInstaller 打包，入口是 `windows/PaperMonitor.pyw`，再进入 `paper_monitor.windows_tray.main()`。主界面和设置页通过 pywebview 内置窗口打开，托盘通过 pystray 常驻。
+- Windows 壳：`PaperMonitor.exe` 由 PyInstaller 打包，入口是 `windows/PaperMonitor.pyw`，再进入 `paper_monitor.windows_app.main()`。主界面和设置页通过 pywebview 内置窗口打开；独立的 `PaperMonitorTray.exe` 只负责原生菜单和启动短时 worker，不加载 Python、WebView、网络检索或数据库。
 - macOS 壳：Swift/AppKit 应用位于 `macos/PaperMonitorApp`。原生窗口、菜单、状态栏、通知和设置界面由 Swift 实现，业务刷新通过 `PythonBridge` 调用同一套 Python CLI。
 - 发布包：Windows 生成 onefile exe 和 release zip；macOS 生成 `.app`，把 Python runtime 和数据文件复制进 app resources，再安装到 Application Support。
 
@@ -342,18 +342,18 @@ Crossref 分析模式：
 Windows 入口：
 
 - 打包入口：`windows/PaperMonitor.pyw`。
-- 命令入口：`paper_monitor.windows_tray.main()`。
+- 命令入口：`paper_monitor.windows_app.main()`。
 - 图形窗口：`paper_monitor.windows_app_window.open_dashboard_window()`。
-- 托盘常驻：`paper_monitor.windows_tray.WindowsTrayApp`。
+- 托盘 Adapter：`windows/native_tray/paper_monitor_tray.c` 编译为独立的 `PaperMonitorTray.exe`。
 
 命令行为：
 
 - `PaperMonitor.exe` 或 `PaperMonitor.exe window`：打开主应用窗口。
 - `PaperMonitor.exe settings`：打开设置窗口。
-- `PaperMonitor.exe tray`：启动托盘后台。
-- `PaperMonitor.exe tray --quiet`：静默启动托盘后台。
-- `PaperMonitor.exe install-startup`：写入当前用户 Run 注册表。
-- `PaperMonitor.exe uninstall-startup`：移除 Run 注册表。
+- `PaperMonitor.exe scheduled-refresh`：执行一次无窗口的后台刷新并退出。
+- `PaperMonitor.exe sync-runtime`：按配置同步 Windows 任务计划并清理旧 Run 注册表项。
+- `PaperMonitor.exe install-startup`：兼容命令，用于启用非驻留任务计划。
+- `PaperMonitor.exe uninstall-startup`：兼容命令，用于禁用非驻留任务计划。
 - `PaperMonitor.exe test-notification`：发送测试通知。
 - 如果主窗口已经存在，`window`/`settings` 命令通过本地控制通道切换现有窗口并聚焦，不再静默退出或创建第二个窗口。
 
@@ -367,30 +367,32 @@ Windows 入口：
 
 托盘行为：
 
-- `WindowsTrayApp.run()` 先获取 Windows mutex `Local\PaperMonitorTray`，防止多个托盘实例。
-- 根据 `app_settings.refresh_on_launch` 决定是否启动后刷新。
-- 根据 `app_settings.show_tray_icon` 决定是否显示托盘图标；运行期间修改该值会立即显示或隐藏图标，后台协调进程继续运行。
+- 原生 C 托盘启动时获取 Windows mutex `Local\PaperMonitorTray`，防止多个托盘实例。
+- 托盘不读取数据库、不执行网络检索，也不创建 Python 或 WebView 运行时。
+- `app_settings.show_tray_icon` 控制托盘是否运行；设置保存后会立即启动或退出托盘。
 - 菜单项包括：
   - `Open Paper Monitor`
   - `Settings...`
   - `Refresh Now`
   - `Test Notification`
-  - `Quit`
-- Windows 专用 pystray handler 只在收到 `WM_LBUTTONDBLCLK` 时触发 `Open Paper Monitor`，单击不会误触发默认菜单动作。
-- `Open Paper Monitor` 和 `Settings...` 不调用系统浏览器；没有窗口时启动 pywebview，有窗口时通过带重试的本地控制通道复用同一个窗口并切换 `/` 或 `/settings`。
+  - `Quit Tray`
+- 原生窗口过程只在收到 `WM_LBUTTONDBLCLK` 时触发 `Open Paper Monitor`，单击不会误触发菜单动作。
+- 每个菜单动作只启动一个有界的 `PaperMonitor.exe` worker；`Refresh Now` 使用与任务计划相同的后台 Refresh Execution。
+- `Open Paper Monitor` 和 `Settings...` 不调用系统浏览器；没有窗口时启动 pywebview，有窗口时通过本地控制通道复用同一个窗口并切换 `/` 或 `/settings`。
 
-启动项：
+后台计划：
 
-- 注册表值格式为 `"PaperMonitor.exe" tray --quiet`。
-- 设置保存后 `sync_windows_runtime_settings()` 会同步 `startup_enabled`。
-- 安装脚本也会调用 `install-startup`。
+- 新版本不写入登录 Run 注册表；同步设置时只清理旧版本残留的 Run 值。
+- 设置保存后 `sync_windows_runtime_settings()` 按 `startup_enabled` 同步当前用户的 Windows 任务计划。
+- 任务到期时启动一次 `scheduled-refresh`，刷新、存储和通知完成后退出。
+- 免安装版只要路径保持有效，同样可以注册任务计划；移动或删除程序后需要重新同步任务。
 
 通知：
 
 - Windows 通知使用 `win11toast`。
 - 通知标题为论文标题，副标题/正文包含 journal 和 DOI/URL。
 - 点击通知优先打开 article URL，其次 DOI URL，再 fallback 到 Dashboard 文件。
-- `silent_startup_notifications` 可抑制静默启动后的第一轮通知。
+- Windows 后台通知只由 `notifications_enabled` 和 Article Lifecycle 的通知状态控制，不再存在托盘启动刷新。
 
 ## 11. Windows 本地 HTTP Bridge
 
@@ -682,7 +684,7 @@ macOS 状态栏：
   - `paper_monitor/templates`
   - `paper_monitor/static`
   - `paper_monitor/resources`
-- hidden imports 包括 pystray、Pillow、win11toast、webview 和 Windows webview backends。
+- hidden imports 只保留运行期需要的 SQLite、Unicode、win11toast、webview 和 Windows webview backends；Pillow 仅供构建图标使用，不再强制打入运行包。
 - 排除非 Windows webview backend。
 
 发布脚本：
@@ -714,9 +716,9 @@ macOS 状态栏：
 - 复制 `config.example.json` 和 `journal_metrics.json` 到 `%APPDATA%\PaperMonitor`。
 - 如果用户没有 `config.json`，从 example 初始化。
 - 安装前会只停止已安装路径对应的旧 `PaperMonitor.exe`，避免旧进程占用或继续显示旧 UI。
-- 调用 `install-startup` 注册启动项。
-- 启动 `tray --quiet`。
-- 等待短暂时间后打开主窗口。
+- 只有用户选择启用后台监控时才调用 `install-startup` 注册非驻留任务计划。
+- 不再创建或启动 Python 托盘进程。
+- 只有用户选择安装后启动时才打开主窗口；主窗口再按设置启动原生 C 托盘。
 
 当前 Windows release 由 `public_release/CURRENT_WINDOWS_RELEASE.txt` 指向；对应 SHA256 以同目录的 `SHA256SUMS-<version>.txt` 为准，避免文档保留过期构建号。
 

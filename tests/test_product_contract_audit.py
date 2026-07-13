@@ -9,23 +9,23 @@ def read_text(relative_path: str) -> str:
 
 
 class ProductContractAuditTests(unittest.TestCase):
-    def test_windows_tray_dashboard_actions_use_native_window_entrypoint(self):
-        source = read_text("paper_monitor/windows_tray.py")
+    def test_windows_app_has_one_native_tray_adapter_and_no_python_resident_path(self):
+        source = read_text("paper_monitor/windows_app.py")
+        native_source = read_text("windows/native_tray/paper_monitor_tray.c")
         window_source = read_text("paper_monitor/windows_app_window.py")
 
-        self.assertIn("def app_window_command", source)
-        self.assertIn("def tray_process_command", source)
-        self.assertIn("def launch_app_window", source)
-        self.assertIn("class RefreshReason", source)
-        self.assertIn('pystray.MenuItem("Open Paper Monitor"', source)
-        self.assertIn("WM_LBUTTONDBLCLK", source)
-        self.assertIn("def _tray_icon_class", source)
-        self.assertIn("def _open_app_window_once", source)
+        self.assertNotIn("pystray", source)
+        self.assertNotIn("WindowsTrayApp", source)
+        self.assertNotIn('"tray",', source)
+        self.assertIn("ensure_native_tray(config_path)", source)
+        self.assertIn('launch_worker(L"window")', native_source)
+        self.assertIn('launch_worker(L"settings")', native_source)
+        self.assertIn('launch_worker(L"scheduled-refresh")', native_source)
+        self.assertIn('launch_worker(L"test-notification")', native_source)
+        self.assertIn("WM_LBUTTONDBLCLK", native_source)
         self.assertIn("def focus_existing_app_window", source)
         self.assertIn("def show_window_launch_error", source)
         self.assertIn("WINDOW_MUTEX_NAME", source)
-        self.assertIn('self._open_app_window_once("/")', source)
-        self.assertIn('self._open_app_window_once("/settings")', source)
         self.assertIn("from .windows_mutex import", source)
         self.assertIn("from .windows_mutex import", window_source)
         self.assertNotIn("def _create_mutex", source)
@@ -41,14 +41,14 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertNotIn("self.open_url", source)
 
     def test_windows_window_startup_defers_nonessential_feature_imports(self):
-        tray = read_text("paper_monitor/windows_tray.py")
+        app = read_text("paper_monitor/windows_app.py")
         window = read_text("paper_monitor/windows_app_window.py")
         server = read_text("paper_monitor/windows_dashboard_server.py")
 
-        self.assertNotIn("\nfrom .app_refresh import", tray)
-        self.assertIn('"scheduled-refresh"', tray)
-        self.assertIn("def _sync_windows_runtime_settings", tray)
-        self.assertNotIn("\nfrom .windows_scheduled_task import", tray)
+        self.assertNotIn("\nfrom .app_refresh import", app)
+        self.assertIn('"scheduled-refresh"', app)
+        self.assertIn("def _sync_windows_runtime_settings", app)
+        self.assertNotIn("\nfrom .windows_scheduled_task import", app)
         self.assertNotIn("\nfrom .windows_dashboard_server import", window)
         self.assertIn("def _default_dashboard_server_factory", window)
         self.assertNotIn("\nfrom .analysis_refresh import", server)
@@ -56,13 +56,13 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("def _default_keyword_analysis_runner", server)
 
     def test_tray_and_status_dashboard_actions_do_not_use_cli_or_browser_openers(self):
-        windows_tray = read_text("paper_monitor/windows_tray.py")
+        windows_app = read_text("paper_monitor/windows_app.py")
         macos_app_delegate = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/AppDelegate.swift")
         macos_click_policy = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/StatusItemClickPolicy.swift")
 
-        self.assertNotIn("open-dashboard", windows_tray)
-        self.assertNotIn("webbrowser.open", windows_tray)
-        self.assertNotIn("os.startfile", windows_tray)
+        self.assertNotIn("open-dashboard", windows_app)
+        self.assertNotIn("webbrowser.open", windows_app)
+        self.assertNotIn("os.startfile", windows_app)
 
         status_start = macos_app_delegate.index("private func statusMenu()")
         status_end = macos_app_delegate.index("@objc private func statusOpenSettings()")
@@ -74,7 +74,7 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertNotIn("NSWorkspace.shared.open", macos_click_policy)
 
     def test_windows_background_monitoring_is_nonresident(self):
-        source = read_text("paper_monitor/windows_tray.py")
+        source = read_text("paper_monitor/windows_app.py")
         background = read_text("paper_monitor/windows_background.py")
         schedule = read_text("paper_monitor/windows_scheduled_task.py")
         launcher = read_text("windows/PaperMonitor.pyw")
@@ -86,7 +86,7 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertNotIn("WindowsTrayApp", background)
         self.assertLess(
             launcher.index('sys.argv[1:2] == ["scheduled-refresh"]'),
-            launcher.index("from paper_monitor import windows_tray"),
+            launcher.index("from paper_monitor import windows_app"),
         )
         self.assertIn('"MultipleInstancesPolicy"', schedule)
         self.assertIn('"RunOnlyIfNetworkAvailable"', schedule)

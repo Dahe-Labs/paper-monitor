@@ -17,6 +17,39 @@ from .windows_mutex import TRAY_MUTEX_NAME, is_mutex_running
 
 NATIVE_TRAY_FILENAME = "PaperMonitorTray.exe"
 LOGGER = logging.getLogger(__name__)
+NATIVE_TRAY_WINDOW_CLASS = "PaperMonitorNativeTrayWindow"
+WM_CLOSE = 0x0010
+
+
+def reconcile_native_tray(
+    config_path: Path,
+    executable_path: Optional[Path] = None,
+) -> bool:
+    """Apply the configured native tray visibility to the current session."""
+
+    if os.name != "nt":
+        return False
+    resolved_config = Path(config_path).expanduser().resolve()
+    try:
+        tray_visible = load_app_config(resolved_config).app_settings.show_tray_icon
+    except (OSError, ValueError) as exc:
+        LOGGER.warning("Could not read the native tray setting: %s", exc)
+        return False
+    if tray_visible:
+        return ensure_native_tray(resolved_config, executable_path=executable_path)
+    return stop_native_tray()
+
+
+def stop_native_tray() -> bool:
+    """Request a running native tray to exit without touching refresh workers."""
+
+    if os.name != "nt" or not is_mutex_running(TRAY_MUTEX_NAME):
+        return False
+    try:
+        return _post_native_tray_close()
+    except (AttributeError, OSError) as exc:
+        LOGGER.warning("Could not stop the native Paper Monitor tray: %s", exc)
+        return False
 
 
 def ensure_native_tray(
@@ -138,3 +171,13 @@ def _remove_stale_tray_versions(directory: Path, current: Path) -> None:
             candidate.unlink()
         except OSError:
             continue
+
+
+def _post_native_tray_close() -> bool:
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    window = user32.FindWindowW(NATIVE_TRAY_WINDOW_CLASS, None)
+    if not window:
+        return False
+    return bool(user32.PostMessageW(window, WM_CLOSE, 0, 0))
