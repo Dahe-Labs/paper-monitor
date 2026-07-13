@@ -25,6 +25,18 @@ _DEFAULT_RETENTION_DAYS = 30
 _PRESENTATION_TOKEN_RETENTION_DAYS = 7
 _LEGACY_MIGRATION_NAME = "legacy-article-store-v1"
 _CANONICAL_DOI_MIGRATION_NAME = "canonical-doi-query-v1"
+_LEGACY_STORAGE_REMOVAL_NAME = "remove-legacy-article-store-v1"
+_LEGACY_STORAGE_QUERIES = (
+    ("candidates", "SELECT COUNT(*) FROM candidates", "DROP TABLE IF EXISTS candidates"),
+    (
+        "notification_outbox",
+        "SELECT COUNT(*) FROM notification_outbox",
+        "DROP TABLE IF EXISTS notification_outbox",
+    ),
+    ("runs", "SELECT COUNT(*) FROM runs", "DROP TABLE IF EXISTS runs"),
+    ("articles", "SELECT COUNT(*) FROM articles", "DROP TABLE IF EXISTS articles"),
+)
+_LEGACY_STORAGE_TABLES = tuple(item[0] for item in _LEGACY_STORAGE_QUERIES)
 
 
 class RefreshRunStatus(str, Enum):
@@ -96,6 +108,24 @@ class DashboardArticle:
 class DashboardSnapshot:
     presentation_token: str
     articles: Tuple[DashboardArticle, ...]
+
+
+@dataclass(frozen=True)
+class NotificationArticle:
+    article_id: str
+    title: str
+    journal: str
+    url: str
+    doi: str
+    published: str
+    source: str
+
+
+@dataclass(frozen=True)
+class NotificationHandoff:
+    run_id: str
+    article_count: int
+    articles: Tuple[NotificationArticle, ...]
 
 
 @dataclass(frozen=True)
@@ -223,14 +253,7 @@ class ArticleLifecycle:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection, now)
-            rows = connection.execute(
-                """
-                SELECT article_id, title, authors_json, journal, impact_reference, url,
-                       first_detected_at
-                FROM lifecycle_articles
-                ORDER BY first_detected_at DESC, article_id ASC
-                """
-            ).fetchall()
+            rows = self._dashboard_rows(connection)
             connection.execute(
                 """
                 INSERT INTO lifecycle_presentation_tokens (token, created_at, confirmed_at)
@@ -246,23 +269,22 @@ class ArticleLifecycle:
                 ((token, str(row["article_id"])) for row in rows),
             )
 
-        articles = tuple(
-            DashboardArticle(
-                article_id=str(row["article_id"]),
-                title=str(row["title"]),
-                authors=tuple(json.loads(str(row["authors_json"]))),
-                journal=str(row["journal"]),
-                impact_reference=(
-                    float(row["impact_reference"])
-                    if row["impact_reference"] is not None
-                    else None
-                ),
-                url=str(row["url"]),
-                first_detected_at=str(row["first_detected_at"]),
-            )
-            for row in rows
+        return DashboardSnapshot(
+            presentation_token=token,
+            articles=_dashboard_articles(rows),
         )
-        return DashboardSnapshot(presentation_token=token, articles=articles)
+
+    def list_articles(self, limit: Optional[int] = None) -> Tuple[DashboardArticle, ...]:
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+        ):
+            raise ValueError("limit must be a positive integer or None")
+        now = self._now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_expired(connection, now)
+            rows = self._dashboard_rows(connection, limit=limit)
+        return _dashboard_articles(rows)
 
     def confirm_presentation(self, token: str) -> int:
         normalized_token = str(token or "").strip()
@@ -297,6 +319,102 @@ class ArticleLifecycle:
                 (now, normalized_token),
             )
             return max(cursor.rowcount, 0)
+
+    def accept_notification_handoff(
+        self,
+        run_id: str,
+        *,
+        limit: int,
+    ) -> NotificationHandoff:
+        """Atomically hand eligible Articles to a shell that owns notification UI.
+
+        The handoff preserves the legacy macOS/CLI contract: once the shell accepts
+        the batch, Articles are not offered again even if that shell suppresses UI.
+        """
+
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            raise ValueError("run_id must not be empty")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError("limit must be a non-negative integer")
+        now = self._now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._prune_expired(connection, now)
+            if connection.execute(
+                "SELECT 1 FROM lifecycle_refresh_runs WHERE run_id = ?",
+                (normalized_run_id,),
+            ).fetchone() is None:
+                raise KeyError(normalized_run_id)
+            prior = connection.execute(
+                "SELECT state FROM lifecycle_notification_attempts WHERE run_id = ?",
+                (normalized_run_id,),
+            ).fetchone()
+            if prior is not None and str(prior["state"]) != "rejected":
+                return NotificationHandoff(normalized_run_id, 0, ())
+
+            rows = connection.execute(
+                """
+                SELECT article.article_id, article.title, article.journal, article.url,
+                       article.doi, article.published, article.source
+                FROM lifecycle_refresh_articles AS detected
+                JOIN lifecycle_articles AS article ON article.article_id = detected.article_id
+                WHERE detected.run_id = ?
+                  AND article.presented_at IS NULL
+                  AND article.notification_state = 'eligible'
+                ORDER BY article.first_detected_at DESC, article.article_id ASC
+                """,
+                (normalized_run_id,),
+            ).fetchall()
+            if not rows:
+                self._write_notification_attempt(
+                    connection,
+                    normalized_run_id,
+                    state="not_needed",
+                    article_count=0,
+                    now=now,
+                    last_error="",
+                )
+                return NotificationHandoff(normalized_run_id, 0, ())
+
+            article_ids = tuple(str(row["article_id"]) for row in rows)
+            placeholders = ",".join("?" for _ in article_ids)
+            connection.execute(
+                f"""
+                UPDATE lifecycle_articles
+                SET notification_state = 'consumed', notified_at = ?
+                WHERE article_id IN ({placeholders})
+                  AND presented_at IS NULL
+                  AND notification_state = 'eligible'
+                """,  # nosec B608
+                (now, *article_ids),
+            )
+            self._write_notification_attempt(
+                connection,
+                normalized_run_id,
+                state="accepted",
+                article_count=len(article_ids),
+                now=now,
+                last_error="",
+            )
+            selected = rows[:limit]
+
+        return NotificationHandoff(
+            run_id=normalized_run_id,
+            article_count=len(article_ids),
+            articles=tuple(
+                NotificationArticle(
+                    article_id=str(row["article_id"]),
+                    title=str(row["title"]),
+                    journal=str(row["journal"]),
+                    url=str(row["url"]),
+                    doi=str(row["doi"]),
+                    published=str(row["published"]),
+                    source=str(row["source"]),
+                )
+                for row in selected
+            ),
+        )
 
     def deliver_notification(
         self,
@@ -765,6 +883,47 @@ class ArticleLifecycle:
             ),
         )
 
+    def _remove_legacy_storage(self, connection: sqlite3.Connection, now: str) -> bool:
+        existing_tables = tuple(
+            table for table in _LEGACY_STORAGE_TABLES if _table_exists(connection, table)
+        )
+        if not existing_tables:
+            if connection.execute(
+                "SELECT 1 FROM lifecycle_migrations WHERE name = ?",
+                (_LEGACY_STORAGE_REMOVAL_NAME,),
+            ).fetchone() is None:
+                connection.execute(
+                    """
+                    INSERT INTO lifecycle_migrations (name, applied_at, details_json)
+                    VALUES (?, ?, ?)
+                    """,
+                    (_LEGACY_STORAGE_REMOVAL_NAME, now, _json_dumps({"removed": {}})),
+                )
+            return False
+
+        removed = {
+            table: int(connection.execute(count_query).fetchone()[0])
+            for table, count_query, _drop_query in _LEGACY_STORAGE_QUERIES
+            if table in existing_tables
+        }
+        for _table, _count_query, drop_query in _LEGACY_STORAGE_QUERIES:
+            connection.execute(drop_query)
+        connection.execute(
+            """
+            INSERT INTO lifecycle_migrations (name, applied_at, details_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                applied_at = excluded.applied_at,
+                details_json = excluded.details_json
+            """,
+            (
+                _LEGACY_STORAGE_REMOVAL_NAME,
+                now,
+                _json_dumps({"removed": removed}),
+            ),
+        )
+        return True
+
     def _migrate_legacy_state(self, connection: sqlite3.Connection, now: str) -> None:
         if connection.execute(
             "SELECT 1 FROM lifecycle_migrations WHERE name = ?",
@@ -992,6 +1151,22 @@ class ArticleLifecycle:
         ).fetchall()
         return {str(row["article_id"]) for row in rows}
 
+    @staticmethod
+    def _dashboard_rows(
+        connection: sqlite3.Connection,
+        *,
+        limit: Optional[int] = None,
+    ) -> Sequence[sqlite3.Row]:
+        query = """
+            SELECT article_id, title, authors_json, journal, impact_reference, url,
+                   first_detected_at
+            FROM lifecycle_articles
+            ORDER BY first_detected_at DESC, article_id ASC
+        """
+        if limit is None:
+            return connection.execute(query).fetchall()
+        return connection.execute(query + " LIMIT ?", (limit,)).fetchall()
+
     def _prune_expired(self, connection: sqlite3.Connection, now: str) -> None:
         cutoff = _timestamp(self._clock() - dt.timedelta(days=self.retention_days))
         expired = connection.execute(
@@ -1023,6 +1198,7 @@ class ArticleLifecycle:
         )
 
     def _initialize(self) -> None:
+        removed_legacy_storage = False
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL").fetchone()
             connection.executescript(
@@ -1112,6 +1288,13 @@ class ArticleLifecycle:
             connection.execute("BEGIN IMMEDIATE")
             self._migrate_legacy_state(connection, self._now())
             self._migrate_canonical_dois(connection, self._now())
+            removed_legacy_storage = self._remove_legacy_storage(
+                connection,
+                self._now(),
+            )
+        if removed_legacy_storage:
+            with self._connect() as connection:
+                connection.execute("VACUUM")
 
     def _now(self) -> str:
         return _timestamp(self._clock())
@@ -1212,6 +1395,25 @@ def _identity_text(value: str) -> str:
 
 def _compact_text(value: str) -> str:
     return " ".join(str(value or "").split())
+
+
+def _dashboard_articles(rows: Sequence[sqlite3.Row]) -> Tuple[DashboardArticle, ...]:
+    return tuple(
+        DashboardArticle(
+            article_id=str(row["article_id"]),
+            title=str(row["title"]),
+            authors=tuple(json.loads(str(row["authors_json"]))),
+            journal=str(row["journal"]),
+            impact_reference=(
+                float(row["impact_reference"])
+                if row["impact_reference"] is not None
+                else None
+            ),
+            url=str(row["url"]),
+            first_detected_at=str(row["first_detected_at"]),
+        )
+        for row in rows
+    )
 
 
 def _article_survivor_key(row: sqlite3.Row) -> Tuple[object, ...]:

@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paper_monitor import (
-    app_refresh,
     sources,
     windows_app,
     windows_app_window,
@@ -30,10 +29,8 @@ from paper_monitor.dashboard import render_dashboard
 from paper_monitor.filtering import FilterConfig, match_article
 from paper_monitor.journal_metrics import JournalMetrics
 from paper_monitor.models import Article
-from paper_monitor.monitor import MonitorConfig, run_once
 from paper_monitor.refresh_execution import RefreshIntent, RefreshOutcome
 from paper_monitor.sources import fetch_all_sources
-from paper_monitor.storage import ArticleStore
 from paper_monitor.windows_dashboard_server import (
     WindowsDashboardServer,
     add_include_term,
@@ -278,25 +275,6 @@ class StabilityFixTests(unittest.TestCase):
             self.assertIn("stack pressure", payload["include_terms"])
             self.assertTrue(config_path.with_name("config.json.bak").exists())
 
-    def test_failed_run_is_marked_failed_instead_of_left_running(self):
-        with tempfile.TemporaryDirectory() as directory:
-            store = ArticleStore(Path(directory) / "articles.sqlite3")
-            config = MonitorConfig(
-                filter_config=FilterConfig(include_terms=["solid electrolyte"], exclude_terms=[], journals=[]),
-                max_notifications=5,
-            )
-
-            def fail_fetch():
-                raise RuntimeError("network boom")
-
-            with self.assertRaises(RuntimeError):
-                run_once(config, store, fail_fetch, lambda _article, _match: None)
-
-            latest = store.latest_run()
-            self.assertIsNotNone(latest)
-            self.assertEqual(latest["status"], "failed")
-            self.assertIn("network boom", latest["error_message"])
-
     def test_keyword_analysis_requests_are_single_flight(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -434,14 +412,6 @@ class StabilityFixTests(unittest.TestCase):
             )
             self.assertEqual(confirm_status, 200)
             self.assertEqual(confirmed, {"ok": True, "confirmed": 1})
-
-    def test_app_refresh_uses_named_cross_process_guard(self):
-        with patch("paper_monitor.app_refresh.acquire_mutex", return_value=None):
-            with self.assertRaises(app_refresh.RefreshAlreadyRunning):
-                app_refresh.run_app_refresh(Path("config.json"))
-
-        self.assertTrue(app_refresh._APP_REFRESH_LOCK.acquire(blocking=False))
-        app_refresh._APP_REFRESH_LOCK.release()
 
     def test_dashboard_maps_shared_refresh_guard_to_running_state(self):
         server = WindowsDashboardServer(Path("config.json"))

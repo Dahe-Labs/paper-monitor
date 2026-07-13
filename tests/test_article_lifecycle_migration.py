@@ -16,7 +16,109 @@ from paper_monitor.article_lifecycle import (
     RefreshRunStatus,
 )
 from paper_monitor.models import Article
-from paper_monitor.storage import ArticleStore
+
+
+class LegacyStoreFixture:
+    """Create pre-lifecycle rows without retaining the deleted runtime store."""
+
+    def __init__(self, database_path: Path):
+        self.database_path = database_path
+        with closing(sqlite3.connect(str(database_path))) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE articles (
+                    identity TEXT PRIMARY KEY,
+                    doi TEXT,
+                    title TEXT NOT NULL,
+                    journal TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    published TEXT,
+                    detected TEXT,
+                    abstract TEXT,
+                    source TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL
+                );
+                CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT);
+                CREATE TABLE candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER
+                );
+                CREATE TABLE notification_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    article_identity TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    last_error TEXT NOT NULL DEFAULT ''
+                );
+                """
+            )
+
+    def add_articles(self, articles):
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            connection.executemany(
+                """
+                INSERT INTO articles (
+                    identity, doi, title, journal, url, published, detected,
+                    abstract, source, first_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-07-13 00:00:00')
+                """,
+                (
+                    (
+                        article.identity,
+                        article.doi,
+                        article.title,
+                        article.journal,
+                        article.url,
+                        article.published,
+                        article.detected,
+                        article.abstract,
+                        article.source,
+                    )
+                    for article in articles
+                ),
+            )
+            connection.commit()
+
+    def enqueue_notifications(self, payloads):
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            connection.executemany(
+                """
+                INSERT INTO notification_outbox (
+                    article_identity, payload_json, created_at, attempt_count, last_error
+                ) VALUES (?, ?, '2026-07-13 00:00:00', 0, '')
+                """,
+                (
+                    (
+                        str(payload["identity"]),
+                        json.dumps(payload),
+                    )
+                    for payload in payloads
+                ),
+            )
+            connection.commit()
+
+    def pending_notifications(self):
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            return [
+                {"id": row[0], "article": json.loads(row[1])}
+                for row in connection.execute(
+                    "SELECT id, payload_json FROM notification_outbox ORDER BY id"
+                )
+            ]
+
+    def mark_notification_failed(self, notification_id: int, error: str):
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            connection.execute(
+                """
+                UPDATE notification_outbox
+                SET attempt_count = attempt_count + 1, last_error = ?
+                WHERE id = ?
+                """,
+                (error, notification_id),
+            )
+            connection.commit()
 
 
 class FakeNotifier:
@@ -62,14 +164,9 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
         self.clock_value = dt.datetime(2026, 7, 13, 12, tzinfo=dt.timezone.utc)
         self.clock = lambda: self.clock_value
 
-    def legacy_store(self, *articles: Article) -> ArticleStore:
-        store = ArticleStore(self.database_path)
-        store.add_new_articles(articles)
-        with closing(sqlite3.connect(str(self.database_path))) as connection:
-            connection.execute(
-                "UPDATE articles SET first_seen_at = '2026-07-13 00:00:00'"
-            )
-            connection.commit()
+    def legacy_store(self, *articles: Article) -> LegacyStoreFixture:
+        store = LegacyStoreFixture(self.database_path)
+        store.add_articles(articles)
         return store
 
     def commit_redetection(self, lifecycle: ArticleLifecycle, run_id: str, article: Article):
@@ -184,7 +281,7 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
 
     def test_expired_legacy_article_becomes_fingerprint_without_copying_metadata(self):
         article = legacy_article("expired")
-        store = self.legacy_store(article)
+        self.legacy_store(article)
         with closing(sqlite3.connect(str(self.database_path))) as connection:
             connection.execute(
                 "UPDATE articles SET first_seen_at = '2026-05-01 00:00:00'"
@@ -198,7 +295,11 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(redetected.new_count, 0)
         self.assertEqual(redetected.active_count, 0)
         self.assertEqual(lifecycle.dashboard_snapshot().articles, ())
-        self.assertEqual(len(store.recent_articles()), 1)
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            legacy_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'articles'"
+            ).fetchone()
+        self.assertIsNone(legacy_table)
 
     def test_migration_failure_rolls_back_all_new_state_and_can_retry(self):
         first = legacy_article("first")
@@ -236,6 +337,15 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
 
         lifecycle = ArticleLifecycle(self.database_path, _clock=self.clock)
         self.assertEqual(len(lifecycle.dashboard_snapshot().articles), 2)
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            remaining_legacy_tables = connection.execute(
+                """
+                SELECT COUNT(*) FROM sqlite_master
+                WHERE type = 'table'
+                  AND name IN ('articles', 'runs', 'candidates', 'notification_outbox')
+                """
+            ).fetchone()[0]
+        self.assertEqual(remaining_legacy_tables, 0)
 
     def test_canonical_doi_migration_merges_old_query_suffix_duplicates(self):
         article = Article(

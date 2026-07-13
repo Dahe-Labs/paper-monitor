@@ -12,10 +12,10 @@ from paper_monitor.article_lifecycle import (
     RefreshCommit,
     RefreshRunStatus,
 )
+from paper_monitor.config import MonitorConfig
 from paper_monitor.filtering import FilterConfig
 from paper_monitor.journal_metrics import JournalMetric, JournalMetrics
 from paper_monitor.models import Article
-from paper_monitor.monitor import MonitorConfig
 from paper_monitor.refresh_errors import RefreshAlreadyRunning
 from paper_monitor.refresh_execution import RefreshExecution, RefreshIntent
 from paper_monitor.sources import SourceFetchResult

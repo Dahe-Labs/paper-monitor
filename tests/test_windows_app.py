@@ -1,5 +1,3 @@
-import importlib
-import sys
 import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
@@ -80,61 +78,49 @@ class WindowsAppTests(unittest.TestCase):
             prepare_windows_project(ROOT)
 
     def test_windows_cli_open_dashboard_uses_cross_platform_webbrowser(self):
-        windows_project = Path("windows_project/PaperMonitorWindows").resolve()
-        original_path = list(sys.path)
-        removed_modules = {
-            name: module
-            for name, module in list(sys.modules.items())
-            if name == "paper_monitor" or name.startswith("paper_monitor.")
-        }
-        for name in removed_modules:
-            sys.modules.pop(name, None)
-        sys.path.insert(0, str(windows_project))
-        try:
-            cli = importlib.import_module("paper_monitor.cli")
-            config_module = importlib.import_module("paper_monitor.config")
-            storage_module = importlib.import_module("paper_monitor.storage")
-            models_module = importlib.import_module("paper_monitor.models")
+        from paper_monitor import cli
+        from paper_monitor.article_lifecycle import (
+            ArticleDetection,
+            ArticleLifecycle,
+            RefreshCommit,
+            RefreshRunStatus,
+        )
+        from paper_monitor.config import load_app_config, write_default_config
 
-            with tempfile.TemporaryDirectory() as temp_dir:
-                config_path = Path(temp_dir) / "config.json"
-                config_module.write_default_config(config_path)
-                app_config = config_module.load_app_config(config_path)
-                store = storage_module.ArticleStore(app_config.database_path)
-                run_id = store.start_run()
-                store.record_candidate(
-                    run_id,
-                    models_module.Article(
-                        title="Solid electrolyte dashboard article",
-                        journal="Nature Energy",
-                        url="https://example.org/dashboard-article",
-                        doi="10.1000/dashboard",
-                        published="2026-06-24",
-                        abstract="Halide electrolyte interface.",
-                        source="fixture",
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            write_default_config(config_path)
+            app_config = load_app_config(config_path)
+            ArticleLifecycle(app_config.database_path).commit_refresh(
+                RefreshCommit(
+                    run_id="windows-dashboard-test",
+                    status=RefreshRunStatus.SUCCEEDED,
+                    detections=(
+                        ArticleDetection(
+                            title="Solid electrolyte dashboard article",
+                            authors=("Ada Lovelace",),
+                            journal="Nature Energy",
+                            impact_reference=21.1,
+                            url="https://example.org/dashboard-article",
+                            doi="10.1000/dashboard",
+                            published="2026-06-24",
+                            source="fixture",
+                        ),
                     ),
-                    matched=True,
-                    reason="matched",
-                    matched_terms=["solid electrolyte"],
-                    journal_match="Nature Energy",
+                    fetched=1,
+                    matched=1,
                 )
-                store.finish_run(run_id, fetched=1, matched=1, new_matches=1, skipped=0)
+            )
 
-                with patch.object(cli.webbrowser, "open") as open_dashboard:
-                    result = cli._open_dashboard(config_path)
+            with patch.object(cli.webbrowser, "open") as open_dashboard:
+                result = cli._open_dashboard(config_path)
 
-                self.assertEqual(result, 0)
-                open_dashboard.assert_called_once()
-                self.assertTrue(open_dashboard.call_args.args[0].startswith("file://"))
-                dashboard_html = app_config.dashboard_path.read_text(encoding="utf-8")
-                self.assertIn('id="keyword-analysis-nav"', dashboard_html)
-                self.assertIn(">Keyword Analysis</button>", dashboard_html)
-        finally:
-            sys.path[:] = original_path
-            for name in list(sys.modules):
-                if name == "paper_monitor" or name.startswith("paper_monitor."):
-                    sys.modules.pop(name, None)
-            sys.modules.update(removed_modules)
+            self.assertEqual(result, 0)
+            open_dashboard.assert_called_once()
+            self.assertTrue(open_dashboard.call_args.args[0].startswith("file://"))
+            dashboard_html = app_config.dashboard_path.read_text(encoding="utf-8")
+            self.assertIn('id="keyword-analysis-nav"', dashboard_html)
+            self.assertIn(">Keyword Analysis</button>", dashboard_html)
 
 
 if __name__ == "__main__":

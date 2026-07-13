@@ -269,8 +269,12 @@ def render_dashboard(
 
 
 def write_dashboard(path, run, candidates, metrics, analysis_scope: Optional[AnalysisScope] = None) -> None:
-    path = Path(path)
     html = render_dashboard(run, candidates, metrics, analysis_scope)
+    write_dashboard_html(path, html)
+
+
+def write_dashboard_html(path, html: str) -> None:
+    path = Path(path)
     with _DASHBOARD_WRITE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(

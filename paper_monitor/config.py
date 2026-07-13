@@ -6,7 +6,6 @@ from typing import Dict
 
 from .filtering import FilterConfig
 from .journal_metrics import load_journal_metrics
-from .monitor import MonitorConfig
 from .search_presets import DEFAULT_SEARCH_DIRECTION
 
 SOURCE_ONLY_JOURNAL_KEYS = {"arxiv"}
@@ -169,6 +168,14 @@ class RuntimeAppSettings:
     notifications_enabled: bool
     silent_startup_notifications: bool
     refresh_on_launch: bool
+
+
+@dataclass(frozen=True)
+class MonitorConfig:
+    """Matching and notification limits loaded from the shared config file."""
+
+    filter_config: FilterConfig
+    max_notifications: int
 
 
 @dataclass(frozen=True)

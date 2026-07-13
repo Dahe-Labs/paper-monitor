@@ -11,8 +11,6 @@ from paper_monitor.article_lifecycle import (
     RefreshRunStatus,
     UnknownPresentationToken,
 )
-from paper_monitor.models import Article
-from paper_monitor.storage import ArticleStore
 
 
 class MutableClock:
@@ -178,6 +176,25 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertEqual(second.state, "accepted")
         self.assertEqual(len(notifier.notifications), 1)
 
+    def test_shell_notification_handoff_is_capped_but_consumes_the_whole_run(self):
+        self.commit(
+            "shell-run",
+            *(detection(str(index), title=f"Shell article {index}") for index in range(4)),
+        )
+
+        first = self.lifecycle.accept_notification_handoff("shell-run", limit=2)
+        repeated = self.lifecycle.accept_notification_handoff("shell-run", limit=2)
+        notifier = FakeNotifier(NotificationDelivery.ACCEPTED)
+        background = self.lifecycle.deliver_notification("shell-run", notifier)
+
+        self.assertEqual(first.article_count, 4)
+        self.assertEqual(len(first.articles), 2)
+        self.assertEqual(repeated.article_count, 0)
+        self.assertEqual(repeated.articles, ())
+        self.assertEqual(background.state, "accepted")
+        self.assertFalse(background.attempted)
+        self.assertEqual(notifier.notifications, [])
+
     def test_only_clear_rejection_retries_and_ambiguous_failure_is_consumed(self):
         self.commit("run-retry", detection("retry", title="Retryable article"))
         retrying = FakeNotifier(NotificationDelivery.REJECTED, NotificationDelivery.ACCEPTED)
@@ -227,43 +244,6 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertEqual(failure.status, RefreshRunStatus.FAILED)
         self.assertEqual(failure.active_count, 0)
         self.assertEqual(len(self.lifecycle.dashboard_snapshot().articles), 1)
-
-    def test_additive_tables_coexist_with_legacy_article_store_during_migration(self):
-        database_path = Path(self.temp_dir.name) / "coexistence.sqlite3"
-        legacy_store = ArticleStore(database_path)
-        legacy_store.add_new_articles(
-            [
-                Article(
-                    title="Legacy article",
-                    journal="Legacy Journal",
-                    url="https://legacy.example/article",
-                    doi="10.1000/legacy",
-                    published="2026-06-01",
-                    abstract="legacy abstract",
-                    source="Legacy",
-                )
-            ]
-        )
-        lifecycle = ArticleLifecycle(database_path, _clock=self.clock)
-        lifecycle.commit_refresh(
-            RefreshCommit(
-                run_id="new-lifecycle-run",
-                status=RefreshRunStatus.SUCCEEDED,
-                detections=(detection(doi="10.1000/new-lifecycle"),),
-                fetched=1,
-                matched=1,
-            )
-        )
-
-        self.assertEqual(len(legacy_store.recent_articles()), 1)
-        migrated = lifecycle.dashboard_snapshot().articles
-        self.assertEqual(len(migrated), 2)
-        self.assertEqual(
-            {article.title for article in migrated},
-            {"Legacy article", "Solid electrolyte interface"},
-        )
-        self.assertTrue(all(not hasattr(article, "abstract") for article in migrated))
-
 
 if __name__ == "__main__":
     unittest.main()

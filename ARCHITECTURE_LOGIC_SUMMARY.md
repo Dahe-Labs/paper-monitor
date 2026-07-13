@@ -22,10 +22,10 @@ flowchart LR
     Config["config.json"] --> Load["load_app_config"]
     Load --> Sources["fetch_all_sources"]
     Sources --> Match["match_article"]
-    Match --> Store["ArticleStore SQLite"]
-    Store --> Dashboard["write_dashboard / latest.html"]
+    Match --> Lifecycle["ArticleLifecycle SQLite"]
+    Lifecycle --> Dashboard["lifecycle snapshot / latest.html"]
     Dashboard --> Desktop["Windows pywebview / macOS WKWebView"]
-    Match --> Notify["Windows toast / macOS notification"]
+    Lifecycle --> Notify["Windows toast / macOS notification handoff"]
 ```
 
 ## 2. 配置系统
@@ -203,18 +203,19 @@ arXiv 默认关闭。
 
 身份规则：
 
-- 如果有 DOI，identity 为 `doi:<normalized-doi>`。
-- 如果没有 DOI，identity 为 `title-url:<normalized-title>|<normalized-url>`。
+- DOI 是最强身份，先移除 resolver、fragment、出版商 query 和大小写差异。
+- 同时记录可用的 source id、规范 URL，以及严格的 title + authors + published year 别名。
+- 任一精确别名命中同一论文；多个旧记录命中时在同一事务中合并。
 
 一轮刷新中的去重：
 
-- `run_once()` 维护 `seen_identities`。
-- 同一轮里重复 identity 会被计为 skipped。
+- `RefreshExecution` 把匹配结果作为 `ArticleDetection` 一次提交。
+- `lifecycle_refresh_articles` 的 `(run_id, article_id)` 唯一键保证同轮重复检测只关联一次。
 
 跨轮去重：
 
-- SQLite `articles.identity` 是主键。
-- 新匹配论文插入失败时说明已存在，此时更新元数据但不计入新通知。
+- `lifecycle_article_aliases.alias_hash` 唯一指向一个 `lifecycle_articles.article_id`。
+- 已存在论文会更新紧凑元数据和最后检测时间，但不会再次计为新增或重复通知。
 
 匹配规则在 `paper_monitor/filtering.py`：
 
@@ -229,46 +230,45 @@ arXiv 默认关闭。
 
 ## 6. 刷新主流程
 
-应用级刷新入口是 `paper_monitor.app_refresh.run_app_refresh(config_path)`。
+统一刷新 Module 是 `paper_monitor.refresh_execution.RefreshExecution`；`paper_monitor.app_refresh.run_app_refresh(config_path)` 只是 macOS/CLI 的 JSON Adapter。
 
 流程：
 
-1. `load_app_config()` 读取并规范化配置。
-2. 创建 `ArticleStore`。
-3. 调用 `run_once()`。
-4. `run_once()` 创建一条 `runs` 记录，状态为 `running`。
-5. 调用 `fetch_all_sources()` 获取文章。
-6. 对每篇文章去重、匹配，并写入 `candidates`。
-7. 对匹配论文调用 `add_new_articles()` 写入 `articles`。
-8. 只对新增文章触发通知 capture，数量受 `max_notifications` 限制。
-9. 成功时 `finish_run(status="finished")`。
-10. 异常时 `fail_run(status="failed")`，避免残留 `running`。
-11. 加载期刊指标，生成 Dashboard HTML。
-12. 返回 JSON：run id、抓取数量、匹配数量、新增数量、跳过数量、Dashboard 路径、待通知文章列表。
+1. `RefreshExecution` 取得进程锁和 Windows 跨进程 mutex，保证同一时间只有一轮刷新。
+2. `load_app_config()` 读取并规范化配置，`fetch_all_sources()` 拉取临时 source 结果。
+3. `match_article()` 使用 title、临时 abstract 和 journal 进行匹配；abstract 不进入长期存储。
+4. 匹配结果转换为紧凑 `ArticleDetection`，只包含标题、作者、期刊、影响因子、URL、DOI、source 和时间。
+5. `ArticleLifecycle.commit_refresh()` 在一个事务中完成身份去重、30 天清理、run 统计和通知资格更新。
+6. Background intent 直接交给平台通知 Adapter；Visible intent 返回 `DashboardSnapshot`。
+7. macOS/CLI JSON Adapter 把通知条目一次性交给壳层并标为已消费，避免后续重复通知。
+8. Dashboard 从同一份 lifecycle snapshot 渲染，不再读取候选历史表。
 
-普通 CLI `paper-monitor run` 和桌面 app `app-refresh` 共用同一套 `run_once()`，区别只是通知方式和输出格式。
+Windows 定时任务、Windows 主窗口、macOS PythonBridge 和 CLI 最终都跨越同一个 RefreshExecution/ArticleLifecycle seam。
 
 ## 7. SQLite 存储
 
-存储由 `paper_monitor.storage.ArticleStore` 实现。
+存储由 `paper_monitor.article_lifecycle.ArticleLifecycle` 实现。
 
 数据库表：
 
-- `articles`：已匹配并保存过的论文，identity 为主键。
-- `runs`：每次刷新记录，包含 started/finished/status/fetched/matched/new/skipped/error_message。
-- `candidates`：每轮抓取到的候选论文，包括 matched、reason、matched_terms、journal_match。
+- `lifecycle_articles`：30 天内有效的紧凑论文记录，不保存 abstract。
+- `lifecycle_article_aliases`：DOI、source id、URL 或严格 title/author/year 身份别名。
+- `lifecycle_refresh_runs` / `lifecycle_refresh_articles`：刷新结果和论文关系。
+- `lifecycle_notification_attempts`：通知接受、拒绝、歧义和无需通知状态。
+- `lifecycle_presentation_tokens` / `lifecycle_presentation_articles`：主页实际展示确认。
+- `lifecycle_migrations`：一次性升级记录。
 
 设计意图：
 
-- `articles` 用于跨轮去重和 recent 列表。
-- `runs` 用于 Dashboard 总览和失败状态追踪。
-- `candidates` 用于 Dashboard 展示匹配/拒绝原因，也用于关键词分析。
+- 所有运行模式读取同一套 lifecycle 表，避免前台、任务计划和菜单栏错配。
+- 每轮抓取的未匹配候选和 abstract 只存在于内存中，刷新结束后释放。
+- 关键词分析按需重新查询 Crossref，不依赖长期候选历史。
 
 兼容迁移：
 
-- 初始化时会创建缺失表。
-- 会补充旧数据库缺失的 `detected` 和 `error_message` 列。
-- 旧记录 `detected` 为空时会回填为 `published`。
+- 首次打开旧数据库时，先把仍有效的旧 `articles` 和通知状态迁移到 lifecycle 表。
+- 完成迁移后删除旧 `articles`、`runs`、`candidates`、`notification_outbox` 表并执行一次 `VACUUM`。
+- 旧存储实现不再参与正常运行，仅保留 ArticleLifecycle 内部的一次性升级逻辑。
 
 错误处理：
 
@@ -639,7 +639,7 @@ macOS 状态栏：
 - macOS 主窗口是 WKWebView 加本地文件。
 - Windows 通知用 win11toast。
 - macOS 通知用 UserNotifications。
-- Windows 登录启动用 HKCU Run 注册表。
+- Windows 后台刷新使用非驻留的 Task Scheduler 任务；旧 HKCU Run 项会被清理。
 - macOS 登录启动用 SMAppService。
 
 一致性原则：
@@ -657,7 +657,7 @@ macOS 状态栏：
 - `init`：写默认 config。
 - `run`：抓取、过滤、通知、生成 Dashboard。
 - `app-refresh`：桌面 app 用刷新入口，输出 JSON。
-- `render-dashboard`：根据数据库最新 run 重新生成 Dashboard，输出 JSON。
+- `render-dashboard`：根据 ArticleLifecycle 当前快照重新生成 Dashboard，输出 JSON。
 - `analyze-keywords`：执行 Crossref 关键词分析，输出 JSON。
 - `recent`：打印最近存储的匹配论文。
 - `open-dashboard`：生成并用系统默认浏览器打开最新 Dashboard；这是 CLI 调试入口，不是 Windows 托盘主界面入口。
@@ -808,5 +808,7 @@ API/source：
 - source 失败尽量降级为 warning，不让单个源拖垮整个刷新。
 - 论文去重以 DOI 优先，没有 DOI 时用 title + URL。
 - DOI identity 会移除 resolver 前缀、fragment 和出版商链接附带的查询参数；`ArticleLifecycle` 在同一事务中合并旧的精确别名记录，并保留展示、通知和刷新状态。
+- `RefreshExecution` 是刷新 Module 的唯一生产 Interface；平台差异只留在通知、窗口和调度 Adapter。
+- 旧 ArticleStore 只在升级事务中作为输入格式被识别，迁移完成后旧表和旧实现都会删除。
 - Dashboard 可以是 HTML，但桌面入口应表现为本地应用窗口；Windows 托盘不再打开系统浏览器作为主界面。
 - 发布包需要可重复构建、可哈希校验、可在干净用户目录安装验证。

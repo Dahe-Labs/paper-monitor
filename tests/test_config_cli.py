@@ -5,6 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from paper_monitor.article_lifecycle import (
+    ArticleDetection,
+    ArticleLifecycle,
+    RefreshCommit,
+    RefreshRunStatus,
+)
 from paper_monitor.cli import (
     _open_dashboard,
     _python_for_launch_agent,
@@ -12,8 +18,6 @@ from paper_monitor.cli import (
     build_arg_parser,
 )
 from paper_monitor.config import DEFAULT_CONFIG, load_app_config, write_default_config
-from paper_monitor.models import Article
-from paper_monitor.storage import ArticleStore
 
 
 def _contains_han(value: str) -> bool:
@@ -300,26 +304,26 @@ class ConfigAndCliTests(unittest.TestCase):
             config_path = Path(temp_dir) / "config.json"
             write_default_config(config_path)
             config = load_app_config(config_path)
-            store = ArticleStore(config.database_path)
-            run_id = store.start_run()
-            article = Article(
-                title="Solid electrolyte dashboard article",
-                journal="Nature Energy",
-                url="https://example.org/dashboard-article",
-                doi="10.1000/dashboard",
-                published="2026-06-24",
-                abstract="Halide electrolyte interface.",
-                source="fixture",
+            ArticleLifecycle(config.database_path).commit_refresh(
+                RefreshCommit(
+                    run_id="dashboard-test",
+                    status=RefreshRunStatus.SUCCEEDED,
+                    detections=(
+                        ArticleDetection(
+                            title="Solid electrolyte dashboard article",
+                            authors=("Ada Lovelace",),
+                            journal="Nature Energy",
+                            impact_reference=21.1,
+                            url="https://example.org/dashboard-article",
+                            doi="10.1000/dashboard",
+                            published="2026-06-24",
+                            source="fixture",
+                        ),
+                    ),
+                    fetched=1,
+                    matched=1,
+                )
             )
-            store.record_candidate(
-                run_id,
-                article,
-                matched=True,
-                reason="matched",
-                matched_terms=["solid electrolyte"],
-                journal_match="Nature Energy",
-            )
-            store.finish_run(run_id, fetched=1, matched=1, new_matches=1, skipped=0)
             config.dashboard_path.parent.mkdir(parents=True, exist_ok=True)
             config.dashboard_path.write_text("<html>old dashboard</html>", encoding="utf-8")
 

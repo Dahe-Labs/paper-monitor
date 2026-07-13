@@ -44,7 +44,7 @@ public struct ArticleNotification: Codable, Equatable, Sendable {
 }
 
 public struct RefreshResult: Codable, Equatable, Sendable {
-    public let runId: Int
+    public let runId: String
     public let fetched: Int
     public let matched: Int
     public let newMatches: Int
@@ -54,7 +54,7 @@ public struct RefreshResult: Codable, Equatable, Sendable {
     public let warnings: [String]
 
     public init(
-        runId: Int,
+        runId: String,
         fetched: Int,
         matched: Int,
         newMatches: Int,
@@ -86,7 +86,11 @@ public struct RefreshResult: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        runId = try container.decode(Int.self, forKey: .runId)
+        if let value = try? container.decode(String.self, forKey: .runId) {
+            runId = value
+        } else {
+            runId = String(try container.decode(Int.self, forKey: .runId))
+        }
         fetched = try container.decode(Int.self, forKey: .fetched)
         matched = try container.decode(Int.self, forKey: .matched)
         newMatches = try container.decode(Int.self, forKey: .newMatches)

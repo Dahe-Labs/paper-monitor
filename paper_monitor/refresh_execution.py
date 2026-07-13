@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence, Tuple
@@ -67,9 +67,19 @@ class _ExecutionDependencies:
 class RefreshExecution:
     """Execute one Refresh Run; callers choose only Background or Visible intent."""
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        *,
+        fetch_sources: Optional[
+            Callable[[Mapping[str, object]], Sequence[Article]]
+        ] = None,
+    ) -> None:
         self.config_path = Path(config_path).expanduser().resolve()
-        self._dependencies = _production_dependencies()
+        dependencies = _production_dependencies()
+        if fetch_sources is not None:
+            dependencies = replace(dependencies, fetch_sources=fetch_sources)
+        self._dependencies = dependencies
 
     def execute(self, intent: RefreshIntent) -> RefreshOutcome:
         refresh_intent = RefreshIntent(intent)

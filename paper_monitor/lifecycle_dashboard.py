@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from .article_lifecycle import DashboardSnapshot
 from .config import AppConfig
-from .dashboard import render_dashboard
+from .dashboard import render_dashboard, write_dashboard_html
 from .journal_metrics import load_journal_metrics
 from .keyword_analysis import AnalysisScope
 
@@ -35,6 +36,16 @@ def render_lifecycle_dashboard(
     )
 
 
+def write_lifecycle_dashboard(
+    config: AppConfig,
+    snapshot: DashboardSnapshot,
+    refresh: Optional[RefreshOutcome] = None,
+) -> Path:
+    html = render_lifecycle_dashboard(config, snapshot, refresh)
+    write_dashboard_html(config.dashboard_path, html)
+    return config.dashboard_path
+
+
 def _snapshot_candidates(snapshot: DashboardSnapshot) -> List[Dict[str, object]]:
     return [
         {
@@ -56,4 +67,12 @@ def _snapshot_candidates(snapshot: DashboardSnapshot) -> List[Dict[str, object]]
 def _refresh_summary(refresh: Optional[RefreshOutcome]) -> Dict[str, object]:
     if refresh is None:
         return {}
-    return {"id": refresh.run_id}
+    return {
+        "id": refresh.run_id,
+        "status": refresh.status.value,
+        "fetched": refresh.fetched,
+        "matched": refresh.matched,
+        "new_matches": refresh.new_matches,
+        "skipped": refresh.skipped,
+        "error_message": refresh.error,
+    }
