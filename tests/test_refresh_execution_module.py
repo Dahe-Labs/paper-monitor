@@ -1,8 +1,10 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import urlsplit
 
 from paper_monitor.article_lifecycle import (
     ArticleLifecycle,
@@ -219,6 +221,164 @@ class RefreshExecutionModuleTests(unittest.TestCase):
 
         with self.assertRaises(RefreshAlreadyRunning):
             execution.execute(RefreshIntent.BACKGROUND)
+
+    def test_production_source_adapters_feed_one_refresh_without_duplicate_redetection(self):
+        metrics_path = Path(self.temp_dir.name) / "metrics.json"
+        metrics_path.write_text(
+            json.dumps(
+                {
+                    "journals": [
+                        {
+                            "journal": "Nature Energy",
+                            "aliases": [],
+                            "impact_factor": 12.5,
+                            "impact_factor_year": 2026,
+                            "five_year_impact_factor": None,
+                            "level": "reference",
+                            "source_url": "",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "database_path": str(self.database_path),
+                    "journal_metrics_path": str(metrics_path),
+                    "include_terms": ["solid electrolyte"],
+                    "exclude_terms": [],
+                    "journal_scope": {
+                        "top_n": 1,
+                        "selected_journals": ["Nature Energy"],
+                    },
+                    "app_settings": {
+                        "startup_enabled": False,
+                        "show_tray_icon": True,
+                        "notifications_enabled": False,
+                        "silent_startup_notifications": True,
+                        "refresh_on_launch": False,
+                    },
+                    "sources": {
+                        "rss": [{"name": "Nature Energy", "url": "https://feed.example/rss"}],
+                        "crossref": {
+                            "enabled": True,
+                            "days_back": 30,
+                            "rows_per_journal": 10,
+                            "retry_count": 0,
+                            "min_request_interval_seconds": 0,
+                        },
+                        "openalex": {
+                            "enabled": True,
+                            "days_back": 30,
+                            "per_page": 10,
+                            "max_pages": 1,
+                            "api_key": "test-key",
+                        },
+                        "arxiv": {"enabled": False},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        generation = {"value": 1}
+        requested_hosts = []
+
+        def fetch(url, timeout=30):
+            del timeout
+            host = urlsplit(url).hostname
+            requested_hosts.append(host)
+            suffix = generation["value"]
+            if host == "feed.example":
+                return f"""<?xml version="1.0"?>
+                <rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+                  <channel><title>Nature Energy</title><item>
+                    <guid isPermaLink="false">rss-work-1</guid>
+                    <title>RSS solid electrolyte discovery</title>
+                    <link>https://publisher.example/rss-{suffix}</link>
+                    <description>transient RSS abstract</description>
+                    <dc:creator>RSS Author</dc:creator>
+                    <pubDate>Mon, 13 Jul 2026 09:00:00 GMT</pubDate>
+                  </item></channel>
+                </rss>""".encode("utf-8")
+            if host == "api.crossref.org":
+                return json.dumps(
+                    {
+                        "message": {
+                            "items": [
+                                {
+                                    "title": ["Crossref solid electrolyte discovery"],
+                                    "container-title": ["Nature Energy"],
+                                    "DOI": "10.1000/crossref-stable",
+                                    "URL": f"https://publisher.example/crossref-{suffix}",
+                                    "abstract": "transient Crossref abstract",
+                                    "published": {"date-parts": [[2026, 7, 13]]},
+                                    "author": [{"given": "Crossref", "family": "Author"}],
+                                }
+                            ]
+                        }
+                    }
+                ).encode("utf-8")
+            if host == "api.openalex.org":
+                return json.dumps(
+                    {
+                        "results": [
+                            {
+                                "id": "https://openalex.org/W987654321",
+                                "display_name": "OpenAlex solid electrolyte discovery",
+                                "doi": None,
+                                "publication_date": "2026-07-13",
+                                "primary_location": {
+                                    "landing_page_url": f"https://publisher.example/openalex-{suffix}",
+                                    "source": {"display_name": "Nature Energy"},
+                                },
+                                "abstract_inverted_index": {
+                                    "transient": [0],
+                                    "OpenAlex": [1],
+                                    "abstract": [2],
+                                },
+                                "authorships": [
+                                    {"author": {"display_name": "OpenAlex Author"}},
+                                ],
+                            }
+                        ],
+                        "meta": {},
+                    }
+                ).encode("utf-8")
+            raise AssertionError(f"unexpected source URL: {url}")
+
+        with (
+            mock.patch("paper_monitor.sources.fetch_url", side_effect=fetch),
+            mock.patch("paper_monitor.refresh_execution.acquire_mutex", return_value=object()),
+            mock.patch("paper_monitor.refresh_execution.close_handle"),
+        ):
+            execution = RefreshExecution(self.config_path)
+            first = execution.execute(RefreshIntent.VISIBLE)
+            generation["value"] = 2
+            second = execution.execute(RefreshIntent.VISIBLE)
+
+        self.assertEqual(first.fetched, 3)
+        self.assertEqual(first.matched, 3)
+        self.assertEqual(first.new_matches, 3)
+        self.assertEqual(second.new_matches, 0)
+        self.assertEqual(len(second.snapshot.articles), 3)
+        self.assertEqual(
+            {article.authors for article in second.snapshot.articles},
+            {("RSS Author",), ("Crossref Author",), ("OpenAlex Author",)},
+        )
+        self.assertTrue(all(not hasattr(article, "abstract") for article in second.snapshot.articles))
+        self.assertEqual(
+            requested_hosts,
+            [
+                "feed.example",
+                "api.crossref.org",
+                "api.openalex.org",
+                "feed.example",
+                "api.crossref.org",
+                "api.openalex.org",
+            ],
+        )
 
 
 if __name__ == "__main__":

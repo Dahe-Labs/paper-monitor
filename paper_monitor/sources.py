@@ -805,6 +805,12 @@ def parse_rss_feed(data: bytes, source_name: str) -> List[Article]:
             or detected
         )
         doi = _extract_doi(" ".join(_all_text(item)))
+        source_id = (
+            _child_text(item, "guid")
+            or _attribute_text(item, "about")
+            or doi
+            or link
+        )
         articles.append(
             Article(
                 title=title,
@@ -815,6 +821,8 @@ def parse_rss_feed(data: bytes, source_name: str) -> List[Article]:
                 abstract=description,
                 source=source_name,
                 detected=_normalize_publication_date(detected or published),
+                authors=_rss_authors(item),
+                source_id=_stable_source_id(source_id),
             )
         )
 
@@ -834,6 +842,8 @@ def parse_rss_feed(data: bytes, source_name: str) -> List[Article]:
                 abstract=summary,
                 source=source_name,
                 detected=_normalize_publication_date(published),
+                authors=_atom_authors(entry),
+                source_id=_stable_source_id(_child_text(entry, "id") or doi or link),
             )
         )
 
@@ -873,6 +883,7 @@ def _crossref_articles_from_payload(payload: Dict[str, object], source_name: str
                 source=source_name,
                 detected=_crossref_detected_date(item),
                 authors=_crossref_authors(item),
+                source_id=_stable_source_id(doi),
             )
         )
     return [article for article in articles if article.title]
@@ -936,6 +947,7 @@ def _openalex_articles_from_payload(payload: Dict[str, object], source_name: str
                 source=source_name,
                 detected=published,
                 authors=_openalex_authors(item),
+                source_id=_openalex_source_id(item.get("id")),
             )
         )
     return [article for article in articles if article.title and article.url]
@@ -993,6 +1005,37 @@ def _atom_authors(entry: ET.Element) -> tuple:
         if name:
             names.append(name)
     return tuple(names)
+
+
+def _rss_authors(item: ET.Element) -> tuple:
+    names = []
+    seen = set()
+    for child in list(item):
+        if _local_name(child.tag) not in {"author", "creator"}:
+            continue
+        name = _strip_markup(_child_text(child, "name") or " ".join(child.itertext()))
+        key = name.casefold()
+        if name and key not in seen:
+            seen.add(key)
+            names.append(name)
+    return tuple(names)
+
+
+def _openalex_source_id(value: object) -> str:
+    raw = _stable_source_id(value)
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.hostname and parsed.hostname.casefold() in {"openalex.org", "www.openalex.org"}:
+        work_id = parsed.path.strip("/").split("/")[-1]
+        if work_id:
+            return _stable_source_id(work_id)
+    return raw
+
+
+def _stable_source_id(value: object, limit: int = 500) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _first_list_value(value: object) -> str:
@@ -1132,6 +1175,13 @@ def _child_text(element: Optional[ET.Element], name: str) -> str:
     for child in list(element):
         if _local_name(child.tag) == name and child.text:
             return unescape(child.text.strip())
+    return ""
+
+
+def _attribute_text(element: ET.Element, name: str) -> str:
+    for key, value in element.attrib.items():
+        if _local_name(key) == name:
+            return unescape(str(value).strip())
     return ""
 
 
