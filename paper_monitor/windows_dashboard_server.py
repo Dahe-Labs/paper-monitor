@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
+from .article_lifecycle import ArticleLifecycle, DashboardSnapshot, UnknownPresentationToken
 from .refresh_errors import RefreshAlreadyRunning
-from .refresh_status import new_refresh_request_id, read_refresh_status
+from .refresh_execution import RefreshExecution, RefreshIntent, RefreshOutcome
 from .windows_mutex import REFRESH_MUTEX_NAME, is_mutex_running
 
 MAX_SEARCH_TERM_LENGTH = 120
@@ -20,7 +21,6 @@ MAX_EXHAUSTIVE_ANALYSIS_JOURNALS = 50
 MAX_ANALYSIS_DATE_SPAN_DAYS = 366
 MAX_EXHAUSTIVE_ANALYSIS_DATE_SPAN_DAYS = 93
 MAX_ANALYSIS_TOP_N = 100
-_TERMINAL_REFRESH_STATES = frozenset({"succeeded", "failed", "partial"})
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "base-uri 'none'; "
@@ -34,8 +34,9 @@ CONTENT_SECURITY_POLICY = (
     "style-src 'self' 'unsafe-inline'"
 )
 _ANALYSIS_LOCK = threading.Lock()
-_REFRESH_LOCK = threading.Lock()
 WindowController = Callable[[Dict[str, object]], Dict[str, object]]
+LifecycleFactory = Callable[[Path], ArticleLifecycle]
+RefreshRunner = Callable[[Path], RefreshOutcome]
 
 
 def _default_keyword_analysis_runner(*args, **kwargs) -> Dict[str, object]:
@@ -44,15 +45,8 @@ def _default_keyword_analysis_runner(*args, **kwargs) -> Dict[str, object]:
     return run_crossref_keyword_analysis(*args, **kwargs)
 
 
-def _default_refresh_runner(
-    config_path: Path,
-    *,
-    request_id: Optional[str] = None,
-    reason: str = "dashboard",
-) -> Dict[str, object]:
-    from .app_refresh import run_app_refresh
-
-    return run_app_refresh(config_path, request_id=request_id, reason=reason)
+def _default_refresh_runner(config_path: Path) -> RefreshOutcome:
+    return RefreshExecution(config_path).execute(RefreshIntent.VISIBLE)
 
 
 class WindowsDashboardServer:
@@ -63,7 +57,8 @@ class WindowsDashboardServer:
         port: int = 0,
         token: Optional[str] = None,
         keyword_analysis_runner: Callable[..., Dict[str, object]] = _default_keyword_analysis_runner,
-        refresh_runner: Callable[..., Dict[str, object]] = _default_refresh_runner,
+        refresh_runner: RefreshRunner = _default_refresh_runner,
+        lifecycle_factory: LifecycleFactory = ArticleLifecycle,
         window_controller: Optional[WindowController] = None,
     ):
         self.config_path = Path(config_path)
@@ -72,11 +67,14 @@ class WindowsDashboardServer:
         self.token = token or secrets.token_urlsafe(24)
         self.keyword_analysis_runner = keyword_analysis_runner
         self.refresh_runner = refresh_runner
+        self.lifecycle_factory = lifecycle_factory
         self.window_controller = window_controller
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._refresh_state_lock = threading.Lock()
         self._refresh_thread: Optional[threading.Thread] = None
+        self._pending_snapshot: Optional[DashboardSnapshot] = None
+        self._last_refresh: Optional[RefreshOutcome] = None
         self._refresh_state: Dict[str, object] = {
             "ok": True,
             "status": "idle",
@@ -217,12 +215,22 @@ class WindowsDashboardServer:
 
     def dashboard_html(self) -> str:
         from .config import load_app_config
-        from .dashboard_writer import write_latest_dashboard
+        from .lifecycle_dashboard import render_lifecycle_dashboard
 
         app_config = load_app_config(self.config_path)
-        write_latest_dashboard(app_config)
-        html = app_config.dashboard_path.read_text(encoding="utf-8")
-        return _inject_bridge_config(html, self.url.rstrip("/"), self.token)
+        with self._refresh_state_lock:
+            snapshot = self._pending_snapshot
+            self._pending_snapshot = None
+            last_refresh = self._last_refresh
+        if snapshot is None:
+            snapshot = self.lifecycle_factory(app_config.database_path).dashboard_snapshot()
+        html = render_lifecycle_dashboard(app_config, snapshot, last_refresh)
+        return _inject_bridge_config(
+            html,
+            self.url.rstrip("/"),
+            self.token,
+            snapshot.presentation_token,
+        )
 
     def handle_api_request(self, path: str, payload: Dict[str, object]) -> Tuple[int, Dict[str, object]]:
         if path == "/api/settings":
@@ -272,6 +280,21 @@ class WindowsDashboardServer:
         if path == "/api/refresh-now":
             return self.start_refresh()
 
+        if path == "/api/confirm-presentation":
+            token = str(payload.get("presentation_token") or "").strip()
+            if not token:
+                return 400, {"ok": False, "error": "presentation_token is required"}
+            from .config import load_app_config
+
+            try:
+                app_config = load_app_config(self.config_path)
+                confirmed = self.lifecycle_factory(app_config.database_path).confirm_presentation(token)
+            except UnknownPresentationToken:
+                return 409, {"ok": False, "error": "presentation_token is unknown or expired"}
+            except Exception as exc:
+                return 500, {"ok": False, "error": f"Could not confirm presentation: {exc}"}
+            return 200, {"ok": True, "confirmed": confirmed}
+
         if path == "/api/window-control":
             if self.window_controller is None:
                 return 503, {"ok": False, "error": "window_control_unavailable"}
@@ -307,20 +330,10 @@ class WindowsDashboardServer:
             with self._refresh_state_lock:
                 if self._window_refresh_running_locked():
                     return 202, self._public_refresh_state_locked()
-                shared_state = read_refresh_status(self.config_path)
-                self._set_external_refresh_locked(shared_state if (shared_state or {}).get("status") == "running" else None)
+                self._set_external_refresh_locked()
                 return 202, self._public_refresh_state_locked()
 
-        refresh_lock_acquired = _REFRESH_LOCK.acquire(blocking=False)
-        if not refresh_lock_acquired:
-            with self._refresh_state_lock:
-                if self._window_refresh_running_locked():
-                    return 202, self._public_refresh_state_locked()
-                shared_state = read_refresh_status(self.config_path)
-                self._set_external_refresh_locked(shared_state if (shared_state or {}).get("status") == "running" else None)
-                return 202, self._public_refresh_state_locked()
-
-        request_id = new_refresh_request_id()
+        request_id = "window-" + secrets.token_urlsafe(8)
         with self._refresh_state_lock:
             self._refresh_state = {
                 "ok": True,
@@ -348,8 +361,6 @@ class WindowsDashboardServer:
                     "result": None,
                     "owner": "",
                 }
-                if refresh_lock_acquired:
-                    _REFRESH_LOCK.release()
                 return 500, self._public_refresh_state_locked()
             return 202, self._public_refresh_state_locked()
 
@@ -367,90 +378,57 @@ class WindowsDashboardServer:
                 "succeeded",
                 "failed",
                 "partial",
+                "completed",
             ):
                 return self._public_refresh_state_locked()
 
-        shared_state = read_refresh_status(self.config_path)
-        external_running = is_mutex_running(REFRESH_MUTEX_NAME) or _REFRESH_LOCK.locked()
+        external_running = is_mutex_running(REFRESH_MUTEX_NAME)
         with self._refresh_state_lock:
-            current_owner = self._refresh_state.get("owner")
-            current_request_id = str(self._refresh_state.get("request_id") or "")
-            shared_status = str((shared_state or {}).get("status") or "")
-            shared_request_id = str((shared_state or {}).get("request_id") or "")
-            shared_matches_current = bool(current_request_id and current_request_id == shared_request_id)
-
-            if external_running:
-                if current_owner != "window":
-                    if shared_status == "running" or (shared_matches_current and shared_status in _TERMINAL_REFRESH_STATES):
-                        self._set_external_refresh_locked(shared_state)
-                    elif current_owner != "external" or self._refresh_state.get("status") != "running":
-                        self._set_external_refresh_locked()
-            elif shared_status in _TERMINAL_REFRESH_STATES:
-                self._set_external_refresh_locked(shared_state)
-            elif current_owner == "external" and self._refresh_state.get("status") == "running":
-                error = "Refresh stopped before publishing a terminal status."
-                if shared_matches_current and shared_state:
-                    error = str(shared_state.get("error") or error)
-                self._refresh_state.update(ok=False, status="failed", owner="", error=error, result=None)
+            if external_running and self._refresh_state.get("owner") != "window":
+                self._set_external_refresh_locked()
+                return self._public_refresh_state_locked()
+            if self._refresh_state.get("owner") == "external":
+                self._refresh_state.update(
+                    ok=True,
+                    status="completed",
+                    owner="",
+                    error="",
+                    result=None,
+                )
             return self._public_refresh_state_locked()
 
     def _run_refresh_task(self, request_id: str) -> None:
         try:
-            if self.refresh_runner is _default_refresh_runner:
-                result = self.refresh_runner(self.config_path, request_id=request_id, reason="dashboard")
-            else:
-                result = self.refresh_runner(self.config_path)
-        except RefreshAlreadyRunning as exc:
+            result = self.refresh_runner(self.config_path)
+        except RefreshAlreadyRunning:
             with self._refresh_state_lock:
                 if self._refresh_state.get("request_id") == request_id:
-                    shared_state = exc.state or read_refresh_status(self.config_path)
-                    self._set_external_refresh_locked(shared_state)
+                    self._set_external_refresh_locked()
         except Exception as exc:
             with self._refresh_state_lock:
                 if self._refresh_state.get("request_id") == request_id:
-                    shared_state = read_refresh_status(self.config_path)
-                    if (
-                        str((shared_state or {}).get("request_id") or "") == request_id
-                        and str((shared_state or {}).get("status") or "") in _TERMINAL_REFRESH_STATES
-                    ):
-                        self._set_external_refresh_locked(shared_state)
-                    else:
-                        self._refresh_state.update(
-                            ok=False,
-                            status="failed",
-                            error=f"Refresh failed: {exc}",
-                            result=None,
-                            owner="",
-                        )
+                    self._refresh_state.update(
+                        ok=False,
+                        status="failed",
+                        error=f"Refresh failed: {exc}",
+                        result=None,
+                        owner="",
+                    )
         else:
             with self._refresh_state_lock:
                 if self._refresh_state.get("request_id") == request_id:
-                    status = str(result.get("status") or "")
-                    if status not in {"succeeded", "partial"}:
-                        status = "partial" if bool(result.get("partial")) else "succeeded"
+                    status = result.status.value
                     self._refresh_state.update(
-                        ok=True,
+                        ok=status != "failed",
                         status=status,
-                        error=_refresh_result_error(result) if status == "partial" else "",
-                        result=result,
+                        error=result.error,
+                        result=_refresh_outcome_payload(result),
                         owner="",
                     )
-        finally:
-            _REFRESH_LOCK.release()
+                    self._last_refresh = result
+                    self._pending_snapshot = result.snapshot
 
-    def _set_external_refresh_locked(self, shared_state: Optional[Mapping[str, object]] = None) -> None:
-        shared_status = str((shared_state or {}).get("status") or "")
-        shared_request_id = str((shared_state or {}).get("request_id") or "")
-        if (shared_status == "running" or shared_status in _TERMINAL_REFRESH_STATES) and shared_request_id:
-            self._refresh_state = {
-                "ok": shared_status != "failed",
-                "status": shared_status,
-                "request_id": shared_request_id,
-                "error": str((shared_state or {}).get("error") or ""),
-                "result": (shared_state or {}).get("result"),
-                "owner": "external" if shared_status == "running" else "",
-            }
-            return
+    def _set_external_refresh_locked(self) -> None:
         request_id = str(self._refresh_state.get("request_id") or "")
         if self._refresh_state.get("owner") != "external" or not request_id:
             request_id = "external-" + secrets.token_urlsafe(8)
@@ -568,17 +546,15 @@ def _url_host(host: str) -> str:
     return f"[{clean_host}]" if ":" in clean_host else clean_host
 
 
-def _refresh_result_error(result: Mapping[str, object]) -> str:
-    details = []
-    source_statuses = result.get("source_statuses")
-    if isinstance(source_statuses, list):
-        for item in source_statuses:
-            if not isinstance(item, Mapping) or str(item.get("status") or "").lower() not in {"failed", "partial"}:
-                continue
-            source = str(item.get("source") or item.get("target") or "source")
-            error = str(item.get("error") or item.get("message") or "partial result")
-            details.append(f"{source}: {error}")
-    return "Refresh completed with partial results" + (" (" + "; ".join(details) + ")" if details else ".")
+def _refresh_outcome_payload(outcome: RefreshOutcome) -> Dict[str, object]:
+    return {
+        "run_id": outcome.run_id,
+        "status": outcome.status.value,
+        "fetched": outcome.fetched,
+        "matched": outcome.matched,
+        "new_matches": outcome.new_matches,
+        "skipped": outcome.skipped,
+    }
 
 
 def add_include_term(config_path: Path, term: str) -> None:
@@ -609,11 +585,17 @@ def normalized_search_term(term: str) -> Optional[str]:
     return normalized
 
 
-def _inject_bridge_config(html: str, base_url: str, token: str) -> str:
+def _inject_bridge_config(
+    html: str,
+    base_url: str,
+    token: str,
+    presentation_token: str,
+) -> str:
     script = (
         "<script>"
         f"window.paperMonitorBridgeBaseURL = {json.dumps(base_url)};"
         f"window.paperMonitorBridgeToken = {json.dumps(token)};"
+        f"window.paperMonitorPresentationToken = {json.dumps(presentation_token)};"
         "document.addEventListener('DOMContentLoaded', function () {"
         "var header = document.querySelector('.header-main');"
         "if (!header) return;"
@@ -672,6 +654,28 @@ def _inject_bridge_config(html: str, base_url: str, token: str) -> str:
         "refresh.style.cursor = 'pointer';"
         "if (refresh.parentElement !== actions) actions.insertBefore(refresh, nav || null);"
         "if (nav && nav.parentElement !== actions) actions.appendChild(nav);"
+        "var confirmPresentation = function (attempt) {"
+        "var presentationToken = String(window.paperMonitorPresentationToken || '');"
+        "var base = String(window.paperMonitorBridgeBaseURL || '').replace(/\\/+$/, '');"
+        "if (!presentationToken || !base || typeof fetch !== 'function') return;"
+        "fetch(base + '/api/confirm-presentation', {"
+        "method: 'POST',"
+        "headers: {'Content-Type': 'application/json', 'X-Paper-Monitor-Token': String(window.paperMonitorBridgeToken || '')},"
+        "body: JSON.stringify({presentation_token: presentationToken})"
+        "}).then(function (response) {"
+        "if (!response.ok) throw new Error('presentation confirmation failed');"
+        "window.paperMonitorPresentationToken = '';"
+        "}).catch(function () {"
+        "var nextAttempt = Number(attempt || 0) + 1;"
+        "if (nextAttempt <= 3) window.setTimeout(function () { confirmPresentation(nextAttempt); }, nextAttempt * 500);"
+        "});"
+        "};"
+        "var afterPaint = function () {"
+        "if (typeof window.requestAnimationFrame === 'function') {"
+        "window.requestAnimationFrame(function () { window.requestAnimationFrame(function () { confirmPresentation(0); }); });"
+        "} else { window.setTimeout(function () { confirmPresentation(0); }, 0); }"
+        "};"
+        "afterPaint();"
         "});"
         "</script>"
     )

@@ -15,9 +15,14 @@ from paper_monitor import (
     app_refresh,
     sources,
     windows_app_window,
-    windows_dashboard_server,
     windows_tray,
     windows_window_control,
+)
+from paper_monitor.article_lifecycle import (
+    ArticleDetection,
+    ArticleLifecycle,
+    RefreshCommit,
+    RefreshRunStatus,
 )
 from paper_monitor.config import DEFAULT_CONFIG, load_app_config
 from paper_monitor.config_store import update_config_atomic
@@ -26,6 +31,7 @@ from paper_monitor.filtering import FilterConfig, match_article
 from paper_monitor.journal_metrics import JournalMetrics
 from paper_monitor.models import Article
 from paper_monitor.monitor import MonitorConfig, run_once
+from paper_monitor.refresh_execution import RefreshIntent, RefreshOutcome
 from paper_monitor.sources import fetch_all_sources
 from paper_monitor.storage import ArticleStore
 from paper_monitor.windows_dashboard_server import (
@@ -419,9 +425,8 @@ class StabilityFixTests(unittest.TestCase):
         self.assertTrue(window.destroyed)
 
     def test_dashboard_close_button_allows_process_to_exit(self):
-        window = types.SimpleNamespace(hide=lambda: self.fail("window must not be hidden"))
         close_requested = threading.Event()
-        callback = windows_app_window._hide_instead_of_close(window, close_requested)
+        callback = windows_app_window._close_window_process(close_requested)
 
         self.assertTrue(callback())
         self.assertTrue(close_requested.is_set())
@@ -1246,6 +1251,8 @@ class StabilityFixTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
+            app_config = load_app_config(config_path)
+            lifecycle = ArticleLifecycle(app_config.database_path)
             started = threading.Event()
             release = threading.Event()
             run_count = 0
@@ -1255,7 +1262,35 @@ class StabilityFixTests(unittest.TestCase):
                 run_count += 1
                 started.set()
                 release.wait(timeout=5)
-                return {"run_id": 1, "fetched": 0, "matched": 0, "new_matches": 0, "skipped": 0, "articles": []}
+                commit = lifecycle.commit_refresh(
+                    RefreshCommit(
+                        run_id="visible-run",
+                        status=RefreshRunStatus.SUCCEEDED,
+                        detections=(
+                            ArticleDetection(
+                                title="Canonical dashboard paper",
+                                authors=("Ada Lovelace",),
+                                journal="Nature Energy",
+                                impact_reference=49.1,
+                                url="https://example.org/canonical-paper",
+                            ),
+                        ),
+                        fetched=1,
+                        matched=1,
+                    )
+                )
+                return RefreshOutcome(
+                    run_id="visible-run",
+                    intent=RefreshIntent.VISIBLE,
+                    status=RefreshRunStatus.SUCCEEDED,
+                    fetched=1,
+                    matched=1,
+                    new_matches=commit.new_count,
+                    skipped=0,
+                    source_statuses=(),
+                    commit=commit,
+                    snapshot=lifecycle.dashboard_snapshot(),
+                )
 
             server = WindowsDashboardServer(config_path, refresh_runner=refresh_runner)
             app_config = DEFAULT_CONFIG.copy()
@@ -1267,7 +1302,7 @@ class StabilityFixTests(unittest.TestCase):
             self.assertIn("/api/refresh-status", dashboard_html)
             self.assertNotIn("paperMonitorAppInfo", dashboard_html)
             self.assertNotIn("paper-monitor-build-badge", dashboard_html)
-            self.assertIn('id="paper-monitor-refresh-button"', stale_dashboard.read_text(encoding="utf-8"))
+            self.assertEqual(stale_dashboard.read_text(encoding="utf-8"), "<html><body>Old dashboard</body></html>")
             first_status, first_body = server.handle_api_request("/api/refresh-now", {})
             self.assertTrue(started.wait(timeout=2))
 
@@ -1286,6 +1321,19 @@ class StabilityFixTests(unittest.TestCase):
             self.assertEqual(refresh_state["status"], "succeeded")
             self.assertEqual(run_count, 1)
 
+            refreshed_html = server.dashboard_html()
+            self.assertIn("Canonical dashboard paper", refreshed_html)
+            self.assertIn("Ada Lovelace", refreshed_html)
+            self.assertIn("Impact factor: 49.1", refreshed_html)
+            marker = "window.paperMonitorPresentationToken = "
+            token_json = refreshed_html.split(marker, 1)[1].split(";", 1)[0]
+            confirm_status, confirmed = server.handle_api_request(
+                "/api/confirm-presentation",
+                {"presentation_token": json.loads(token_json)},
+            )
+            self.assertEqual(confirm_status, 200)
+            self.assertEqual(confirmed, {"ok": True, "confirmed": 1})
+
     def test_app_refresh_uses_named_cross_process_guard(self):
         with patch("paper_monitor.app_refresh.acquire_mutex", return_value=None):
             with self.assertRaises(app_refresh.RefreshAlreadyRunning):
@@ -1303,29 +1351,24 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(body["status"], "running")
         self.assertTrue(body["request_id"].startswith("external-"))
 
-    def test_external_dashboard_refresh_without_shared_terminal_state_is_failed(self):
+    def test_external_dashboard_refresh_reloads_canonical_state_when_mutex_clears(self):
         server = WindowsDashboardServer(Path("config.json"))
-        with patch("paper_monitor.windows_dashboard_server._REFRESH_LOCK") as refresh_lock:
-            refresh_lock.locked.return_value = False
-            with patch(
-                "paper_monitor.windows_dashboard_server.is_mutex_running",
-                side_effect=[True, False],
-            ):
-                status, running = server.handle_api_request("/api/refresh-now", {})
-                failed = server.refresh_status()
+        with patch(
+            "paper_monitor.windows_dashboard_server.is_mutex_running",
+            side_effect=[True, False],
+        ):
+            status, running = server.handle_api_request("/api/refresh-now", {})
+            completed = server.refresh_status()
 
         self.assertEqual(status, 202)
         self.assertEqual(running["status"], "running")
-        self.assertEqual(failed["status"], "failed")
-        self.assertFalse(failed["ok"])
-        self.assertEqual(failed["request_id"], running["request_id"])
-        self.assertIn("before publishing a terminal status", failed["error"])
-        self.assertIsNone(failed["result"])
+        self.assertEqual(completed["status"], "completed")
+        self.assertTrue(completed["ok"])
+        self.assertEqual(completed["request_id"], running["request_id"])
+        self.assertEqual(completed["error"], "")
+        self.assertIsNone(completed["result"])
 
-    def test_dashboard_refresh_thread_start_failure_rolls_back_state_and_lock(self):
-        refresh_lock = windows_dashboard_server._REFRESH_LOCK
-        self.assertTrue(refresh_lock.acquire(timeout=2))
-        refresh_lock.release()
+    def test_dashboard_refresh_thread_start_failure_rolls_back_state(self):
         server = WindowsDashboardServer(Path("config.json"))
 
         with patch("paper_monitor.windows_dashboard_server.is_mutex_running", return_value=False):
@@ -1333,10 +1376,6 @@ class StabilityFixTests(unittest.TestCase):
                 thread_class.return_value.start.side_effect = RuntimeError("thread unavailable")
                 status, body = server.handle_api_request("/api/refresh-now", {})
 
-        lock_reacquired = refresh_lock.acquire(timeout=2)
-        if lock_reacquired:
-            refresh_lock.release()
-        self.assertTrue(lock_reacquired)
         self.assertEqual(status, 500)
         self.assertFalse(body["ok"])
         self.assertEqual(body["status"], "failed")

@@ -156,13 +156,12 @@ def _register_window_control(
     base_url: str,
     window,
     close_requested: Optional[threading.Event] = None,
-    lifecycle=None,
 ) -> None:
     token = getattr(server, "token", None)
     set_controller = getattr(server, "set_window_controller", None)
     if not token or not callable(set_controller):
         return
-    set_controller(_window_control_handler(window, base_url, close_requested, lifecycle))
+    set_controller(_window_control_handler(window, base_url, close_requested))
     write_window_control(config_path, base_url, str(token), os.getpid())
 
 
@@ -170,7 +169,6 @@ def _window_control_handler(
     window,
     base_url: str,
     close_requested: Optional[threading.Event] = None,
-    lifecycle=None,
 ) -> Callable[[dict], dict]:
     def handle(payload: dict) -> dict:
         action = str(payload.get("action") or "")
@@ -518,7 +516,6 @@ def _restore_refresh_view(window) -> Callable[..., None]:
 def _attach_closing_handler(
     window,
     close_requested: threading.Event,
-    lifecycle=None,
 ) -> None:
     events = getattr(window, "events", None)
     closing = getattr(events, "closing", None)
@@ -543,17 +540,6 @@ def _close_window_process(
         return True
 
     return wrapped
-
-
-def _hide_instead_of_close(
-    window,
-    close_requested: threading.Event,
-    lifecycle=None,
-) -> Callable[..., bool]:
-    """Compatibility alias for callers of the former hide-on-close helper."""
-
-    del window, lifecycle
-    return _close_window_process(close_requested)
 
 
 def _safe_closed_callback(callback: Callable[[], None]) -> Callable[..., None]:

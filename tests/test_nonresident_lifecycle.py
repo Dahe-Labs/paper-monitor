@@ -107,9 +107,8 @@ class NonResidentLifecycleTests(unittest.TestCase):
 
     def test_user_close_is_allowed_and_marks_window_process_closing(self):
         close_requested = threading.Event()
-        window = types.SimpleNamespace(hide=lambda: self.fail("window must not be hidden"))
 
-        closing = windows_app_window._hide_instead_of_close(window, close_requested)
+        closing = windows_app_window._close_window_process(close_requested)
 
         self.assertTrue(closing())
         self.assertTrue(close_requested.is_set())

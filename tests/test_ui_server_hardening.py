@@ -7,13 +7,77 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from paper_monitor.config import DEFAULT_CONFIG
+from paper_monitor.article_lifecycle import (
+    ArticleDetection,
+    ArticleLifecycle,
+    RefreshCommit,
+    RefreshRunStatus,
+)
+from paper_monitor.config import DEFAULT_CONFIG, load_app_config
 from paper_monitor.dashboard import _keyword_analysis_payload_json, _keyword_analysis_script, write_dashboard
 from paper_monitor.journal_metrics import JournalMetrics
 from paper_monitor.windows_dashboard_server import MAX_REQUEST_BODY_BYTES, WindowsDashboardServer
 
 
 class UIServerHardeningTests(unittest.TestCase):
+    def test_rendered_dashboard_confirms_canonical_presentation_over_authorized_http(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(json.dumps(copy.deepcopy(DEFAULT_CONFIG)), encoding="utf-8")
+            app_config = load_app_config(config_path)
+            lifecycle = ArticleLifecycle(app_config.database_path)
+            lifecycle.commit_refresh(
+                RefreshCommit(
+                    run_id="background-run",
+                    status=RefreshRunStatus.SUCCEEDED,
+                    detections=(
+                        ArticleDetection(
+                            title="Background result",
+                            authors=("Grace Hopper",),
+                            journal="Nature Energy",
+                            impact_reference=49.1,
+                            url="https://example.org/background-result",
+                        ),
+                    ),
+                )
+            )
+            server = WindowsDashboardServer(config_path, token="test-token")
+            server.start()
+            host, port = server._server.server_address[:2]
+            try:
+                connection = http.client.HTTPConnection(host, port, timeout=3)
+                connection.request("GET", "/")
+                response = connection.getresponse()
+                html = response.read().decode("utf-8")
+                connection.close()
+
+                self.assertEqual(response.status, 200)
+                self.assertIn("Background result", html)
+                self.assertIn("Grace Hopper", html)
+                self.assertNotIn("Rejected Candidates", html)
+                marker = "window.paperMonitorPresentationToken = "
+                presentation_token = json.loads(html.split(marker, 1)[1].split(";", 1)[0])
+
+                body = json.dumps({"presentation_token": presentation_token}).encode("utf-8")
+                connection = http.client.HTTPConnection(host, port, timeout=3)
+                connection.request(
+                    "POST",
+                    "/api/confirm-presentation",
+                    body=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Paper-Monitor-Token": "test-token",
+                    },
+                )
+                response = connection.getresponse()
+                confirmed = json.loads(response.read().decode("utf-8"))
+                connection.close()
+
+                self.assertEqual(response.status, 200)
+                self.assertEqual(confirmed, {"ok": True, "confirmed": 1})
+            finally:
+                server.stop()
+
     def test_settings_endpoint_rolls_back_when_scheduler_sync_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"

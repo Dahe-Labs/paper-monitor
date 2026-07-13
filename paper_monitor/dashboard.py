@@ -21,11 +21,56 @@ def render_dashboard(
     candidates: List[Dict[str, object]],
     metrics: JournalMetrics,
     analysis_scope: Optional[AnalysisScope] = None,
+    *,
+    lifecycle_listing: bool = False,
 ) -> str:
     run = run or {}
     matched = [candidate for candidate in candidates if candidate.get("matched")]
     rejected = [candidate for candidate in candidates if not candidate.get("matched")]
     selected_journal_count = len(analysis_scope.selected_journals) if analysis_scope else 0
+    if lifecycle_listing:
+        refresh_id = str(run.get("id") or "").strip()
+        header_meta = "Local results retained for 30 days"
+        if refresh_id:
+            header_meta += " &middot; Last visible refresh: " + escape(refresh_id)
+        summary_html = (
+            '<section class="summary">'
+            '<div class="pill">Saved papers (30 days): %s</div>'
+            '<div class="pill">Selected journals: %s</div>'
+            "</section>"
+        ) % (escape(str(len(matched))), escape(str(selected_journal_count)))
+        matched_heading = "Detected Papers"
+        matched_empty_text = "No detected papers in the last 30 days."
+        rejected_section = ""
+    else:
+        header_meta = "Last run: %s &middot; Run ID: %s" % (
+            escape(format_display_date(run.get("finished_at") or run.get("started_at") or "")),
+            escape(str(run.get("id") or "")),
+        )
+        summary_html = """<section class="summary">
+      <div class="pill">Fetched: %s</div>
+      <div class="pill">Matched: %s</div>
+      <div class="pill">New matches: %s</div>
+      <div class="pill">Skipped: %s</div>
+      <div class="pill">Selected journals: %s</div>
+    </section>""" % (
+            escape(str(run.get("fetched", 0))),
+            escape(str(run.get("matched", 0))),
+            escape(str(run.get("new_matches", 0))),
+            escape(str(run.get("skipped", 0))),
+            escape(str(selected_journal_count)),
+        )
+        matched_heading = "Matched Papers"
+        matched_empty_text = "No matched papers in this run."
+        rejected_section = """<h2>Rejected Candidates</h2>
+    <details class="rejected-candidates">
+      <summary>Show rejected candidates (up to 100)</summary>
+      %s
+    </details>""" % _render_candidates(
+            rejected[:100],
+            metrics,
+            empty_text="No rejected candidates in this run.",
+        )
     return """<!doctype html>
 <html lang="en">
 <head>
@@ -163,18 +208,12 @@ def render_dashboard(
         <button type="button" id="keyword-analysis-nav" class="primary-button" aria-controls="keyword-analysis" aria-expanded="false">Keyword Analysis</button>
       </div>
     </div>
-    <div class="meta">Last run: %s · Run ID: %s</div>
+    <div class="meta">%s</div>
   </header>
   <div id="dashboard-view">
-    <section class="summary">
-      <div class="pill">Fetched: %s</div>
-      <div class="pill">Matched: %s</div>
-      <div class="pill">New matches: %s</div>
-      <div class="pill">Skipped: %s</div>
-      <div class="pill">Selected journals: %s</div>
-    </section>
+    %s
     <div class="section-title-row">
-      <h2>Matched Papers</h2>
+      <h2>%s</h2>
       <label class="sort-control" for="matched-papers-sort">Sort
         <select id="matched-papers-sort">
           <option value="time">Time</option>
@@ -184,11 +223,7 @@ def render_dashboard(
     </div>
     <div id="matched-papers-list">%s</div>
     <script type="application/json" id="matched-papers-data">%s</script>
-    <h2>Rejected Candidates</h2>
-    <details class="rejected-candidates">
-      <summary>Show rejected candidates (up to 100)</summary>
-      %s
-    </details>
+    %s
   </div>
   <section id="keyword-analysis" class="analysis-shell" data-chart-view="bars" hidden>
     <div class="analysis-header">
@@ -222,16 +257,12 @@ def render_dashboard(
 """ % (
         escape(DISPLAY_NAME),
         escape(DISPLAY_NAME),
-        escape(format_display_date(run.get("finished_at") or run.get("started_at") or "")),
-        escape(str(run.get("id") or "")),
-        escape(str(run.get("fetched", 0))),
-        escape(str(run.get("matched", 0))),
-        escape(str(run.get("new_matches", 0))),
-        escape(str(run.get("skipped", 0))),
-        escape(str(selected_journal_count)),
-        _render_candidate_groups(matched, metrics, empty_text="No matched papers in this run."),
-        _matched_papers_payload_json(matched, metrics, empty_text="No matched papers in this run."),
-        _render_candidates(rejected[:100], metrics, empty_text="No rejected candidates in this run."),
+        header_meta,
+        summary_html,
+        escape(matched_heading),
+        _render_candidate_groups(matched, metrics, empty_text=matched_empty_text),
+        _matched_papers_payload_json(matched, metrics, empty_text=matched_empty_text),
+        rejected_section,
         _keyword_analysis_payload_json(matched, metrics, analysis_scope),
         _keyword_analysis_script() + _matched_papers_script(),
     )
@@ -2759,6 +2790,9 @@ def _paper_count_label(count: int) -> str:
 
 
 def _render_candidate(candidate: Dict[str, object], metrics: JournalMetrics) -> str:
+    if candidate.get("_lifecycle_listing"):
+        return _render_lifecycle_candidate(candidate)
+
     journal_name, metric = _display_journal(candidate, metrics)
     metric_text = _metric_text(metric)
     terms = ", ".join(str(term) for term in candidate.get("matched_terms", []))
@@ -2780,6 +2814,35 @@ def _render_candidate(candidate: Dict[str, object], metrics: JournalMetrics) -> 
         metric_text,
         escape(str(candidate.get("reason") or "")),
         " · Terms: " + escape(terms) if terms else "",
+    )
+
+
+def _render_lifecycle_candidate(candidate: Dict[str, object]) -> str:
+    link = _safe_article_link(candidate)
+    authors = candidate.get("authors")
+    if isinstance(authors, (list, tuple)):
+        author_text = ", ".join(str(author).strip() for author in authors if str(author).strip())
+    else:
+        author_text = str(authors or "").strip()
+    if not author_text:
+        author_text = "Authors not available"
+
+    impact = candidate.get("impact_factor")
+    try:
+        impact_text = "Impact factor: %.1f" % float(impact)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        impact_text = "Impact factor: not available"
+
+    return """<article class="paper">
+  <h3><a href="%s" target="_blank" rel="noopener noreferrer">%s</a></h3>
+  <div class="meta">%s</div>
+  <div class="meta"><strong class="journal-name">%s</strong> &middot; %s</div>
+</article>""" % (
+        escape(link, quote=True),
+        escape(str(candidate.get("title") or "")),
+        escape(author_text),
+        escape(str(candidate.get("journal") or "")),
+        escape(impact_text),
     )
 
 
