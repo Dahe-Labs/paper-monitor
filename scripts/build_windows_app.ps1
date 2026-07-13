@@ -363,7 +363,7 @@ $CommonPyInstallerArguments = @(
 $BuildOneDir = $BuildMode -in @("OneDir", "Both")
 $BuildOneFile = $BuildMode -in @("OneFile", "Both")
 
-# PyInstaller is provided by requirements-windows.txt.
+# PyInstaller is installed from requirements-windows.lock.txt, compiled from requirements-windows.txt.
 if ($BuildOneDir) {
   Invoke-Python -Python $Python -Arguments @($CommonPyInstallerArguments + @("--onedir", $Launcher))
   if (-not (Test-Path -LiteralPath $OneDirExe -PathType Leaf)) {

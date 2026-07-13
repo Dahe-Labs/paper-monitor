@@ -11,10 +11,11 @@ Use this checklist for every Mac or Windows release candidate. Keep the checks b
 
 ## Python Core
 
-- Run `python -m unittest discover -s tests` from the repository root.
+- Run `python -m coverage run -m unittest discover -s tests` from the repository root.
+- Run `python -m coverage report --fail-under=70`.
 - Run `python -m ruff check paper_monitor scripts tests windows`.
 - Run `python -m bandit -q -r paper_monitor scripts windows -x tests -s B105,B404,B603,B607,B608,B110`.
-- Run `python -m pip_audit -r requirements-windows.txt --progress-spinner off`.
+- Run `python -m pip_audit -r requirements-windows.lock.txt --no-deps --disable-pip --progress-spinner off`.
 - Run one dry local refresh with Crossref enabled and a short date range.
 - Confirm failed refreshes mark the latest run as `failed`, not `running`.
 - Confirm dashboard generation does not embed API keys or secrets.
@@ -28,26 +29,30 @@ Use this checklist for every Mac or Windows release candidate. Keep the checks b
 
 ## Windows
 
+- Confirm `requirements-windows.lock.txt` is current with the human-maintained ranges in `requirements-windows.txt`.
+- Run `python -m pip install -r requirements-windows.lock.txt` before building.
 - Run `.\scripts\build_windows_app.ps1`.
 - Run `.\scripts\package_windows_release.ps1 -Version <version>` for release assets.
 - For a public release, package with `-CodeSigningCertificateThumbprint`, `-TimestampUrl`, and `-RequireSignature`.
 - Confirm the release directory contains the installer, portable zip, standalone exe, and `SHA256SUMS-<version>.txt`.
-- Confirm the matching GitHub Release contains the same four Windows assets and the tag exposes clean source archives.
+- Push the signed `v<version>` tag; confirm the Windows workflow passes quality checks, builds signed assets, and creates or updates a draft GitHub Release.
+- Confirm the draft Release contains the same four Windows assets and the tag exposes clean source archives; publish it only after all platform assets and checks are complete.
 - Confirm the installer and standalone executable have valid Authenticode signatures and matching FileVersion/ProductVersion metadata.
 - Install `Paper-Monitor-Windows-<version>-Setup.exe` in a clean user profile or VM.
 - Confirm the installer appears in Windows installed apps and provides a working uninstaller.
-- Confirm uninstall removes installed files and the Paper Monitor startup entry while preserving `%APPDATA%\PaperMonitor\config.json`.
+- Confirm uninstall removes installed files, the Paper Monitor scheduled task, and the legacy Run entry while preserving `%APPDATA%\PaperMonitor\config.json`.
 - Confirm the portable zip and standalone exe run directly and do not create uninstall registry entries.
 - Confirm `git status --short` contains only the intended release changes and no runtime, build, or archive files are tracked.
 - Use `-SkipBuild` only for local packaging checks when the exact built executable has already been verified.
 - Run `.\scripts\install_windows_app.ps1` only for source-tree developer install checks.
-- Confirm startup registry value is `"PaperMonitor.exe" tray --quiet`.
-- Confirm tray startup is silent when `silent_startup_notifications` is true.
+- Enable **Background Monitoring** and confirm `\PaperMonitor Scheduled Refresh` exists in Windows Task Scheduler with the configured interval.
+- Confirm the legacy `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PaperMonitor` value is absent after upgrade or settings synchronization.
+- Close the native window and confirm its WebView, local bridge, and `PaperMonitor.exe` process exit instead of hiding.
+- Run the scheduled task on demand, confirm one refresh reaches a terminal status, and confirm the worker exits afterward with no Paper Monitor process resident between scans.
 - Open Dashboard, Settings, Refresh Now, Keyword Analysis, and Test Notification.
 - Verify the local bridge listens only on `127.0.0.1` and requires `X-Paper-Monitor-Token`.
-- Confirm tray right-click and primary click or double-click open/focus the native app window without opening the system browser.
-- Toggle Tray Icon off and on while the app is running and confirm the same tray coordinator survives both changes.
-- Start a refresh from Dashboard while another refresh owns the named guard and confirm the second request reports `refresh_already_running`.
+- Reopen Paper Monitor after closing it and confirm a clean new window starts without a hidden predecessor.
+- Start a refresh from Dashboard while another refresh owns the named guard and confirm the second request returns HTTP 202 with `status: running` and the same `request_id`.
 
 ## macOS
 

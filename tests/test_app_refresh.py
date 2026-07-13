@@ -7,6 +7,7 @@ from pathlib import Path
 from paper_monitor.app_refresh import run_app_refresh
 from paper_monitor.config import write_default_config
 from paper_monitor.models import Article
+from paper_monitor.storage import ArticleStore
 
 
 class AppRefreshTests(unittest.TestCase):
@@ -92,6 +93,37 @@ class AppRefreshTests(unittest.TestCase):
         self.assertEqual(len(selected_journals), 15)
         self.assertEqual(selected_journals[0], "Nature")
         self.assertIn("Joule", selected_journals)
+
+    def test_scheduled_refresh_queues_notifications_and_defers_dashboard_rendering(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            write_default_config(config_path)
+            config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+            config_payload["app_settings"]["notifications_enabled"] = True
+            config_path.write_text(json.dumps(config_payload), encoding="utf-8")
+            article = Article(
+                title="Solid electrolyte scheduled paper",
+                journal="Nature Energy",
+                url="https://example.org/scheduled",
+                doi="10.1000/scheduled",
+                published="2026-06-22",
+                abstract="Solid electrolyte.",
+                source="fixture",
+            )
+
+            result = run_app_refresh(
+                config_path,
+                fetch_articles=lambda: [article],
+                reason="scheduled_refresh",
+            )
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            database_path = config_path.parent / config["database_path"]
+            pending = ArticleStore(database_path).pending_notifications()
+
+        self.assertFalse(result["dashboard_updated"])
+        self.assertEqual(result["notifications_queued"], 1)
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["article"]["title"], "Solid electrolyte scheduled paper")
 
 
 if __name__ == "__main__":

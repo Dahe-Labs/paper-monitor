@@ -1,0 +1,87 @@
+# Exact dependency lock for Windows CPython 3.12 x64.
+# Generated from requirements-windows.txt with:
+# uv pip compile requirements-windows.txt --python-version 3.12 --python-platform x86_64-pc-windows-msvc --no-strip-markers --no-sources
+# proxy-tools 0.1.0 is source-only on PyPI and is built during installation.
+
+altgraph==0.17.5
+    # via pyinstaller
+bottle==0.13.4
+    # via pywebview
+cffi==2.1.0 ; sys_platform == 'win32'
+    # via clr-loader
+clr-loader==0.3.1 ; sys_platform == 'win32'
+    # via pythonnet
+packaging==26.2
+    # via
+    #   pyinstaller
+    #   pyinstaller-hooks-contrib
+pefile==2024.8.26 ; sys_platform == 'win32'
+    # via pyinstaller
+pillow==12.3.0
+    # via
+    #   -r requirements-windows.txt
+    #   pystray
+proxy-tools==0.1.0
+    # via pywebview
+pycparser==3.0 ; implementation_name != 'PyPy' and sys_platform == 'win32'
+    # via cffi
+pyinstaller==6.21.0
+    # via -r requirements-windows.txt
+pyinstaller-hooks-contrib==2026.6
+    # via pyinstaller
+pystray==0.19.5
+    # via -r requirements-windows.txt
+pythonnet==3.1.0 ; sys_platform == 'win32'
+    # via pywebview
+pywebview==6.2.1
+    # via -r requirements-windows.txt
+pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
+    # via pyinstaller
+setuptools==83.0.0
+    # via pyinstaller
+six==1.17.0
+    # via pystray
+typing-extensions==4.16.0
+    # via
+    #   pywebview
+    #   winrt-runtime
+win11toast==0.36.3
+    # via -r requirements-windows.txt
+winrt-runtime==3.2.1
+    # via
+    #   winrt-windows-data-xml-dom
+    #   winrt-windows-foundation
+    #   winrt-windows-foundation-collections
+    #   winrt-windows-globalization
+    #   winrt-windows-graphics-imaging
+    #   winrt-windows-media-core
+    #   winrt-windows-media-ocr
+    #   winrt-windows-media-playback
+    #   winrt-windows-media-speechsynthesis
+    #   winrt-windows-storage
+    #   winrt-windows-storage-streams
+    #   winrt-windows-ui-notifications
+winrt-windows-data-xml-dom==3.2.1
+    # via win11toast
+winrt-windows-foundation==3.2.1
+    # via win11toast
+winrt-windows-foundation-collections==3.2.1
+    # via win11toast
+winrt-windows-globalization==3.2.1
+    # via win11toast
+winrt-windows-graphics-imaging==3.2.1
+    # via win11toast
+winrt-windows-media-core==3.2.1
+    # via win11toast
+winrt-windows-media-ocr==3.2.1
+    # via win11toast
+winrt-windows-media-playback==3.2.1
+    # via win11toast
+winrt-windows-media-speechsynthesis==3.2.1
+    # via win11toast
+winrt-windows-storage==3.2.1
+    # via win11toast
+winrt-windows-storage-streams==3.2.1
+    # via win11toast
+winrt-windows-ui-notifications==3.2.1
+    # via win11toast

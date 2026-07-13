@@ -173,6 +173,7 @@ class WindowsTrayTests(unittest.TestCase):
             expected_files = [
                 "README_WINDOWS.md",
                 "requirements-windows.txt",
+                "requirements-windows.lock.txt",
                 "config.example.json",
                 "journal_metrics.json",
                 "paper_monitor/windows_tray.py",

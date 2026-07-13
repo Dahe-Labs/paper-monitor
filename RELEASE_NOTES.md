@@ -1,3 +1,28 @@
+# Paper Monitor 0.1.8
+
+Windows zero-resident monitoring, refresh feedback, and startup performance update.
+
+## Included
+
+- Background monitoring now uses Windows Task Scheduler instead of a resident login/tray process. Each due task performs one refresh and exits, leaving no Paper Monitor process in memory between scans.
+- Closing the main window ends the UI session and releases its WebView, Python runtime, and local bridge resources.
+- The existing `startup_enabled` setting now controls non-resident background monitoring; upgrades remove the legacy `HKCU` Run entry automatically.
+- Uninstall removes the scheduled refresh task and legacy Run entry while preserving user configuration and history.
+- Scheduled tasks are isolated per Windows account, detect operational drift, and retry failed runs twice at 15-minute intervals.
+- Scheduled notifications use a persistent SQLite outbox, and headless refreshes defer Dashboard rendering until the UI is opened.
+- `Refresh Now` runs asynchronously and reports the actual running, succeeded, partial, or failed state, including per-source diagnostics and refreshes already running in another process.
+- Dashboard refreshes preserve the current Settings or Keyword Analysis view and scroll position.
+- Candidate history uses batched SQLite writes, WAL, indexes, versioned migrations, and interrupted-run recovery.
+- Local Dashboard requests validate loopback Host headers, authenticate before reading bounded bodies, and return browser security headers.
+- Crossref cache retention is bounded, and Dashboard files are replaced atomically.
+- Window and tray child processes launch without a console window, avoiding black console flashes.
+- Consolidated Windows launch shortcuts under one `Paper Monitor` entry and removed the separate Settings shortcut; Settings remains available in the app.
+- The installer and portable ZIP now use the onedir layout for faster startup, while the standalone EXE remains a onefile build.
+
+## Notes
+
+- Local/manual builds can remain unsigned, but the public `v0.1.8` release workflow requires a trusted Authenticode certificate and prepares a draft release before publication.
+
 # Paper Monitor 0.1.7
 
 Interdisciplinary journal catalog and compact selection update.

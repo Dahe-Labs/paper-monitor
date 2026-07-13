@@ -1,3 +1,5 @@
+# Human-maintained top-level dependency ranges.
+# CI and release builds install requirements-windows.lock.txt.
 pystray>=0.19,<1
 Pillow>=10,<13
 win11toast>=0.35,<1

@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -345,6 +346,12 @@ class SourceParsingTests(unittest.TestCase):
         self.assertIn("/usr/bin/curl", command)
         self.assertIn("--proto", command)
         self.assertIn("--proto-redir", command)
+        self.assertEqual(curl.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(curl.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertEqual(
+            curl.call_args.kwargs["creationflags"],
+            int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
 
     def test_fetch_url_rejects_non_http_schemes_before_opening(self):
         with patch("paper_monitor.sources.urllib.request.urlopen") as opener:

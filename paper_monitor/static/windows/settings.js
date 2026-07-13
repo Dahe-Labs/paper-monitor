@@ -6,6 +6,13 @@
     let selectedJournals = [];
     let extraJournalCandidates = [];
     let journalDualList = null;
+    let settingsLoaded = false;
+    let settingsDirty = false;
+    let legacyResidentSettings = {
+      show_tray_icon: true,
+      silent_startup_notifications: true,
+      refresh_on_launch: true
+    };
     const DUAL_LIST_MIME = "application/x-paper-monitor-dual-list";
 
     function field(id) {
@@ -16,6 +23,18 @@
       const element = field("status");
       element.textContent = message;
       element.className = "status" + (type ? " " + type : "");
+      element.setAttribute("role", type === "error" ? "alert" : "status");
+    }
+
+    function markSettingsDirty() {
+      if (settingsLoaded) settingsDirty = true;
+    }
+
+    function syncOpenAlexRequirement() {
+      const enabled = field("openalex_enabled").checked;
+      const apiKey = field("openalex_api_key");
+      apiKey.required = enabled;
+      apiKey.setAttribute("aria-required", enabled ? "true" : "false");
     }
 
     function setValue(id, value) {
@@ -504,6 +523,7 @@
         field("arxiv_enabled").checked = true;
       }
       renderJournalPicker();
+      markSettingsDirty();
     }
 
     function removeSelectedJournal(journal) {
@@ -514,6 +534,7 @@
         field("arxiv_enabled").checked = false;
       }
       renderJournalPicker();
+      markSettingsDirty();
     }
 
     function addManualJournal() {
@@ -643,7 +664,7 @@
       return body;
     }
 
-    function fillForm(payload) {
+    function fillForm(payload, preserveLegacyResidentSettings) {
       const sources = payload.sources || {};
       const crossref = sources.crossref || {};
       const openalex = sources.openalex || {};
@@ -652,16 +673,24 @@
       const direction = payload.search_direction || {};
       const appSettings = payload.app_settings || {};
 
+      if (!preserveLegacyResidentSettings) {
+        legacyResidentSettings = {
+          show_tray_icon: Boolean(appSettings.show_tray_icon),
+          silent_startup_notifications: Boolean(appSettings.silent_startup_notifications),
+          refresh_on_launch: Boolean(appSettings.refresh_on_launch)
+        };
+      }
+
       fillFrequencyOptions(payload.refresh_frequency_options, payload.interval_seconds);
       setValue("refresh_start_time", payload.refresh_start_time || "");
       setValue("max_notifications", payload.max_notifications);
       setValue("journal_scope_top_n", journalScope.top_n);
       fillSearchDirection(direction);
       setChecked("startup_enabled", appSettings.startup_enabled);
-      setChecked("show_tray_icon", appSettings.show_tray_icon);
+      setChecked("show_tray_icon", legacyResidentSettings.show_tray_icon);
       setChecked("notifications_enabled", appSettings.notifications_enabled);
-      setChecked("silent_startup_notifications", appSettings.silent_startup_notifications);
-      setChecked("refresh_on_launch", appSettings.refresh_on_launch);
+      setChecked("silent_startup_notifications", legacyResidentSettings.silent_startup_notifications);
+      setChecked("refresh_on_launch", legacyResidentSettings.refresh_on_launch);
 
       setLines("include_terms", payload.include_terms);
       setLines("exclude_terms", payload.exclude_terms);
@@ -680,6 +709,7 @@
       setValue("openalex_per_page", openalex.per_page);
       setValue("openalex_max_pages", openalex.max_pages);
       setValue("openalex_api_key", openalex.api_key);
+      syncOpenAlexRequirement();
 
       setChecked("arxiv_enabled", arxiv.enabled);
       setValue("arxiv_days_back", arxiv.days_back);
@@ -707,10 +737,10 @@
         max_notifications: numberValue("max_notifications"),
         app_settings: {
           startup_enabled: field("startup_enabled").checked,
-          show_tray_icon: field("show_tray_icon").checked,
+          show_tray_icon: legacyResidentSettings.show_tray_icon,
           notifications_enabled: field("notifications_enabled").checked,
-          silent_startup_notifications: field("silent_startup_notifications").checked,
-          refresh_on_launch: field("refresh_on_launch").checked
+          silent_startup_notifications: legacyResidentSettings.silent_startup_notifications,
+          refresh_on_launch: legacyResidentSettings.refresh_on_launch
         },
         search_direction: {
           preset: preset,
@@ -760,6 +790,8 @@
       setStatus("Loading settings...", "");
       const payload = await request("/api/settings");
       fillForm(payload);
+      settingsLoaded = true;
+      settingsDirty = false;
       setStatus("Settings loaded.", "ok");
     }
 
@@ -769,7 +801,8 @@
       setStatus("Loading defaults...", "");
       try {
         const payload = await request("/api/settings/defaults");
-        fillForm(payload);
+        fillForm(payload, true);
+        settingsDirty = true;
         setStatus("Defaults loaded. Save to apply.", "ok");
       } catch (error) {
         setStatus(error.message || "Default settings could not be loaded.", "error");
@@ -797,14 +830,36 @@
       }
     }
 
+    function activateSettingsTab(tab, shouldFocus) {
+      if (!tab) return;
+      document.querySelectorAll(".tab").forEach(function (button) {
+        const selected = button === tab;
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+        button.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll(".panel").forEach(function (panel) {
+        const active = panel.id === tab.dataset.panel;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (shouldFocus) tab.focus();
+    }
+
     document.querySelectorAll(".tab").forEach(function (tab) {
       tab.addEventListener("click", function () {
-        document.querySelectorAll(".tab").forEach(function (button) {
-          button.setAttribute("aria-selected", button === tab ? "true" : "false");
-        });
-        document.querySelectorAll(".panel").forEach(function (panel) {
-          panel.classList.toggle("active", panel.id === tab.dataset.panel);
-        });
+        activateSettingsTab(tab, false);
+      });
+      tab.addEventListener("keydown", function (event) {
+        const tabs = Array.from(document.querySelectorAll(".tab"));
+        const current = tabs.indexOf(tab);
+        let next = current;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (current + 1) % tabs.length;
+        else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (current - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        activateSettingsTab(tabs[next], true);
       });
     });
 
@@ -815,6 +870,7 @@
     field("search_direction").addEventListener("change", applyPreset);
     field("crossref_query").addEventListener("input", promoteToCustom);
     field("openalex_query").addEventListener("input", promoteToCustom);
+    field("openalex_enabled").addEventListener("change", syncOpenAlexRequirement);
     field("custom_direction_name").addEventListener("input", function () {
       if (field("search_direction").value !== "custom") {
         promoteToCustom();
@@ -838,6 +894,23 @@
       }
     });
     field("settings-form").addEventListener("submit", saveSettings);
+    field("settings-form").addEventListener("input", markSettingsDirty);
+    field("settings-form").addEventListener("change", markSettingsDirty);
+    field("settings-form").addEventListener("invalid", function (event) {
+      const panel = event.target.closest(".panel");
+      if (panel) {
+        const tab = document.querySelector('.tab[data-panel="' + panel.id + '"]');
+        activateSettingsTab(tab, false);
+      }
+      const advanced = event.target.closest("details");
+      if (advanced) advanced.open = true;
+      setStatus("Check the highlighted setting before saving.", "error");
+    }, true);
+    window.addEventListener("beforeunload", function (event) {
+      if (!settingsDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
     loadSettings().catch(function (error) {
       setStatus(error.message || "Settings could not be loaded.", "error");
     });

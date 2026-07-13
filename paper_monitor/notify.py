@@ -83,6 +83,8 @@ def run_notification_command(command: List[str]) -> bool:
             capture_output=True,
             text=True,
             timeout=NOTIFICATION_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False

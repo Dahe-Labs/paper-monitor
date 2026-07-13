@@ -15,6 +15,7 @@ from paper_monitor import (
     app_refresh,
     sources,
     windows_app_window,
+    windows_dashboard_server,
     windows_tray,
     windows_window_control,
 )
@@ -47,7 +48,7 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(windows_tray.RefreshReason.MANUAL_REFRESH.value, "manual_refresh")
         self.assertEqual(windows_tray.RefreshReason.SCHEDULED_REFRESH.value, "scheduled_refresh")
 
-    def test_install_script_starts_tray_quiet(self):
+    def test_install_script_configures_scheduler_without_starting_tray(self):
         script = Path("scripts/install_windows_app.ps1").read_text(encoding="utf-8")
         release_script = Path("windows/Install-PaperMonitor.ps1").read_text(encoding="utf-8")
 
@@ -59,16 +60,16 @@ class StabilityFixTests(unittest.TestCase):
         self.assertIn("if ($EnableStartup)", release_script)
         self.assertIn("if ($LaunchAfterInstall)", script)
         self.assertIn("if ($LaunchAfterInstall)", release_script)
-        self.assertIn('Start-Process -FilePath $InstalledExe -ArgumentList "tray --quiet"', script)
-        self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList "--quiet"', script)
-        self.assertIn('Start-Process -FilePath $InstalledExe -ArgumentList @("tray", "--quiet")', release_script)
+        self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList "tray --quiet"', script)
+        self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList @("tray", "--quiet")', release_script)
+        self.assertIn('Invoke-Native -FilePath $InstalledExe -Arguments @("install-startup", "--config", $Config)', script)
         self.assertIn("& $InstalledExe install-startup", release_script)
         self.assertIn("function Stop-InstalledPaperMonitor", script)
         self.assertIn("function Stop-InstalledPaperMonitor", release_script)
         self.assertIn("Stop-InstalledPaperMonitor -ExecutablePath $InstalledExe", script)
         self.assertIn("Stop-InstalledPaperMonitor -ExecutablePath $InstalledExe", release_script)
 
-    def test_startup_registry_value_is_quiet_tray_command(self):
+    def test_legacy_startup_registry_value_remains_removable(self):
         self.assertEqual(
             windows_tray.build_startup_registry_value(r"C:\Apps\PaperMonitor.exe"),
             r'"C:\Apps\PaperMonitor.exe" tray --quiet',
@@ -209,20 +210,18 @@ class StabilityFixTests(unittest.TestCase):
         self.assertFalse(watcher.is_alive())
 
 
-    def test_window_command_ensures_tray_process(self):
+    def test_window_command_syncs_scheduler_without_starting_tray(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
 
-            with patch("paper_monitor.windows_tray.ensure_tray_process") as ensure_tray:
-                with patch("paper_monitor.windows_app_window.open_dashboard_window", return_value=0) as open_window:
-                    self.assertEqual(windows_tray.main(["window", "--config", str(config_path)]), 0)
+            with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
+                with patch("paper_monitor.windows_tray._sync_windows_runtime_settings") as sync:
+                    with patch("paper_monitor.windows_app_window.open_dashboard_window", return_value=0) as open_window:
+                        self.assertEqual(windows_tray.main(["window", "--config", str(config_path)]), 0)
 
-            ensure_tray.assert_called_once_with(
-                config_path,
-                refresh_on_launch=True,
-                launch_reason=windows_tray.RefreshReason.PROCESS_LAUNCH,
-            )
+            ensure_tray.assert_not_called()
+            sync.assert_called_once_with(config_path)
             open_window.assert_called_once()
 
     def test_window_command_routes_existing_window_without_starting_another(self):
@@ -233,12 +232,33 @@ class StabilityFixTests(unittest.TestCase):
             with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
                 with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=True):
                     with patch("paper_monitor.windows_tray.activate_existing_app_window", return_value=True) as activate:
-                        with patch("paper_monitor.windows_tray.ensure_tray_process") as ensure_tray:
-                            status = windows_tray.main(["settings", "--config", str(config_path)])
+                        with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
+                            with patch("paper_monitor.windows_tray._sync_windows_runtime_settings"):
+                                status = windows_tray.main(["settings", "--config", str(config_path)])
 
         self.assertEqual(status, 0)
         activate.assert_called_once_with(config_path, path="/settings")
         ensure_tray.assert_not_called()
+
+    def test_window_command_restarts_after_closing_window_releases_mutex(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
+
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
+                with patch("paper_monitor.windows_tray._is_window_mutex_running", side_effect=[True, False]):
+                    with patch("paper_monitor.windows_tray.activate_existing_app_window", return_value=False):
+                        with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
+                            with patch("paper_monitor.windows_tray._sync_windows_runtime_settings"):
+                                with patch(
+                                    "paper_monitor.windows_app_window.open_dashboard_window",
+                                    return_value=0,
+                                ) as open_window:
+                                    status = windows_tray.main(["window", "--config", str(config_path)])
+
+        self.assertEqual(status, 0)
+        ensure_tray.assert_not_called()
+        open_window.assert_called_once_with(config_path, path="/")
 
     def test_window_command_launched_by_tray_does_not_spawn_second_tray(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -246,9 +266,10 @@ class StabilityFixTests(unittest.TestCase):
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
 
             with patch.dict(os.environ, {windows_tray.LAUNCHED_BY_TRAY_ENV: "1"}):
-                with patch("paper_monitor.windows_tray.ensure_tray_process") as ensure_tray:
-                    with patch("paper_monitor.windows_app_window.open_dashboard_window", return_value=0) as open_window:
-                        self.assertEqual(windows_tray.main(["settings", "--config", str(config_path)]), 0)
+                with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
+                    with patch("paper_monitor.windows_tray._sync_windows_runtime_settings"):
+                        with patch("paper_monitor.windows_app_window.open_dashboard_window", return_value=0) as open_window:
+                            self.assertEqual(windows_tray.main(["settings", "--config", str(config_path)]), 0)
 
             ensure_tray.assert_not_called()
             open_window.assert_called_once()
@@ -282,7 +303,7 @@ class StabilityFixTests(unittest.TestCase):
         callback = windows_app_window._safe_closed_callback(fail)
         callback()
 
-    def test_dashboard_window_uses_persistent_webview_storage(self):
+    def test_dashboard_window_uses_private_webview_storage_for_prompt_cleanup(self):
         class FakeClosedEvent:
             def __init__(self):
                 self.callback = None
@@ -328,11 +349,7 @@ class StabilityFixTests(unittest.TestCase):
                     )
 
             self.assertEqual(status, 0)
-            self.assertEqual(fake_webview.start_kwargs["private_mode"], False)
-            self.assertEqual(
-                fake_webview.start_kwargs["storage_path"],
-                str(Path(directory) / "PaperMonitor" / "WebView2"),
-            )
+            self.assertEqual(fake_webview.start_kwargs, {"private_mode": True})
             self.assertEqual(fake_server.stop_count, 1)
             fake_webview.window.events.closed.callback()
             self.assertEqual(fake_server.stop_count, 1)
@@ -351,9 +368,17 @@ class StabilityFixTests(unittest.TestCase):
             def __init__(self):
                 self.urls = []
                 self.destroyed = False
+                self.restored = False
+                self.shown = False
 
             def load_url(self, url):
                 self.urls.append(url)
+
+            def restore(self):
+                self.restored = True
+
+            def show(self):
+                self.shown = True
 
             def destroy(self):
                 self.destroyed = True
@@ -362,12 +387,14 @@ class StabilityFixTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             server = FakeServer()
             window = FakeWindow()
+            close_requested = threading.Event()
 
             windows_app_window._register_window_control(
                 config_path,
                 server,
                 "http://127.0.0.1:12345/",
                 window,
+                close_requested,
             )
             state = windows_window_control.read_window_control(config_path)
             self.assertIsNotNone(state)
@@ -378,12 +405,26 @@ class StabilityFixTests(unittest.TestCase):
             self.assertEqual(server.controller({"action": "ping"}), {"ok": True})
             self.assertEqual(server.controller({"action": "show", "route": "/settings"}), {"ok": True})
             self.assertEqual(server.controller({"action": "close"}), {"ok": True})
+            self.assertEqual(
+                server.controller({"action": "show", "route": "/"}),
+                {"ok": False, "error": "window_closing"},
+            )
             time.sleep(0.2)
 
             windows_window_control.clear_window_control(config_path)
 
         self.assertEqual(window.urls, ["http://127.0.0.1:12345/settings"])
+        self.assertTrue(window.restored)
+        self.assertTrue(window.shown)
         self.assertTrue(window.destroyed)
+
+    def test_dashboard_close_button_allows_process_to_exit(self):
+        window = types.SimpleNamespace(hide=lambda: self.fail("window must not be hidden"))
+        close_requested = threading.Event()
+        callback = windows_app_window._hide_instead_of_close(window, close_requested)
+
+        self.assertTrue(callback())
+        self.assertTrue(close_requested.is_set())
 
     def test_dashboard_window_returns_when_window_mutex_already_exists(self):
         class FakeServer:
@@ -424,9 +465,13 @@ class StabilityFixTests(unittest.TestCase):
             config_path = Path(directory) / "config.json"
             opened = []
 
+            def record_open(path, route):
+                opened.append((Path(path), route))
+                return object()
+
             app = windows_tray.WindowsTrayApp(
                 config_path,
-                open_window=lambda path, route: opened.append((Path(path), route)),
+                open_window=record_open,
             )
             app.open_dashboard()
             app.open_settings()
@@ -529,7 +574,48 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(app.status.last_result, "Last Result: Could not open window")
         self.assertIn("cannot launch child process", log_text)
 
-    def test_window_child_exit_before_control_ready_is_reported(self):
+    def test_window_child_exit_before_control_ready_restarts_once(self):
+        class FinishedProcess:
+            pid = 123
+
+            def poll(self):
+                return 1
+
+        class RunningProcess:
+            pid = 456
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            handled = []
+            opened = []
+            control_calls = 0
+
+            def control(*_args, **_kwargs):
+                nonlocal control_calls
+                control_calls += 1
+                return control_calls >= 2
+
+            process = FinishedProcess()
+            app = windows_tray.WindowsTrayApp(
+                config_path,
+                open_window=lambda config, route: opened.append((Path(config), route)) or RunningProcess(),
+                control_window=control,
+                launch_error_handler=lambda error, path: handled.append((str(error), path)),
+            )
+            app._window_process = process
+            app._pending_window_route = "/settings"
+
+            with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
+                with patch("paper_monitor.windows_tray._is_window_mutex_running", return_value=False):
+                    app._monitor_window_launch(process, "/settings")
+
+        self.assertEqual(opened, [(config_path, "/settings")])
+        self.assertEqual(handled, [])
+
+    def test_window_replacement_exit_before_control_ready_is_reported(self):
         class FinishedProcess:
             pid = 123
 
@@ -542,6 +628,7 @@ class StabilityFixTests(unittest.TestCase):
             process = FinishedProcess()
             app = windows_tray.WindowsTrayApp(
                 config_path,
+                open_window=lambda _config, _route: FinishedProcess(),
                 control_window=lambda *_args, **_kwargs: False,
                 launch_error_handler=lambda error, path: handled.append((str(error), path)),
             )
@@ -556,7 +643,6 @@ class StabilityFixTests(unittest.TestCase):
             handled,
             [("The Paper Monitor window process exited before becoming ready.", "/settings")],
         )
-        self.assertEqual(app.status.last_result, "Last Result: Could not open window")
 
     def test_running_child_without_window_mutex_is_not_duplicated_during_startup(self):
         class RunningProcess:
@@ -906,19 +992,36 @@ class StabilityFixTests(unittest.TestCase):
         self.assertTrue(started)
         popen.assert_called_once()
 
+    def test_manual_window_launch_defers_tray_process_until_after_first_paint(self):
+        config_path = Path("config.json")
+        with patch("paper_monitor.windows_tray._is_windows_platform", return_value=True):
+            with patch("paper_monitor.windows_tray._is_tray_mutex_running", return_value=False):
+                with patch("paper_monitor.windows_tray.ensure_tray_process", return_value=True) as ensure_tray:
+                    timer = windows_tray.ensure_tray_process_delayed(config_path, delay_seconds=0)
+                    self.assertIsNotNone(timer)
+                    timer.join(timeout=1)
+
+        self.assertFalse(timer.is_alive())
+        ensure_tray.assert_called_once_with(
+            config_path,
+            refresh_on_launch=True,
+            launch_reason=windows_tray.RefreshReason.PROCESS_LAUNCH,
+        )
+
     def test_window_command_handles_launch_failure_without_unhandled_exception(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
 
-            with patch("paper_monitor.windows_tray.ensure_tray_process"):
-                with patch(
-                    "paper_monitor.windows_app_window.open_dashboard_window",
-                    side_effect=RuntimeError("missing pywebview runtime"),
-                ):
-                    with patch("paper_monitor.windows_tray._log_window_launch_error") as log_error:
-                        with patch("paper_monitor.windows_tray.show_window_launch_error") as show_error:
-                            status = windows_tray.main(["settings", "--config", str(config_path)])
+            with patch("paper_monitor.windows_tray.ensure_tray_process_delayed"):
+                with patch("paper_monitor.windows_tray._sync_windows_runtime_settings"):
+                    with patch(
+                        "paper_monitor.windows_app_window.open_dashboard_window",
+                        side_effect=RuntimeError("missing pywebview runtime"),
+                    ):
+                        with patch("paper_monitor.windows_tray._log_window_launch_error") as log_error:
+                            with patch("paper_monitor.windows_tray.show_window_launch_error") as show_error:
+                                status = windows_tray.main(["settings", "--config", str(config_path)])
 
         self.assertEqual(status, 1)
         log_error.assert_called_once()
@@ -942,7 +1045,7 @@ class StabilityFixTests(unittest.TestCase):
             app = windows_tray.WindowsTrayApp(config_path, refresh_function=refresh_runner)
             thread = app._start_refresh_thread(refresh_on_start=True)
 
-            self.assertTrue(refreshed.wait(timeout=2))
+            self.assertTrue(refreshed.wait(timeout=4))
             app.quit()
             thread.join(timeout=2)
 
@@ -1161,25 +1264,26 @@ class StabilityFixTests(unittest.TestCase):
             stale_dashboard.write_text("<html><body>Old dashboard</body></html>", encoding="utf-8")
             dashboard_html = server.dashboard_html()
             self.assertIn("/api/refresh-now", dashboard_html)
+            self.assertIn("/api/refresh-status", dashboard_html)
             self.assertNotIn("paperMonitorAppInfo", dashboard_html)
             self.assertNotIn("paper-monitor-build-badge", dashboard_html)
             self.assertIn('id="paper-monitor-refresh-button"', stale_dashboard.read_text(encoding="utf-8"))
-            first_status = {}
-
-            def first_request():
-                first_status["value"] = server.handle_api_request("/api/refresh-now", {})
-
-            thread = threading.Thread(target=first_request)
-            thread.start()
+            first_status, first_body = server.handle_api_request("/api/refresh-now", {})
             self.assertTrue(started.wait(timeout=2))
 
             status, body = server.handle_api_request("/api/refresh-now", {})
 
             release.set()
-            thread.join(timeout=5)
-            self.assertEqual(status, 409)
-            self.assertEqual(body, {"ok": False, "error": "refresh_already_running"})
-            self.assertEqual(first_status["value"][0], 200)
+            deadline = time.monotonic() + 5
+            refresh_state = server.refresh_status()
+            while refresh_state["status"] == "running" and time.monotonic() < deadline:
+                time.sleep(0.01)
+                refresh_state = server.refresh_status()
+            self.assertEqual(status, 202)
+            self.assertEqual(body["status"], "running")
+            self.assertEqual(first_status, 202)
+            self.assertEqual(first_body["request_id"], body["request_id"])
+            self.assertEqual(refresh_state["status"], "succeeded")
             self.assertEqual(run_count, 1)
 
     def test_app_refresh_uses_named_cross_process_guard(self):
@@ -1190,15 +1294,56 @@ class StabilityFixTests(unittest.TestCase):
         self.assertTrue(app_refresh._APP_REFRESH_LOCK.acquire(blocking=False))
         app_refresh._APP_REFRESH_LOCK.release()
 
-    def test_dashboard_maps_shared_refresh_guard_to_conflict(self):
-        def already_running(_config_path):
-            raise app_refresh.RefreshAlreadyRunning("busy")
+    def test_dashboard_maps_shared_refresh_guard_to_running_state(self):
+        server = WindowsDashboardServer(Path("config.json"))
+        with patch("paper_monitor.windows_dashboard_server.is_mutex_running", return_value=True):
+            status, body = server.handle_api_request("/api/refresh-now", {})
 
-        server = WindowsDashboardServer(Path("config.json"), refresh_runner=already_running)
-        status, body = server.handle_api_request("/api/refresh-now", {})
+        self.assertEqual(status, 202)
+        self.assertEqual(body["status"], "running")
+        self.assertTrue(body["request_id"].startswith("external-"))
 
-        self.assertEqual(status, 409)
-        self.assertEqual(body, {"ok": False, "error": "refresh_already_running"})
+    def test_external_dashboard_refresh_without_shared_terminal_state_is_failed(self):
+        server = WindowsDashboardServer(Path("config.json"))
+        with patch("paper_monitor.windows_dashboard_server._REFRESH_LOCK") as refresh_lock:
+            refresh_lock.locked.return_value = False
+            with patch(
+                "paper_monitor.windows_dashboard_server.is_mutex_running",
+                side_effect=[True, False],
+            ):
+                status, running = server.handle_api_request("/api/refresh-now", {})
+                failed = server.refresh_status()
+
+        self.assertEqual(status, 202)
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(failed["status"], "failed")
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["request_id"], running["request_id"])
+        self.assertIn("before publishing a terminal status", failed["error"])
+        self.assertIsNone(failed["result"])
+
+    def test_dashboard_refresh_thread_start_failure_rolls_back_state_and_lock(self):
+        refresh_lock = windows_dashboard_server._REFRESH_LOCK
+        self.assertTrue(refresh_lock.acquire(timeout=2))
+        refresh_lock.release()
+        server = WindowsDashboardServer(Path("config.json"))
+
+        with patch("paper_monitor.windows_dashboard_server.is_mutex_running", return_value=False):
+            with patch("paper_monitor.windows_dashboard_server.threading.Thread") as thread_class:
+                thread_class.return_value.start.side_effect = RuntimeError("thread unavailable")
+                status, body = server.handle_api_request("/api/refresh-now", {})
+
+        lock_reacquired = refresh_lock.acquire(timeout=2)
+        if lock_reacquired:
+            refresh_lock.release()
+        self.assertTrue(lock_reacquired)
+        self.assertEqual(status, 500)
+        self.assertFalse(body["ok"])
+        self.assertEqual(body["status"], "failed")
+        self.assertIn("thread unavailable", body["error"])
+        self.assertIsNone(server._refresh_thread)
+        with patch("paper_monitor.windows_dashboard_server.is_mutex_running", return_value=False):
+            self.assertEqual(server.refresh_status()["status"], "failed")
 
     def test_tray_maps_shared_refresh_guard_to_status(self):
         def already_running(_config_path):
@@ -1222,7 +1367,9 @@ class StabilityFixTests(unittest.TestCase):
         self.assertIn('data-testid="journal-sort-mode"', html)
         self.assertIn('data-testid="manual-journal-name"', html)
         self.assertIn('id="openalex_max_pages"', html)
-        self.assertIn("Launch at Startup", html)
+        self.assertIn("Background Monitoring", html)
+        self.assertIn("Run short scheduled refresh tasks", html)
+        self.assertIn('hidden data-legacy-resident-setting', html)
         self.assertIn("Tray Icon", html)
         self.assertIn("Notifications", html)
         self.assertIn("Quiet Startup", html)

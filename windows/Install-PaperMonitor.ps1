@@ -51,12 +51,10 @@ if (-not (Test-Path -LiteralPath $Config -PathType Leaf) -and (Test-Path -Litera
 }
 
 if ($EnableStartup) {
-  & $InstalledExe install-startup
+  & $InstalledExe install-startup --config $Config
 }
 
 if ($LaunchAfterInstall) {
-  Start-Process -FilePath $InstalledExe -ArgumentList @("tray", "--quiet")
-  Start-Sleep -Milliseconds 700
   Start-Process -FilePath $InstalledExe
 }
 
@@ -64,4 +62,4 @@ Write-Host "Installed Paper Monitor:"
 Write-Host "  $InstalledExe"
 Write-Host "Runtime data:"
 Write-Host "  $AppData"
-Write-Host "The tray icon may appear inside the Windows hidden icons overflow."
+Write-Host "Background monitoring uses short Windows scheduled tasks and does not keep a tray process resident."

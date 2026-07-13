@@ -190,6 +190,30 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(candidates[0]["reason"], "matched")
             self.assertEqual(candidates[0]["matched_terms"], ["solid electrolyte"])
 
+    def test_notification_outbox_persists_failures_and_removes_delivered_items(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ArticleStore(Path(temp_dir) / "articles.sqlite3")
+            article = {
+                "identity": "doi:10.1000/outbox",
+                "title": "Queued paper",
+                "doi": "10.1000/outbox",
+                "url": "https://example.org/outbox",
+            }
+
+            self.assertEqual(store.enqueue_notifications([article]), 1)
+            self.assertEqual(store.enqueue_notifications([article]), 0)
+            pending = store.pending_notifications()
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["article"]["title"], "Queued paper")
+
+            store.mark_notification_failed(pending[0]["id"], "temporary failure")
+            retried = store.pending_notifications()[0]
+            self.assertEqual(retried["attempt_count"], 1)
+            self.assertEqual(retried["last_error"], "temporary failure")
+
+            store.mark_notification_sent(retried["id"])
+            self.assertEqual(store.pending_notifications(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

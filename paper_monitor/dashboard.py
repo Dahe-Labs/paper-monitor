@@ -1,6 +1,10 @@
 import json
+import os
+import tempfile
+import threading
 from datetime import date
 from html import escape
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 
@@ -8,6 +12,8 @@ from .app_identity import DISPLAY_NAME
 from .date_utils import display_article_date, first_iso_date, format_display_date
 from .journal_metrics import JournalMetrics
 from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
+
+_DASHBOARD_WRITE_LOCK = threading.Lock()
 
 
 def render_dashboard(
@@ -163,7 +169,7 @@ def render_dashboard(
     <section class="summary">
       <div class="pill">Fetched: %s</div>
       <div class="pill">Matched: %s</div>
-      <div class="pill">New notifications: %s</div>
+      <div class="pill">New matches: %s</div>
       <div class="pill">Skipped: %s</div>
       <div class="pill">Selected journals: %s</div>
     </section>
@@ -232,8 +238,28 @@ def render_dashboard(
 
 
 def write_dashboard(path, run, candidates, metrics, analysis_scope: Optional[AnalysisScope] = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_dashboard(run, candidates, metrics, analysis_scope), encoding="utf-8")
+    path = Path(path)
+    html = render_dashboard(run, candidates, metrics, analysis_scope)
+    with _DASHBOARD_WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                descriptor = -1
+                stream.write(html)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, path)
+        except Exception:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+            raise
 
 
 def _keyword_analysis_script() -> str:
@@ -274,7 +300,16 @@ const ANALYSIS_SORT_MODES = [
   ["impact_factor", "2Y Impact"],
   ["relevance", "Relevance"]
 ];
+const DASHBOARD_REFRESH_MAX_STATUS_RETRIES = 3;
+const DASHBOARD_REFRESH_RETRY_BASE_DELAY_MS = 1000;
+const DASHBOARD_REFRESH_RETRY_MAX_DELAY_MS = 4000;
+const DASHBOARD_REFRESH_ERROR_DISPLAY_MS = 6000;
+const DASHBOARD_VIEW_STORAGE_KEY = "paperMonitor.refreshView.v1";
 let keywordAnalysisProgressTimer = null;
+let dashboardRefreshPollTimer = null;
+let activeDashboardRefreshRequestId = "";
+let dashboardRefreshGeneration = 0;
+let dashboardRefreshStatusFailureCount = 0;
 let analysisJournalCatalogCachePayload = null;
 let analysisJournalCatalogCache = [];
 let analysisJournalCatalogIndex = new Map();
@@ -317,6 +352,7 @@ document.addEventListener("DOMContentLoaded", function () {
   wireDashboardRefreshEvents();
   wireAnalysisEvents();
   renderKeywordAnalysis();
+  restoreDashboardView();
 });
 
 function loadSavedAnalysisState() {
@@ -344,6 +380,9 @@ function loadSavedAnalysisState() {
     if (Array.isArray(saved.customTaxonomy)) keywordAnalysisState.customTaxonomy = sanitizeTaxonomy(saved.customTaxonomy);
     if (Array.isArray(saved.acceptedCandidateTerms)) keywordAnalysisState.acceptedCandidateTerms = saved.acceptedCandidateTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (Array.isArray(saved.ignoredTerms)) keywordAnalysisState.ignoredTerms = saved.ignoredTerms.map(normalizeDisplayTerm).filter(Boolean);
+    if (typeof saved.candidateTermsOpen === "boolean") keywordAnalysisState.candidateTermsOpen = saved.candidateTermsOpen;
+    if (typeof saved.blockTermsOpen === "boolean") keywordAnalysisState.blockTermsOpen = saved.blockTermsOpen;
+    if (typeof saved.taxonomyEditorOpen === "boolean") keywordAnalysisState.taxonomyEditorOpen = saved.taxonomyEditorOpen;
     if (typeof saved.paperListOpen === "boolean") keywordAnalysisState.paperListOpen = saved.paperListOpen;
     if (typeof saved.journalScopeSignature === "string") keywordAnalysisState.savedJournalScopeSignature = saved.journalScopeSignature;
     keywordAnalysisState.hasSavedState = true;
@@ -370,6 +409,9 @@ function saveAnalysisState() {
       customTaxonomy: keywordAnalysisState.customTaxonomy,
       acceptedCandidateTerms: keywordAnalysisState.acceptedCandidateTerms,
       ignoredTerms: keywordAnalysisState.ignoredTerms,
+      candidateTermsOpen: Boolean(keywordAnalysisState.candidateTermsOpen),
+      blockTermsOpen: Boolean(keywordAnalysisState.blockTermsOpen),
+      taxonomyEditorOpen: Boolean(keywordAnalysisState.taxonomyEditorOpen),
       paperListOpen: Boolean(keywordAnalysisState.paperListOpen),
       journalScopeSignature: currentJournalScopeSignature()
     }));
@@ -544,15 +586,18 @@ function setDualListDragPayload(event, listId, value, source) {
 
 function wireDashboardRefreshEvents() {
   const button = document.getElementById("paper-monitor-refresh-button");
-  if (!button || button.dataset.paperMonitorRefreshWired === "1") return;
-  button.dataset.paperMonitorRefreshWired = "1";
-  button.addEventListener("click", function () {
-    requestDashboardRefresh(button);
-  });
+  if (!button) return;
+  if (button.dataset.paperMonitorRefreshWired !== "1") {
+    button.dataset.paperMonitorRefreshWired = "1";
+    button.addEventListener("click", function () {
+      requestDashboardRefresh(button);
+    });
+  }
+  syncDashboardRefreshState(button);
 }
 
 function requestDashboardRefresh(button) {
-  const original = button.textContent || "Refresh Now";
+  const generation = beginDashboardRefreshGeneration();
   button.disabled = true;
   button.textContent = "Refreshing...";
 
@@ -565,21 +610,17 @@ function requestDashboardRefresh(button) {
   if (postToPaperMonitorBridge(
     "/api/refresh-now",
     {},
-    function () {
-      const base = getPaperMonitorBridgeBaseURL();
-      if (base) {
-        window.location.href = base + "/?t=" + Date.now();
-      } else {
-        window.location.reload();
-      }
+    function (state) {
+      if (!isCurrentDashboardRefreshGeneration(generation)) return;
+      dashboardRefreshStatusFailureCount = 0;
+      activeDashboardRefreshRequestId = String(state && state.request_id || "");
+      applyDashboardRefreshState(button, state, true, generation);
     },
     function (message) {
-      const cleanMessage = message === "refresh_already_running" ? "Already Refreshing" : "Refresh Failed";
-      button.textContent = cleanMessage;
-      window.setTimeout(function () {
-        button.textContent = original;
-        button.disabled = false;
-      }, 1800);
+      if (!isCurrentDashboardRefreshGeneration(generation)) return;
+      activeDashboardRefreshRequestId = "";
+      const cleanMessage = message === "refresh_already_running" ? "Already Refreshing" : message;
+      showDashboardRefreshError(button, cleanMessage, generation);
     }
   )) {
     return;
@@ -587,9 +628,156 @@ function requestDashboardRefresh(button) {
 
   button.textContent = "Open App to Refresh";
   window.setTimeout(function () {
-    button.textContent = original;
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    button.textContent = "Refresh Now";
     button.disabled = false;
   }, 1800);
+}
+
+function syncDashboardRefreshState(button) {
+  const generation = beginDashboardRefreshGeneration();
+  fetchDashboardRefreshState(button, false, generation);
+}
+
+function beginDashboardRefreshGeneration() {
+  dashboardRefreshGeneration += 1;
+  dashboardRefreshStatusFailureCount = 0;
+  activeDashboardRefreshRequestId = "";
+  clearDashboardRefreshPollTimer();
+  return dashboardRefreshGeneration;
+}
+
+function isCurrentDashboardRefreshGeneration(generation) {
+  return generation === dashboardRefreshGeneration;
+}
+
+function clearDashboardRefreshPollTimer() {
+  if (dashboardRefreshPollTimer !== null) window.clearTimeout(dashboardRefreshPollTimer);
+  dashboardRefreshPollTimer = null;
+}
+
+function scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, delay) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return;
+  clearDashboardRefreshPollTimer();
+  dashboardRefreshPollTimer = window.setTimeout(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshPollTimer = null;
+    fetchDashboardRefreshState(button, reloadOnSuccess, generation);
+  }, delay);
+}
+
+function fetchDashboardRefreshState(button, reloadOnSuccess, generation) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return false;
+  const baseURL = getPaperMonitorBridgeBaseURL();
+  if (!baseURL || typeof fetch !== "function") return false;
+  const headers = {};
+  const token = getPaperMonitorBridgeToken();
+  if (token) headers["X-Paper-Monitor-Token"] = token;
+  fetch(baseURL + "/api/refresh-status", { method: "GET", headers: headers }).then(function (response) {
+    return response.json().then(function (state) {
+      if (!response.ok) throw new Error(state.error || "Refresh status failed.");
+      return state;
+    });
+  }).then(function (state) {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshStatusFailureCount = 0;
+    if (!activeDashboardRefreshRequestId && state && state.status === "running") {
+      activeDashboardRefreshRequestId = String(state.request_id || "");
+      reloadOnSuccess = true;
+    }
+    applyDashboardRefreshState(button, state, reloadOnSuccess, generation);
+  }).catch(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshStatusFailureCount += 1;
+    if (dashboardRefreshStatusFailureCount > DASHBOARD_REFRESH_MAX_STATUS_RETRIES) {
+      clearDashboardRefreshPollTimer();
+      activeDashboardRefreshRequestId = "";
+      button.textContent = "Status Unavailable";
+      button.disabled = false;
+      return;
+    }
+    const retryDelay = Math.min(
+      DASHBOARD_REFRESH_RETRY_BASE_DELAY_MS * Math.pow(2, dashboardRefreshStatusFailureCount - 1),
+      DASHBOARD_REFRESH_RETRY_MAX_DELAY_MS
+    );
+    if (!activeDashboardRefreshRequestId) {
+      button.textContent = "Refresh Now";
+      button.disabled = false;
+    } else {
+      button.disabled = true;
+      button.textContent = "Refreshing...";
+    }
+    scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, retryDelay);
+  });
+  return true;
+}
+
+function applyDashboardRefreshState(button, state, reloadOnSuccess, generation) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return;
+  const status = String(state && state.status || "idle");
+  if (status === "running") {
+    const requestId = String(state && state.request_id || "");
+    if (requestId) activeDashboardRefreshRequestId = requestId;
+    button.disabled = true;
+    button.textContent = "Refreshing...";
+    scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, 750);
+    return;
+  }
+  clearDashboardRefreshPollTimer();
+  dashboardRefreshStatusFailureCount = 0;
+  if ((status === "succeeded" || status === "completed") && reloadOnSuccess) {
+    activeDashboardRefreshRequestId = "";
+    reloadDashboardAfterRefresh();
+    return;
+  }
+  if (status === "partial") {
+    activeDashboardRefreshRequestId = "";
+    showDashboardRefreshError(
+      button,
+      String(state && state.error || "Refresh completed with partial results."),
+      generation,
+      reloadOnSuccess ? reloadDashboardAfterRefresh : null
+    );
+    return;
+  }
+  if (status === "failed") {
+    activeDashboardRefreshRequestId = "";
+    showDashboardRefreshError(button, String(state && state.error || "Refresh failed."), generation);
+    return;
+  }
+  activeDashboardRefreshRequestId = "";
+  button.title = "";
+  button.textContent = "Refresh Now";
+  button.disabled = false;
+}
+
+function showDashboardRefreshError(button, message, generation, onComplete) {
+  const fullMessage = normalizeDisplayTerm(message) || "Refresh failed.";
+  const visibleMessage = fullMessage.length > 96 ? fullMessage.slice(0, 93) + "..." : fullMessage;
+  button.disabled = true;
+  button.textContent = visibleMessage;
+  button.title = fullMessage;
+  window.setTimeout(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    if (typeof onComplete === "function") {
+      onComplete();
+      return;
+    }
+    button.title = "";
+    button.textContent = "Refresh Now";
+    button.disabled = false;
+  }, DASHBOARD_REFRESH_ERROR_DISPLAY_MS);
+}
+
+function reloadDashboardAfterRefresh() {
+  saveAnalysisState();
+  rememberDashboardView();
+  const base = getPaperMonitorBridgeBaseURL();
+  if (base) {
+    window.location.href = base + "/?t=" + Date.now();
+  } else {
+    window.location.reload();
+  }
 }
 
 if (typeof window !== "undefined") {
@@ -597,14 +785,11 @@ if (typeof window !== "undefined") {
     const button = document.getElementById("paper-monitor-refresh-button");
     if (!button) return;
     if (ok) {
-      window.location.reload();
+      reloadDashboardAfterRefresh();
       return;
     }
-    button.textContent = message || "Refresh Failed";
-    window.setTimeout(function () {
-      button.textContent = "Refresh Now";
-      button.disabled = false;
-    }, 1800);
+    const generation = beginDashboardRefreshGeneration();
+    showDashboardRefreshError(button, message || "Refresh failed.", generation);
   };
 }
 
@@ -842,6 +1027,40 @@ function showDashboardView() {
   scrollToPageTop();
 }
 
+function rememberDashboardView() {
+  if (typeof window === "undefined") return;
+  const analysis = document.getElementById("keyword-analysis");
+  try {
+    if (!window.sessionStorage) return;
+    window.sessionStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, JSON.stringify({
+      view: analysis && !analysis.hidden ? "analysis" : "dashboard",
+      scrollY: Number(window.scrollY || 0)
+    }));
+  } catch (error) {
+    return;
+  }
+}
+
+function restoreDashboardView() {
+  if (typeof window === "undefined") return;
+  let savedState = null;
+  try {
+    if (!window.sessionStorage) return;
+    const raw = String(window.sessionStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY) || "");
+    if (!raw) return;
+    savedState = JSON.parse(raw);
+  } catch (error) {
+    return;
+  }
+  if (!savedState || typeof savedState !== "object") return;
+  if (savedState.view === "analysis") showKeywordAnalysisView();
+  else if (savedState.view === "dashboard") showDashboardView();
+  const scrollY = Number(savedState.scrollY || 0);
+  if (Number.isFinite(scrollY) && typeof window.scrollTo === "function") {
+    window.scrollTo(0, scrollY);
+  }
+}
+
 function setKeywordAnalysisNavState(isAnalysisOpen) {
   const nav = document.getElementById("keyword-analysis-nav");
   if (!nav) return;
@@ -1044,7 +1263,7 @@ function topNAnalysisJournals() {
 
 function clampTopJournalCount(value) {
   const parsed = coercePositiveInt(value, 30);
-  return Math.max(1, Math.min(300, parsed));
+  return Math.max(1, Math.min(100, parsed));
 }
 
 function scopedAnalysisJournals() {
@@ -2095,14 +2314,14 @@ function renderAnalysisPaperList(papers) {
 
 function renderAnalysisPaperRow(paper) {
   const title = normalizeDisplayTerm(paper && paper.title) || "Untitled";
-  const url = normalizeDisplayTerm(paper && paper.url);
+  const url = safeExternalHttpUrl(paper && paper.url);
   const doi = normalizeDisplayTerm(paper && paper.doi);
-  const doiUrl = doi ? "https://doi.org/" + doi : "";
+  const doiUrl = doi ? safeExternalHttpUrl("https://doi.org/" + doi) : "";
   const titleHtml = url
-    ? '<a href="' + escapeHtml(url) + '">' + escapeHtml(title) + '</a>'
+    ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(title) + '</a>'
     : escapeHtml(title);
-  const doiHtml = doi
-    ? '<a href="' + escapeHtml(doiUrl) + '">' + escapeHtml(doi) + '</a>'
+  const doiHtml = doi && doiUrl
+    ? '<a href="' + escapeHtml(doiUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(doi) + '</a>'
     : "";
   return [
     '<tr>',
@@ -2140,6 +2359,19 @@ function normalizePhrase(value) {
 
 function normalizeDisplayTerm(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function safeExternalHttpUrl(value) {
+  const clean = normalizeDisplayTerm(value);
+  if (!/^https?:\/\/[^/?#\s]+(?:[/?#][^\s]*)?$/i.test(clean)) return "";
+  if (typeof URL !== "function") return clean;
+  try {
+    const parsed = new URL(clean);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) return "";
+    return parsed.href;
+  } catch (error) {
+    return "";
+  }
 }
 
 function parseEditableTerms(value) {
@@ -2268,7 +2500,26 @@ def _keyword_analysis_payload_json(
     analysis_scope: Optional[AnalysisScope] = None,
 ) -> str:
     payload = build_keyword_analysis_payload(candidates, metrics, analysis_scope)
+    papers = payload.get("papers")
+    if isinstance(papers, list):
+        for paper in papers:
+            if isinstance(paper, dict):
+                paper["url"] = _safe_absolute_http_url(paper.get("url"))
     return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _safe_absolute_http_url(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or any(ord(character) < 32 or ord(character) == 127 for character in text):
+        return ""
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+            return ""
+        parsed.port
+    except ValueError:
+        return ""
+    return text
 
 
 def _matched_papers_payload_json(candidates: List[Dict[str, object]], metrics: JournalMetrics, empty_text: str) -> str:

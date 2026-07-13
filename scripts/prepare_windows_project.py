@@ -12,6 +12,7 @@ PROJECT_FILES = (
     "config.example.json",
     "journal_metrics.json",
     "requirements-windows.txt",
+    "requirements-windows.lock.txt",
 )
 
 SCRIPT_FILES = (

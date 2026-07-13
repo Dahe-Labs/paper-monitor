@@ -9,9 +9,9 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 ## Features
 
 - Native macOS Dock app with an application menu for manual refresh, settings, dashboard access, and notification testing.
-- Native Windows app with a single reusable Dashboard/Settings window, system tray controls, scheduled refresh, and toast notifications.
+- Native Windows app with a single Dashboard/Settings window, zero-resident scheduled refresh, and toast notifications.
 - Local notifications for newly matched papers.
-- Background monitoring continues while windows are closed, until the app is quit.
+- In normal Windows background-monitoring mode, Task Scheduler starts a short-lived refresh worker only when a scan is due; no Paper Monitor process or hidden WebView remains resident between scans.
 - Crossref, RSS, and optional arXiv retrieval with journal scope controls.
 - Local SQLite deduplication so repeated papers are not notified again.
 - Settings Apply workflow with visible unsaved/saved state.
@@ -57,9 +57,11 @@ python -m unittest discover -s tests
 
 Build the complete Windows release:
 
+`requirements-windows.txt` contains the human-maintained top-level dependency ranges. CI, releases, and reproducible local Windows packaging install from `requirements-windows.lock.txt`.
+
 ```powershell
-python -m pip install -r requirements-windows.txt
-.\scripts\package_windows_release.ps1 -Version 0.1.7
+python -m pip install -r requirements-windows.lock.txt
+.\scripts\package_windows_release.ps1 -Version 0.1.8
 ```
 
 Run the native macOS tests:
@@ -92,7 +94,7 @@ $HOME/Library/Application Support/PaperMonitor
 
 Useful settings include:
 
-- `interval_seconds`: refresh interval while the app is running.
+- `interval_seconds`: background refresh interval; on Windows, saving Settings updates the non-resident scheduled task.
 - `max_notifications`: maximum notifications sent per refresh.
 - `journal_scope.top_n`: default Top N journal scope.
 - `journal_scope.selected_journals`: manually selected journals, including `arXiv` when the optional preprint source is enabled.

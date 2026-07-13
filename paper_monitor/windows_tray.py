@@ -1,5 +1,7 @@
 import argparse
 import datetime as dt
+import inspect
+import json
 import logging
 import os
 import shutil
@@ -13,8 +15,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Callable, Dict, Iterable, List, Mapping, Optional
 
 from .app_identity import DISPLAY_NAME
-from .app_refresh import RefreshAlreadyRunning, run_app_refresh
-from .config import load_app_config, write_default_config
+from .refresh_errors import RefreshAlreadyRunning
+from .refresh_status import new_refresh_request_id, read_refresh_status
 from .windows_mutex import (
     TRAY_MUTEX_NAME,
     WINDOW_MUTEX_NAME,
@@ -22,7 +24,7 @@ from .windows_mutex import (
     close_handle,
     is_mutex_running,
 )
-from .windows_window_control import send_window_control, send_window_control_with_retry
+from .windows_window_control import send_window_control
 
 APP_NAME = DISPLAY_NAME
 APP_DIR_NAME = "PaperMonitor"
@@ -31,7 +33,33 @@ WM_LBUTTONDBLCLK = 0x0203
 LAUNCHED_BY_TRAY_ENV = "PAPER_MONITOR_LAUNCHED_BY_TRAY"
 TRAY_SETTINGS_POLL_SECONDS = 0.5
 WINDOW_READY_TIMEOUT_SECONDS = 15.0
+LAUNCH_REFRESH_DELAY_SECONDS = 2.0
+MANUAL_TRAY_LAUNCH_DELAY_SECONDS = 3.0
+QUIT_REFRESH_WAIT_SECONDS = 15.0
 LOGGER = logging.getLogger(__name__)
+
+
+def run_app_refresh(
+    config_path: Path,
+    *,
+    request_id: Optional[str] = None,
+    reason: str = "app_refresh",
+) -> Dict[str, object]:
+    from .app_refresh import run_app_refresh as runner
+
+    return runner(config_path, request_id=request_id, reason=reason)
+
+
+def load_app_config(config_path: Path):
+    from .config import load_app_config as loader
+
+    return loader(config_path)
+
+
+def write_default_config(config_path: Path) -> None:
+    from .config import write_default_config as writer
+
+    writer(config_path)
 
 
 def _is_windows_platform() -> bool:
@@ -245,6 +273,17 @@ def _log_app_error(config_path: Path, context: str, error: BaseException) -> Non
         return
 
 
+def _sync_windows_runtime_settings(config_path: Path) -> None:
+    """Apply startup scheduling lazily without making the UI depend on it."""
+
+    try:
+        from .windows_runtime_settings import sync_windows_runtime_settings
+
+        sync_windows_runtime_settings(config_path)
+    except Exception as exc:
+        _log_app_error(config_path, "Could not synchronize Paper Monitor runtime settings", exc)
+
+
 def dispatch_window_control(config_path: Path, action: str, route: Optional[str] = None) -> bool:
     send_window_control(config_path, action, route=route)
     return True
@@ -255,22 +294,31 @@ def activate_existing_app_window(
     path: str = "/",
     ready_timeout: float = WINDOW_READY_TIMEOUT_SECONDS,
 ) -> bool:
-    try:
-        send_window_control_with_retry(
-            config_path,
-            "show",
-            route=path,
-            ready_timeout=ready_timeout,
-        )
-    except Exception as exc:
-        if LOGGER.hasHandlers():
-            LOGGER.debug("Existing window did not accept route %s: %s", path, exc)
-        return False
-    focus_existing_app_window()
-    return True
+    deadline = time.monotonic() + max(0.0, ready_timeout)
+    while True:
+        try:
+            send_window_control(config_path, "show", route=path)
+        except Exception as exc:
+            if _is_windows_platform() and not _is_window_mutex_running():
+                return False
+            if time.monotonic() >= deadline:
+                if LOGGER.hasHandlers():
+                    LOGGER.debug("Existing window did not accept route %s: %s", path, exc)
+                return False
+            time.sleep(0.1)
+            continue
+        focus_existing_app_window()
+        return True
 
 
 def set_startup_enabled(enabled: bool, executable_path, registry_module=None) -> None:
+    """Manage the legacy logon Run entry.
+
+    New releases only call this with ``False`` while migrating users to a
+    short-lived Task Scheduler job.  The function stays public so old installs
+    and callers can remove the former resident tray entry safely.
+    """
+
     if registry_module is None:
         import winreg as registry_module
 
@@ -296,6 +344,67 @@ def set_startup_enabled(enabled: bool, executable_path, registry_module=None) ->
                 pass
     finally:
         registry_module.CloseKey(key)
+
+
+def set_background_monitoring_enabled(
+    config_path: Path,
+    enabled: bool,
+    *,
+    executable_path: Optional[Path] = None,
+) -> None:
+    """Apply and persist the non-resident schedule without leaving split state."""
+
+    from .config_store import update_config_atomic
+    from .windows_runtime_settings import sync_windows_runtime_settings
+
+    resolved_config = Path(config_path).expanduser().resolve()
+    original_payload = json.loads(resolved_config.read_text(encoding="utf-8-sig"))
+    if not isinstance(original_payload, dict):
+        raise ValueError("Config file must contain a JSON object.")
+    original_settings = original_payload.get("app_settings")
+    original_enabled = bool(
+        original_settings.get("startup_enabled", False)
+        if isinstance(original_settings, Mapping)
+        else False
+    )
+    executable = Path(executable_path or sys.executable).resolve()
+
+    sync_windows_runtime_settings(
+        resolved_config,
+        executable_path=executable,
+        enabled_override=bool(enabled),
+        cleanup_legacy_startup=False,
+    )
+
+    def mutate(payload: Dict[str, object]) -> Dict[str, object]:
+        existing = payload.get("app_settings")
+        app_settings = dict(existing) if isinstance(existing, Mapping) else {}
+        app_settings["startup_enabled"] = bool(enabled)
+        payload["app_settings"] = app_settings
+        return payload
+
+    try:
+        update_config_atomic(resolved_config, mutate)
+    except Exception:
+        try:
+            sync_windows_runtime_settings(
+                resolved_config,
+                executable_path=executable,
+                enabled_override=original_enabled,
+                cleanup_legacy_startup=False,
+            )
+        except Exception as rollback_error:
+            _log_app_error(
+                resolved_config,
+                "Could not roll back background monitoring after a settings write failure",
+                rollback_error,
+            )
+        raise
+
+    try:
+        set_startup_enabled(False, executable)
+    except FileNotFoundError:
+        pass
 
 
 def ensure_tray_process(
@@ -331,6 +440,29 @@ def ensure_tray_process(
     return True
 
 
+def ensure_tray_process_delayed(
+    config_path: Path,
+    refresh_on_launch: bool = True,
+    launch_reason: RefreshReason = RefreshReason.PROCESS_LAUNCH,
+    delay_seconds: float = MANUAL_TRAY_LAUNCH_DELAY_SECONDS,
+) -> Optional[threading.Timer]:
+    if not _is_windows_platform() or _is_tray_mutex_running():
+        return None
+
+    timer = threading.Timer(
+        max(0.0, delay_seconds),
+        lambda: ensure_tray_process(
+            config_path,
+            refresh_on_launch=refresh_on_launch,
+            launch_reason=launch_reason,
+        ),
+    )
+    timer.name = "PaperMonitorTrayLaunch"
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 def _is_tray_mutex_running() -> bool:
     return is_mutex_running(TRAY_MUTEX_NAME)
 
@@ -364,11 +496,95 @@ def ensure_windows_app_files(app_dir=None, source_root: Optional[Path] = None) -
     return config_path
 
 
+def run_self_test(source_root: Optional[Path] = None) -> None:
+    """Validate bundled read-only resources without touching the user's app data."""
+
+    root = Path(source_root or bundled_source_root())
+    config_path = root / "config.example.json"
+    metrics_path = root / "journal_metrics.json"
+    missing = [str(path.name) for path in (config_path, metrics_path) if not path.is_file()]
+    if missing:
+        raise RuntimeError("Missing bundled resource(s): " + ", ".join(missing))
+    app_config = load_app_config(config_path)
+    if not app_config.journal_metrics_path.is_file():
+        raise RuntimeError("Bundled config does not resolve to journal_metrics.json.")
+    from .journal_metrics import load_journal_metrics
+
+    load_journal_metrics(app_config.journal_metrics_path)
+
+
+def run_scheduled_refresh(
+    config_path: Path,
+    *,
+    notifier: Optional["WindowsToastNotifier"] = None,
+    refresh_function=None,
+) -> int:
+    """Run one scheduled refresh and exit without creating a tray or window."""
+
+    config_path = Path(config_path)
+    runner = refresh_function or run_app_refresh
+    try:
+        result = runner(config_path, reason=RefreshReason.SCHEDULED_REFRESH.value)
+        if not isinstance(result, dict):
+            raise RuntimeError("Scheduled refresh returned an invalid result.")
+        status = str(result.get("status") or "succeeded").strip().lower()
+        if status not in {"succeeded", "partial"}:
+            raise RuntimeError(f"Scheduled refresh finished with status {status or 'unknown'}.")
+
+        app_config = load_app_config(config_path)
+        notification_failures = 0
+        if app_config.app_settings.notifications_enabled:
+            notification_sender = notifier or WindowsToastNotifier(icon_path=windows_icon_path())
+            if "notifications_queued" in result:
+                from .storage import ArticleStore
+
+                store = ArticleStore(app_config.database_path)
+                for pending in store.pending_notifications():
+                    notification_id = int(pending["id"])
+                    article = pending["article"]
+                    try:
+                        delivered = bool(
+                            notification_sender.notify_article(article, app_config.dashboard_path)
+                        )
+                    except Exception as exc:
+                        delivered = False
+                        error_message = f"{type(exc).__name__}: {exc}"
+                    else:
+                        error_message = "Desktop notification API reported delivery failure"
+                    if delivered:
+                        store.mark_notification_sent(notification_id)
+                    else:
+                        notification_failures += 1
+                        store.mark_notification_failed(notification_id, error_message)
+            else:
+                # Compatibility for injected refresh runners used by integrators/tests.
+                for article in result.get("articles", ()):
+                    if not isinstance(article, dict):
+                        continue
+                    if not notification_sender.notify_article(article, app_config.dashboard_path):
+                        notification_failures += 1
+        if notification_failures:
+            error = RuntimeError(
+                f"{notification_failures} scheduled notification(s) could not be delivered."
+            )
+            _log_app_error(config_path, "Paper Monitor scheduled notification delivery failed", error)
+            return 1
+        return 0
+    except Exception as exc:
+        _log_app_error(config_path, "Paper Monitor scheduled refresh failed", exc)
+        _write_stderr(f"{APP_NAME} scheduled refresh failed: {exc}")
+        return 1
+
+
 @dataclass
 class TrayStatus:
     last_run: str = "Last Run: never"
     last_result: str = "Last Result: none"
     refreshing: bool = False
+    refresh_status: str = "idle"
+    refresh_request_id: str = ""
+    notification_attempts: int = 0
+    notification_failures: int = 0
 
 
 class WindowsToastNotifier:
@@ -421,6 +637,15 @@ class WindowsTrayApp:
         self.status = TrayStatus()
         self._stop_event = threading.Event()
         self._refresh_lock = threading.Lock()
+        self._refresh_idle = threading.Event()
+        self._refresh_idle.set()
+        self._lifecycle_lock = threading.RLock()
+        self._accept_refreshes = True
+        self._active_refresh_thread: Optional[threading.Thread] = None
+        self._scheduler_thread: Optional[threading.Thread] = None
+        self._manual_refresh_thread: Optional[threading.Thread] = None
+        self._shutdown_thread: Optional[threading.Thread] = None
+        self._shutdown_deadline: Optional[float] = None
         self._window_launch_lock = threading.RLock()
         self._window_process = None
         self._pending_window_route: Optional[str] = None
@@ -441,7 +666,7 @@ class WindowsTrayApp:
             effective_launch_reason = launch_reason or (
                 RefreshReason.LOGIN_STARTUP if quiet else RefreshReason.PROCESS_LAUNCH
             )
-            self._start_refresh_thread(
+            self._scheduler_thread = self._start_refresh_thread(
                 refresh_on_start=refresh_on_start and app_config.app_settings.refresh_on_launch,
                 launch_reason=effective_launch_reason,
             )
@@ -453,6 +678,8 @@ class WindowsTrayApp:
                 )
             )
         finally:
+            self._begin_shutdown()
+            self._wait_for_background_work(QUIT_REFRESH_WAIT_SECONDS)
             close_handle(tray_mutex)
 
     def _watch_tray_visibility(self, icon, initial_visible: bool) -> None:
@@ -481,16 +708,40 @@ class WindowsTrayApp:
             return False
 
     def refresh_now(self, reason: RefreshReason = RefreshReason.MANUAL_REFRESH) -> None:
-        if not self._refresh_lock.acquire(blocking=False):
-            self.status.last_result = "Last Result: Refresh already running"
-            return
+        with self._lifecycle_lock:
+            if not self._accept_refreshes:
+                self.status.last_result = "Last Result: Refresh skipped (app is closing)"
+                return
+            if not self._refresh_lock.acquire(blocking=False):
+                self.status.last_result = "Last Result: Refresh already running"
+                return
+            self._active_refresh_thread = threading.current_thread()
+            self._refresh_idle.clear()
+
+        request_id = new_refresh_request_id()
         try:
             self.status.refreshing = True
+            self.status.refresh_status = "running"
+            self.status.refresh_request_id = request_id
+            self.status.notification_attempts = 0
+            self.status.notification_failures = 0
             self.status.last_result = "Last Result: Refreshing..."
-            result = self.refresh_function(self.config_path)
+            result = _invoke_refresh_function(
+                self.refresh_function,
+                self.config_path,
+                request_id=request_id,
+                reason=reason.value,
+            )
+            persisted = read_refresh_status(self.config_path)
+            if persisted and str(persisted.get("request_id") or "") == request_id:
+                self.status.refresh_status = str(persisted.get("status") or "succeeded")
+                persisted_result = persisted.get("result")
+                if isinstance(persisted_result, dict):
+                    result = persisted_result
+            else:
+                self.status.refresh_status = str(result.get("status") or "succeeded")
             app_config = load_app_config(self.config_path)
             self.status.last_run = "Last Run: " + time.strftime("%Y-%m-%d %H:%M")
-            self.status.last_result = _format_result(result)
             should_notify = app_config.app_settings.notifications_enabled
             if (
                 reason == RefreshReason.LOGIN_STARTUP
@@ -500,17 +751,59 @@ class WindowsTrayApp:
             if should_notify:
                 for article in result.get("articles", []):
                     if isinstance(article, dict):
-                        self.notifier.notify_article(article, app_config.dashboard_path)
+                        self.status.notification_attempts += 1
+                        if not self.notifier.notify_article(article, app_config.dashboard_path):
+                            self.status.notification_failures += 1
+            self.status.last_result = _format_result(
+                result,
+                notification_attempts=self.status.notification_attempts,
+                notification_failures=self.status.notification_failures,
+            )
             self._reload_open_window()
-        except RefreshAlreadyRunning:
+        except RefreshAlreadyRunning as exc:
+            state = exc.state or read_refresh_status(self.config_path)
+            if state:
+                self.status.refresh_status = str(state.get("status") or "running")
+                self.status.refresh_request_id = str(state.get("request_id") or "")
             self.status.last_result = "Last Result: Refresh already running"
         except Exception as exc:
+            state = read_refresh_status(self.config_path)
+            if state and str(state.get("request_id") or "") == request_id:
+                self.status.refresh_status = str(state.get("status") or "failed")
+            else:
+                self.status.refresh_status = "failed"
             self.status.last_result = "Last Result: Refresh failed"
             _log_app_error(self.config_path, "Paper Monitor refresh failed", exc)
             _write_stderr(f"{APP_NAME} refresh failed: {exc}")
         finally:
             self.status.refreshing = False
-            self._refresh_lock.release()
+            with self._lifecycle_lock:
+                if self._active_refresh_thread is threading.current_thread():
+                    self._active_refresh_thread = None
+                    self._refresh_idle.set()
+                self._refresh_lock.release()
+
+    def start_manual_refresh(self) -> bool:
+        """Start one tracked manual refresh without blocking the tray UI thread."""
+
+        with self._lifecycle_lock:
+            if not self._accept_refreshes:
+                return False
+            if self._manual_refresh_thread is not None and self._manual_refresh_thread.is_alive():
+                self.status.last_result = "Last Result: Refresh already running"
+                return False
+            thread = threading.Thread(
+                target=lambda: self.refresh_now(reason=RefreshReason.MANUAL_REFRESH),
+                name="PaperMonitorManualRefresh",
+                daemon=True,
+            )
+            self._manual_refresh_thread = thread
+            try:
+                thread.start()
+            except Exception:
+                self._manual_refresh_thread = None
+                raise
+            return True
 
     def open_dashboard(self) -> None:
         self._open_app_window_once("/")
@@ -572,10 +865,54 @@ class WindowsTrayApp:
             )
 
     def quit(self) -> None:
-        self._send_window_control("close")
-        self._stop_event.set()
-        if self._icon is not None:
-            self._icon.stop()
+        first_request = self._begin_shutdown()
+        if first_request:
+            self._send_window_control("close")
+        icon = self._icon
+        if icon is None:
+            return
+        if self._refresh_idle.is_set():
+            _safe_stop_icon(icon)
+            return
+        with self._lifecycle_lock:
+            if self._shutdown_thread is not None and self._shutdown_thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=lambda: self._stop_icon_after_refresh(icon),
+                name="PaperMonitorShutdown",
+                daemon=True,
+            )
+            self._shutdown_thread = thread
+            thread.start()
+
+    def _begin_shutdown(self) -> bool:
+        with self._lifecycle_lock:
+            first_request = self._accept_refreshes
+            self._accept_refreshes = False
+            self._stop_event.set()
+            if self._shutdown_deadline is None:
+                self._shutdown_deadline = time.monotonic() + QUIT_REFRESH_WAIT_SECONDS
+            return first_request
+
+    def _stop_icon_after_refresh(self, icon) -> None:
+        self._refresh_idle.wait(self._shutdown_wait_remaining(QUIT_REFRESH_WAIT_SECONDS))
+        _safe_stop_icon(icon)
+
+    def _wait_for_background_work(self, timeout: float) -> None:
+        deadline = time.monotonic() + self._shutdown_wait_remaining(timeout)
+        self._refresh_idle.wait(max(0.0, deadline - time.monotonic()))
+        current = threading.current_thread()
+        for thread in (self._manual_refresh_thread, self._scheduler_thread):
+            if thread is None or thread is current or not thread.is_alive():
+                continue
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    def _shutdown_wait_remaining(self, timeout: float) -> float:
+        allowed = max(0.0, float(timeout))
+        with self._lifecycle_lock:
+            if self._shutdown_deadline is None:
+                return allowed
+            return min(allowed, max(0.0, self._shutdown_deadline - time.monotonic()))
 
     def _send_window_control(self, action: str, route: Optional[str] = None) -> bool:
         try:
@@ -587,7 +924,11 @@ class WindowsTrayApp:
 
     def _reload_open_window(self) -> None:
         if _process_is_running(self._window_process) or (_is_windows_platform() and _is_window_mutex_running()):
-            self._send_window_control("reload", "/")
+            if self.control_window is dispatch_window_control:
+                self._send_window_control("refresh-complete")
+            else:
+                # Preserve compatibility for older injected window controllers.
+                self._send_window_control("reload", "/")
 
     def _deliver_pending_window_route(self) -> bool:
         with self._window_launch_lock:
@@ -614,8 +955,9 @@ class WindowsTrayApp:
 
     def _monitor_window_launch(self, process, path: str) -> None:
         deadline = time.monotonic() + WINDOW_READY_TIMEOUT_SECONDS
+        restart_attempted = False
         try:
-            while time.monotonic() < deadline and not self._stop_event.is_set():
+            while not self._stop_event.is_set():
                 if self._deliver_pending_window_route():
                     return
                 if process is not None and not _process_is_running(process):
@@ -623,39 +965,47 @@ class WindowsTrayApp:
                         if self._window_process is process:
                             self._window_process = None
                     process = None
-                    if not _is_windows_platform() or not _is_window_mutex_running():
-                        error = RuntimeError(
-                            "The Paper Monitor window process exited before becoming ready."
+                window_running = _is_windows_platform() and _is_window_mutex_running()
+                if process is None and not window_running:
+                    if restart_attempted:
+                        self._report_window_launch_failure(
+                            RuntimeError("The Paper Monitor window process exited before becoming ready."),
+                            path,
                         )
-                        _log_window_launch_error(self.config_path, path, error)
-                        with self._window_launch_lock:
-                            self._pending_window_route = None
-                        self.status.last_result = "Last Result: Could not open window"
-                        self.launch_error_handler(error, path)
                         return
-                if process is None and _is_windows_platform() and not _is_window_mutex_running():
-                    error = RuntimeError("The running Paper Monitor window did not become ready.")
-                    _log_window_launch_error(self.config_path, path, error)
+                    restart_attempted = True
+                    try:
+                        replacement = self.open_window(self.config_path, path)
+                    except Exception as exc:
+                        self._report_window_launch_failure(exc, path)
+                        return
+                    process = replacement if _has_process_poll(replacement) else None
                     with self._window_launch_lock:
-                        self._pending_window_route = None
-                    self.status.last_result = "Last Result: Could not open window"
-                    self.launch_error_handler(error, path)
+                        self._window_process = process
+                    deadline = time.monotonic() + WINDOW_READY_TIMEOUT_SECONDS
+                    self._stop_event.wait(0.1)
+                    continue
+
+                if time.monotonic() >= deadline:
+                    if process is not None and not restart_attempted:
+                        _terminate_process(process)
+                        with self._window_launch_lock:
+                            if self._window_process is process:
+                                self._window_process = None
+                        process = None
+                        deadline = time.monotonic() + WINDOW_READY_TIMEOUT_SECONDS
+                        continue
+                    if process is not None:
+                        _terminate_process(process)
+                        with self._window_launch_lock:
+                            if self._window_process is process:
+                                self._window_process = None
+                    self._report_window_launch_failure(
+                        RuntimeError("The Paper Monitor window process did not become ready."),
+                        path,
+                    )
                     return
                 self._stop_event.wait(0.25)
-
-            if self._stop_event.is_set():
-                return
-
-            error = RuntimeError("The Paper Monitor window process did not become ready.")
-            _log_window_launch_error(self.config_path, path, error)
-            with self._window_launch_lock:
-                if self._window_process is process:
-                    self._window_process = None
-                self._pending_window_route = None
-            if process is not None:
-                _terminate_process(process)
-            self.status.last_result = "Last Result: Could not open window"
-            self.launch_error_handler(error, path)
         finally:
             restart_process = None
             restart_path = None
@@ -669,6 +1019,13 @@ class WindowsTrayApp:
                         restart_path = None
             if restart_path is not None:
                 self._start_window_launch_monitor(restart_process, restart_path)
+
+    def _report_window_launch_failure(self, error: BaseException, path: str) -> None:
+        _log_window_launch_error(self.config_path, path, error)
+        with self._window_launch_lock:
+            self._pending_window_route = None
+        self.status.last_result = "Last Result: Could not open window"
+        self.launch_error_handler(error, path)
 
     def _start_refresh_thread(
         self,
@@ -697,6 +1054,8 @@ class WindowsTrayApp:
                 if not launch_refresh_checked:
                     launch_refresh_checked = True
                     if refresh_on_start:
+                        if self._stop_event.wait(LAUNCH_REFRESH_DELAY_SECONDS):
+                            return
                         self.refresh_now(reason=launch_reason)
                         now = dt.datetime.now()
                         if self._stop_event.is_set():
@@ -730,6 +1089,8 @@ class WindowsTrayApp:
                     return
 
         thread = threading.Thread(target=worker, name="PaperMonitorRefresh", daemon=True)
+        with self._lifecycle_lock:
+            self._scheduler_thread = thread
         thread.start()
         return thread
 
@@ -759,10 +1120,7 @@ def _tray_menu(pystray, app: WindowsTrayApp):
         pystray.MenuItem("Settings...", lambda *_: app.open_settings()),
         pystray.MenuItem(
             "Refresh Now",
-            lambda *_: threading.Thread(
-                target=lambda: app.refresh_now(reason=RefreshReason.MANUAL_REFRESH),
-                daemon=True,
-            ).start(),
+            lambda *_: app.start_manual_refresh(),
         ),
         pystray.MenuItem("Test Notification", lambda *_: app.post_test_notification()),
         pystray.Menu.SEPARATOR,
@@ -872,7 +1230,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("window", "settings", "tray", "run", "install-startup", "uninstall-startup", "test-notification"),
+        choices=(
+            "window",
+            "settings",
+            "tray",
+            "scheduled-refresh",
+            "sync-runtime",
+            "run",
+            "install-startup",
+            "uninstall-startup",
+            "test-notification",
+            "self-test",
+        ),
         default="window",
     )
     parser.add_argument("--config", type=Path)
@@ -886,11 +1255,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--title", default=f"{APP_NAME} test")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    if args.command == "install-startup":
-        set_startup_enabled(True, Path(sys.executable).resolve())
+    if args.command == "self-test":
+        try:
+            run_self_test()
+        except Exception as exc:
+            _write_stderr(f"{APP_NAME} self-test failed: {type(exc).__name__}: {exc}")
+            return 1
         return 0
-    if args.command == "uninstall-startup":
-        set_startup_enabled(False, Path(sys.executable).resolve())
+    if args.command in ("install-startup", "uninstall-startup"):
+        config_path = args.config or ensure_windows_app_files(args.app_dir)
+        enabled = args.command == "install-startup"
+        try:
+            set_background_monitoring_enabled(
+                config_path,
+                enabled,
+                executable_path=Path(sys.executable).resolve(),
+            )
+        except Exception as exc:
+            action = "enable" if enabled else "disable"
+            _write_stderr(f"Could not {action} background monitoring: {type(exc).__name__}: {exc}")
+            return 1
         return 0
     if args.command == "test-notification":
         config_path = args.config or ensure_windows_app_files(args.app_dir)
@@ -908,21 +1292,33 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 0 if sent else 1
 
     config_path = args.config or ensure_windows_app_files(args.app_dir)
+    if args.command == "scheduled-refresh":
+        return run_scheduled_refresh(config_path)
+    if args.command == "sync-runtime":
+        try:
+            from .windows_runtime_settings import sync_windows_runtime_settings
+
+            sync_windows_runtime_settings(
+                config_path,
+                executable_path=Path(sys.executable).resolve(),
+            )
+        except Exception as exc:
+            _write_stderr(
+                f"Could not synchronize background monitoring: {type(exc).__name__}: {exc}"
+            )
+            return 1
+        return 0
     if args.command in ("window", "settings", "run"):
+        _sync_windows_runtime_settings(config_path)
         window_path = "/settings" if args.command == "settings" else "/"
         if _is_windows_platform() and _is_window_mutex_running():
             if activate_existing_app_window(config_path, path=window_path):
                 return 0
-            error = RuntimeError("The running Paper Monitor window did not respond.")
-            _log_window_launch_error(config_path, window_path, error)
-            show_window_launch_error(error, window_path)
-            return 1
-        if os.environ.get(LAUNCHED_BY_TRAY_ENV) != "1":
-            ensure_tray_process(
-                config_path,
-                refresh_on_launch=True,
-                launch_reason=RefreshReason.PROCESS_LAUNCH,
-            )
+            if _is_window_mutex_running():
+                error = RuntimeError("The running Paper Monitor window did not respond.")
+                _log_window_launch_error(config_path, window_path, error)
+                show_window_launch_error(error, window_path)
+                return 1
         from .windows_app_window import open_dashboard_window
 
         try:
@@ -965,12 +1361,52 @@ def _build_tray_image():
     return image
 
 
-def _format_result(result: Dict[str, object]) -> str:
-    return "Last Result: Fetched {fetched} | Matched {matched} | New {new_matches}".format(
+def _format_result(
+    result: Dict[str, object],
+    *,
+    notification_attempts: int = 0,
+    notification_failures: int = 0,
+) -> str:
+    outcome = "Partial | " if str(result.get("status") or "") == "partial" or result.get("partial") else ""
+    formatted = "Last Result: {outcome}Fetched {fetched} | Matched {matched} | New {new_matches}".format(
+        outcome=outcome,
         fetched=result.get("fetched", 0),
         matched=result.get("matched", 0),
         new_matches=result.get("new_matches", 0),
     )
+    if notification_attempts:
+        sent = max(0, int(notification_attempts) - int(notification_failures))
+        formatted += f" | Notifications {sent} sent / {int(notification_failures)} failed"
+    return formatted
+
+
+def _invoke_refresh_function(
+    refresh_function,
+    config_path: Path,
+    *,
+    request_id: str,
+    reason: str,
+) -> Dict[str, object]:
+    """Pass refresh metadata when supported while retaining injected-runner compatibility."""
+
+    try:
+        signature = inspect.signature(refresh_function)
+    except (TypeError, ValueError):
+        signature = None
+    if signature is not None:
+        parameters = signature.parameters
+        accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+        if accepts_kwargs or {"request_id", "reason"}.issubset(parameters):
+            return refresh_function(config_path, request_id=request_id, reason=reason)
+    return refresh_function(config_path)
+
+
+def _safe_stop_icon(icon) -> None:
+    try:
+        icon.stop()
+    except Exception as exc:
+        if LOGGER.hasHandlers():
+            LOGGER.debug("Could not stop Paper Monitor tray icon: %s", exc)
 
 
 def _truncate(value: str, limit: int) -> str:
