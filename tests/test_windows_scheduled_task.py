@@ -29,10 +29,10 @@ class WindowsScheduledTaskTests(unittest.TestCase):
         self.assertEqual(frozen[1:3], ["scheduled-refresh", "--config"])
         self.assertEqual(frozen[3], str(config_path.resolve()))
         self.assertEqual(
-            source[1:5],
-            ["-m", "paper_monitor.windows_tray", "scheduled-refresh", "--config"],
+            source[1:4],
+            ["-m", "paper_monitor.windows_background", "--config"],
         )
-        self.assertEqual(source[5], str(config_path.resolve()))
+        self.assertEqual(source[4], str(config_path.resolve()))
 
     def test_start_boundary_uses_interval_or_configured_anchor(self):
         now = dt.datetime(2026, 7, 12, 10, 30, 0)

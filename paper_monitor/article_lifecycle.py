@@ -1014,7 +1014,7 @@ def _compact_error(value: object, limit: int = 500) -> str:
     text = _compact_text(str(value or ""))
     if len(text) <= limit:
         return text
-    return text[: limit - 1].rstrip() + "..."
+    return text[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
 def _build_notification(run_id: str, rows: Sequence[sqlite3.Row]) -> RefreshNotification:

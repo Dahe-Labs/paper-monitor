@@ -28,7 +28,7 @@ TASK_NAME_PREFIX = r"\PaperMonitor\Scheduled Refresh - "
 DEFAULT_EXECUTION_TIME_LIMIT = "PT2H"
 DEFAULT_RESTART_INTERVAL = "PT15M"
 DEFAULT_RESTART_COUNT = 2
-TASK_DEFINITION_REVISION = 2
+TASK_DEFINITION_REVISION = 3
 FINGERPRINT_PREFIX = "PaperMonitor schedule fingerprint: "
 MIN_INTERVAL_HOURS = 1
 MAX_INTERVAL_HOURS = 24 * 30
@@ -54,8 +54,7 @@ def build_scheduled_refresh_command(
     return [
         executable_path,
         "-m",
-        "paper_monitor.windows_tray",
-        "scheduled-refresh",
+        "paper_monitor.windows_background",
         "--config",
         config,
     ]

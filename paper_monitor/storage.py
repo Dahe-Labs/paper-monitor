@@ -589,4 +589,4 @@ def _short_error_message(value: str, limit: int = 500) -> str:
     compact = " ".join(str(value or "").split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1].rstrip() + "..."
+    return compact[: max(0, limit - 3)].rstrip() + "..."[:limit]

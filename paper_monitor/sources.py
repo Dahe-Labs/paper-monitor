@@ -198,7 +198,7 @@ def _compact_error(error: object, limit: int = 300) -> str:
     text = " ".join(str(error or "").split())
     if len(text) <= limit:
         return text
-    return text[: limit - 1].rstrip() + "..."
+    return text[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
 def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> SourceFetchResult:

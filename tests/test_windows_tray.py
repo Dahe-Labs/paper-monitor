@@ -148,6 +148,7 @@ class WindowsTrayTests(unittest.TestCase):
     def test_windows_launcher_is_quiet_entrypoint(self):
         launcher = Path("windows/PaperMonitor.pyw").read_text(encoding="utf-8")
 
+        self.assertIn("windows_background", launcher)
         self.assertIn("windows_tray", launcher)
         self.assertIn("main(", launcher)
         self.assertNotIn("open-dashboard", launcher)

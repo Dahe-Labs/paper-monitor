@@ -174,65 +174,6 @@ class NonResidentLifecycleTests(unittest.TestCase):
         tray_app_class.assert_called_once_with(config_path=config_path)
         tray_app_class.return_value.run.assert_called_once_with(refresh_on_start=True, quiet=True)
 
-    def test_scheduled_refresh_runs_once_notifies_and_exits(self):
-        config = types.SimpleNamespace(
-            app_settings=types.SimpleNamespace(notifications_enabled=True),
-            dashboard_path=Path("dashboard.html"),
-        )
-        articles = [{"title": "one"}, {"title": "two"}]
-        refresh = Mock(return_value={"status": "partial", "articles": articles})
-        notifier = Mock()
-        notifier.notify_article.side_effect = [True, False]
-
-        with patch("paper_monitor.windows_tray.load_app_config", return_value=config):
-            with patch("paper_monitor.windows_tray._log_app_error") as log_error:
-                status = windows_tray.run_scheduled_refresh(
-                    Path("config.json"),
-                    notifier=notifier,
-                    refresh_function=refresh,
-                )
-
-        self.assertEqual(status, 1)
-        refresh.assert_called_once_with(Path("config.json"), reason="scheduled_refresh")
-        self.assertEqual(notifier.notify_article.call_count, 2)
-        notifier.notify_article.assert_any_call(articles[0], Path("dashboard.html"))
-        log_error.assert_called_once()
-        self.assertIn("notification delivery failed", log_error.call_args.args[1])
-
-    def test_scheduled_refresh_respects_disabled_notifications(self):
-        config = types.SimpleNamespace(
-            app_settings=types.SimpleNamespace(notifications_enabled=False),
-            dashboard_path=Path("dashboard.html"),
-        )
-        notifier = Mock()
-        with patch("paper_monitor.windows_tray.load_app_config", return_value=config):
-            status = windows_tray.run_scheduled_refresh(
-                Path("config.json"),
-                notifier=notifier,
-                refresh_function=Mock(
-                    return_value={"status": "succeeded", "articles": [{"title": "one"}]}
-                ),
-            )
-
-        self.assertEqual(status, 0)
-        notifier.notify_article.assert_not_called()
-
-    def test_scheduled_refresh_failure_is_logged_and_returns_nonzero(self):
-        failure = RuntimeError("all sources failed")
-        with patch("paper_monitor.windows_tray._log_app_error") as log_error:
-            with patch("paper_monitor.windows_tray._write_stderr"):
-                status = windows_tray.run_scheduled_refresh(
-                    Path("config.json"),
-                    refresh_function=Mock(side_effect=failure),
-                )
-
-        self.assertEqual(status, 1)
-        log_error.assert_called_once_with(
-            Path("config.json"),
-            "Paper Monitor scheduled refresh failed",
-            failure,
-        )
-
     def test_scheduled_refresh_command_does_not_construct_tray(self):
         config_path = Path("config.json")
         with patch("paper_monitor.windows_tray.run_scheduled_refresh", return_value=0) as run_once:

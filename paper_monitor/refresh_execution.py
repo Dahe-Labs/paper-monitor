@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 import uuid
 from dataclasses import dataclass
@@ -234,11 +235,19 @@ def _production_dependencies() -> _ExecutionDependencies:
         fetch_sources=fetch_all_sources,
         load_metrics=load_journal_metrics,
         lifecycle_factory=ArticleLifecycle,
-        notification_adapter_factory=lambda _config: None,
+        notification_adapter_factory=_production_notification_adapter,
         acquire_refresh_mutex=lambda: acquire_mutex(REFRESH_MUTEX_NAME),
         close_refresh_mutex=close_handle,
         new_run_id=lambda: uuid.uuid4().hex,
     )
+
+
+def _production_notification_adapter(_config: AppConfig) -> Optional[NotificationAdapter]:
+    if sys.platform != "win32":
+        return None
+    from .windows_notification import WindowsSummaryNotificationAdapter
+
+    return WindowsSummaryNotificationAdapter()
 
 
 def _source_statuses(result: object) -> Tuple[Mapping[str, object], ...]:

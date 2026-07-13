@@ -75,10 +75,19 @@ class ProductContractAuditTests(unittest.TestCase):
 
     def test_windows_background_monitoring_is_nonresident(self):
         source = read_text("paper_monitor/windows_tray.py")
+        background = read_text("paper_monitor/windows_background.py")
         schedule = read_text("paper_monitor/windows_scheduled_task.py")
+        launcher = read_text("windows/PaperMonitor.pyw")
         install = read_text("windows/Install-PaperMonitor.ps1")
 
         self.assertIn('"scheduled-refresh"', source)
+        self.assertIn("RefreshExecution", background)
+        self.assertIn("RefreshIntent.BACKGROUND", background)
+        self.assertNotIn("WindowsTrayApp", background)
+        self.assertLess(
+            launcher.index('sys.argv[1:2] == ["scheduled-refresh"]'),
+            launcher.index("from paper_monitor import windows_tray"),
+        )
         self.assertIn('"MultipleInstancesPolicy"', schedule)
         self.assertIn('"RunOnlyIfNetworkAvailable"', schedule)
         self.assertIn('"InteractiveToken"', schedule)

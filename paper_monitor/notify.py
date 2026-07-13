@@ -124,7 +124,7 @@ def _truncate(value: str, limit: int) -> str:
     compact = " ".join((value or "").split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1].rstrip() + "..."
+    return compact[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
 def _open_command(target: str) -> str:

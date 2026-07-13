@@ -515,65 +515,12 @@ def run_self_test(source_root: Optional[Path] = None) -> None:
 
 def run_scheduled_refresh(
     config_path: Path,
-    *,
-    notifier: Optional["WindowsToastNotifier"] = None,
-    refresh_function=None,
 ) -> int:
-    """Run one scheduled refresh and exit without creating a tray or window."""
+    """Compatibility entry for older source-mode scheduled task definitions."""
 
-    config_path = Path(config_path)
-    runner = refresh_function or run_app_refresh
-    try:
-        result = runner(config_path, reason=RefreshReason.SCHEDULED_REFRESH.value)
-        if not isinstance(result, dict):
-            raise RuntimeError("Scheduled refresh returned an invalid result.")
-        status = str(result.get("status") or "succeeded").strip().lower()
-        if status not in {"succeeded", "partial"}:
-            raise RuntimeError(f"Scheduled refresh finished with status {status or 'unknown'}.")
+    from .windows_background import run_background_refresh
 
-        app_config = load_app_config(config_path)
-        notification_failures = 0
-        if app_config.app_settings.notifications_enabled:
-            notification_sender = notifier or WindowsToastNotifier(icon_path=windows_icon_path())
-            if "notifications_queued" in result:
-                from .storage import ArticleStore
-
-                store = ArticleStore(app_config.database_path)
-                for pending in store.pending_notifications():
-                    notification_id = int(pending["id"])
-                    article = pending["article"]
-                    try:
-                        delivered = bool(
-                            notification_sender.notify_article(article, app_config.dashboard_path)
-                        )
-                    except Exception as exc:
-                        delivered = False
-                        error_message = f"{type(exc).__name__}: {exc}"
-                    else:
-                        error_message = "Desktop notification API reported delivery failure"
-                    if delivered:
-                        store.mark_notification_sent(notification_id)
-                    else:
-                        notification_failures += 1
-                        store.mark_notification_failed(notification_id, error_message)
-            else:
-                # Compatibility for injected refresh runners used by integrators/tests.
-                for article in result.get("articles", ()):
-                    if not isinstance(article, dict):
-                        continue
-                    if not notification_sender.notify_article(article, app_config.dashboard_path):
-                        notification_failures += 1
-        if notification_failures:
-            error = RuntimeError(
-                f"{notification_failures} scheduled notification(s) could not be delivered."
-            )
-            _log_app_error(config_path, "Paper Monitor scheduled notification delivery failed", error)
-            return 1
-        return 0
-    except Exception as exc:
-        _log_app_error(config_path, "Paper Monitor scheduled refresh failed", exc)
-        _write_stderr(f"{APP_NAME} scheduled refresh failed: {exc}")
-        return 1
+    return run_background_refresh(config_path)
 
 
 @dataclass
@@ -1413,7 +1360,7 @@ def _truncate(value: str, limit: int) -> str:
     compact = " ".join((value or "").split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1].rstrip() + "..."
+    return compact[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
 if __name__ == "__main__":
