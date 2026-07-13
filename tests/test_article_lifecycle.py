@@ -102,6 +102,31 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertEqual(snapshot.articles[0].impact_reference, 9.25)
         self.assertFalse(hasattr(snapshot.articles[0], "abstract"))
 
+    def test_publisher_tracking_query_is_not_part_of_doi_identity(self):
+        publisher = ArticleDetection(
+            title="Tracked publisher article",
+            authors=(),
+            journal="Advanced Materials",
+            impact_reference=21.2,
+            url="https://publisher.example/doi/10.1002/adma.74049?af=R",
+            doi="10.1002/adma.74049?af=R",
+            source="Advanced Materials",
+            source_id="publisher-work-74049",
+            published="2026-07-12",
+        )
+        crossref = detection(
+            doi="DOI: https://doi.org/10.1002/adma.74049",
+            url="https://doi.org/10.1002/adma.74049",
+            title=publisher.title,
+            source_id="10.1002/adma.74049",
+        )
+
+        outcome = self.commit("run-query-doi", publisher, crossref)
+        snapshot = self.lifecycle.dashboard_snapshot()
+
+        self.assertEqual(outcome.new_count, 1)
+        self.assertEqual(len(snapshot.articles), 1)
+
     def test_source_id_and_exact_title_author_year_are_strict_aliases(self):
         first = detection(source_id="work-42", url="https://example.org/old")
         moved = detection(source_id="work-42", url="https://example.org/new")

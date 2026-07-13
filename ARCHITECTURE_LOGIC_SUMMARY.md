@@ -807,5 +807,6 @@ API/source：
 - 配置保存尽量原子化，并保留未知字段。
 - source 失败尽量降级为 warning，不让单个源拖垮整个刷新。
 - 论文去重以 DOI 优先，没有 DOI 时用 title + URL。
+- DOI identity 会移除 resolver 前缀、fragment 和出版商链接附带的查询参数；`ArticleLifecycle` 在同一事务中合并旧的精确别名记录，并保留展示、通知和刷新状态。
 - Dashboard 可以是 HTML，但桌面入口应表现为本地应用窗口；Windows 托盘不再打开系统浏览器作为主界面。
 - 发布包需要可重复构建、可哈希校验、可在干净用户目录安装验证。

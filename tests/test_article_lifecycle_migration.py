@@ -1,4 +1,6 @@
 import datetime as dt
+import hashlib
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -234,6 +236,104 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
 
         lifecycle = ArticleLifecycle(self.database_path, _clock=self.clock)
         self.assertEqual(len(lifecycle.dashboard_snapshot().articles), 2)
+
+    def test_canonical_doi_migration_merges_old_query_suffix_duplicates(self):
+        article = Article(
+            title="Duplicate publisher article",
+            journal="Advanced Materials",
+            url="https://doi.org/10.1002/adma.74049",
+            doi="10.1002/adma.74049",
+            published="2026-07-12",
+            abstract="",
+            source="Crossref",
+        )
+        lifecycle = ArticleLifecycle(self.database_path, _clock=self.clock)
+        self.commit_redetection(lifecycle, "canonical-run", article)
+
+        source_alias = hashlib.sha256(
+            b"source:advanced materials:publisher-work-74049"
+        ).digest()
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            canonical_id = connection.execute(
+                "SELECT article_id FROM lifecycle_articles"
+            ).fetchone()[0]
+            connection.execute(
+                "DELETE FROM lifecycle_migrations WHERE name = 'canonical-doi-query-v1'"
+            )
+            connection.execute(
+                """
+                INSERT INTO lifecycle_articles (
+                    article_id, title, authors_json, journal, impact_reference, url, doi,
+                    source, source_id, published, first_detected_at, last_detected_at,
+                    presented_at, notified_at, notification_state
+                )
+                VALUES (?, ?, '[]', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'consumed')
+                """,
+                (
+                    "old-query-suffix-duplicate",
+                    article.title,
+                    article.journal,
+                    21.2,
+                    "https://publisher.example/doi/10.1002/adma.74049?af=R",
+                    "10.1002/adma.74049?af=R",
+                    "Advanced Materials",
+                    "publisher-work-74049",
+                    article.published,
+                    "2026-07-12T00:00:00Z",
+                    "2026-07-13T00:00:00Z",
+                    "2026-07-13T00:00:00Z",
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO lifecycle_article_aliases (alias_hash, article_id)
+                VALUES (?, 'old-query-suffix-duplicate')
+                """,
+                (source_alias,),
+            )
+            connection.commit()
+
+        migrated = ArticleLifecycle(self.database_path, _clock=self.clock)
+        snapshot = migrated.dashboard_snapshot()
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                "SELECT article_id, doi, presented_at, notification_state FROM lifecycle_articles"
+            ).fetchall()
+            alias_owner = connection.execute(
+                "SELECT article_id FROM lifecycle_article_aliases WHERE alias_hash = ?",
+                (source_alias,),
+            ).fetchone()[0]
+            details = json.loads(
+                connection.execute(
+                    "SELECT details_json FROM lifecycle_migrations WHERE name = 'canonical-doi-query-v1'"
+                ).fetchone()[0]
+            )
+
+        self.assertEqual(len(snapshot.articles), 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["article_id"], canonical_id)
+        self.assertEqual(rows[0]["doi"], article.doi)
+        self.assertEqual(rows[0]["notification_state"], "consumed")
+        self.assertTrue(rows[0]["presented_at"])
+        self.assertEqual(alias_owner, canonical_id)
+        self.assertEqual(details, {"corrected": 1, "merged": 1})
+
+        repeated = self.commit_redetection(
+            migrated,
+            "publisher-repeat",
+            Article(
+                title=article.title,
+                journal=article.journal,
+                url="https://publisher.example/doi/10.1002/adma.74049?af=R",
+                doi="10.1002/adma.74049?af=R",
+                published=article.published,
+                abstract="",
+                source="Advanced Materials",
+                source_id="publisher-work-74049",
+            ),
+        )
+        self.assertEqual(repeated.new_count, 0)
 
 
 if __name__ == "__main__":

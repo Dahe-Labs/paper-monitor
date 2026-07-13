@@ -24,6 +24,7 @@ _BUSY_TIMEOUT_MS = 30_000
 _DEFAULT_RETENTION_DAYS = 30
 _PRESENTATION_TOKEN_RETENTION_DAYS = 7
 _LEGACY_MIGRATION_NAME = "legacy-article-store-v1"
+_CANONICAL_DOI_MIGRATION_NAME = "canonical-doi-query-v1"
 
 
 class RefreshRunStatus(str, Enum):
@@ -187,25 +188,32 @@ class ArticleLifecycle:
                 ),
             )
 
-            new_article_ids = set()
             for detection in detections:
                 committed = self._commit_detection(connection, detection, now)
                 if committed is None:
                     continue
                 article_id, was_new = committed
-                cursor = connection.execute(
+                connection.execute(
                     """
                     INSERT OR IGNORE INTO lifecycle_refresh_articles (run_id, article_id, was_new)
                     VALUES (?, ?, ?)
                     """,
                     (run_id, article_id, 1 if was_new else 0),
                 )
-                if was_new and cursor.rowcount:
-                    new_article_ids.add(article_id)
 
+            new_count = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM lifecycle_refresh_articles
+                    WHERE run_id = ? AND was_new = 1
+                    """,
+                    (run_id,),
+                ).fetchone()[0]
+            )
             connection.execute(
                 "UPDATE lifecycle_refresh_runs SET new_count = ? WHERE run_id = ?",
-                (len(new_article_ids), run_id),
+                (new_count, run_id),
             )
             return self._commit_outcome(connection, run_id)
 
@@ -437,7 +445,7 @@ class ArticleLifecycle:
         placeholders = ",".join("?" for _ in alias_hashes)
         existing_ids = self._article_ids_for_aliases(connection, alias_hashes)
         if len(existing_ids) > 1:
-            raise ArticleIdentityConflict("exact Article aliases point to multiple active Articles")
+            existing_ids = {self._merge_article_records(connection, existing_ids)}
 
         if not existing_ids:
             retired = connection.execute(
@@ -503,6 +511,146 @@ class ArticleLifecycle:
         )
         return article_id, was_new
 
+    def _merge_article_records(
+        self,
+        connection: sqlite3.Connection,
+        article_ids: Sequence[str],
+    ) -> str:
+        normalized_ids = tuple(sorted({str(article_id) for article_id in article_ids}))
+        if not normalized_ids:
+            raise ValueError("article_ids must not be empty")
+        placeholders = ",".join("?" for _ in normalized_ids)
+        rows = connection.execute(
+            f"SELECT * FROM lifecycle_articles WHERE article_id IN ({placeholders})",  # nosec B608
+            normalized_ids,
+        ).fetchall()
+        if len(rows) != len(normalized_ids):
+            raise ArticleIdentityConflict("cannot merge missing active Articles")
+        survivor = min(rows, key=_article_survivor_key)
+        survivor_id = str(survivor["article_id"])
+        duplicate_ids = tuple(
+            str(row["article_id"])
+            for row in rows
+            if str(row["article_id"]) != survivor_id
+        )
+        if not duplicate_ids:
+            return survivor_id
+
+        all_placeholders = ",".join("?" for _ in normalized_ids)
+        affected_runs_query = f"SELECT DISTINCT run_id FROM lifecycle_refresh_articles WHERE article_id IN ({all_placeholders})"  # nosec B608
+        affected_runs = tuple(
+            str(row["run_id"])
+            for row in connection.execute(
+                affected_runs_query,
+                normalized_ids,
+            ).fetchall()
+        )
+        refresh_rows_query = f"SELECT run_id, MAX(was_new) AS was_new FROM lifecycle_refresh_articles WHERE article_id IN ({all_placeholders}) GROUP BY run_id"  # nosec B608
+        refresh_rows = connection.execute(
+            refresh_rows_query,
+            normalized_ids,
+        ).fetchall()
+        for row in refresh_rows:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO lifecycle_refresh_articles (run_id, article_id, was_new)
+                VALUES (?, ?, ?)
+                """,
+                (str(row["run_id"]), survivor_id, int(row["was_new"])),
+            )
+            connection.execute(
+                """
+                UPDATE lifecycle_refresh_articles
+                SET was_new = MAX(was_new, ?)
+                WHERE run_id = ? AND article_id = ?
+                """,
+                (int(row["was_new"]), str(row["run_id"]), survivor_id),
+            )
+
+        presentation_tokens_query = f"SELECT DISTINCT token FROM lifecycle_presentation_articles WHERE article_id IN ({all_placeholders})"  # nosec B608
+        presentation_tokens = connection.execute(
+            presentation_tokens_query,
+            normalized_ids,
+        ).fetchall()
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO lifecycle_presentation_articles (token, article_id)
+            VALUES (?, ?)
+            """,
+            ((str(row["token"]), survivor_id) for row in presentation_tokens),
+        )
+
+        aliases_query = f"SELECT alias_hash FROM lifecycle_article_aliases WHERE article_id IN ({all_placeholders})"  # nosec B608
+        alias_rows = connection.execute(
+            aliases_query,
+            normalized_ids,
+        ).fetchall()
+        duplicate_placeholders = ",".join("?" for _ in duplicate_ids)
+        connection.execute(
+            f"DELETE FROM lifecycle_article_aliases WHERE article_id IN ({duplicate_placeholders})",  # nosec B608
+            duplicate_ids,
+        )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO lifecycle_article_aliases (alias_hash, article_id)
+            VALUES (?, ?)
+            """,
+            ((row["alias_hash"], survivor_id) for row in alias_rows),
+        )
+
+        first_detected = min(str(row["first_detected_at"]) for row in rows)
+        last_detected = max(str(row["last_detected_at"]) for row in rows)
+        presented_at = _earliest_optional_timestamp(row["presented_at"] for row in rows)
+        notified_at = _earliest_optional_timestamp(row["notified_at"] for row in rows)
+        notification_state = (
+            "consumed"
+            if presented_at
+            or notified_at
+            or any(str(row["notification_state"]) == "consumed" for row in rows)
+            else "eligible"
+        )
+        impact_reference = survivor["impact_reference"]
+        if impact_reference is None:
+            impact_reference = next(
+                (row["impact_reference"] for row in rows if row["impact_reference"] is not None),
+                None,
+            )
+        connection.execute(
+            """
+            UPDATE lifecycle_articles
+            SET impact_reference = ?, first_detected_at = ?, last_detected_at = ?,
+                presented_at = ?, notified_at = ?, notification_state = ?
+            WHERE article_id = ?
+            """,
+            (
+                impact_reference,
+                first_detected,
+                last_detected,
+                presented_at,
+                notified_at,
+                notification_state,
+                survivor_id,
+            ),
+        )
+        connection.execute(
+            f"DELETE FROM lifecycle_articles WHERE article_id IN ({duplicate_placeholders})",  # nosec B608
+            duplicate_ids,
+        )
+        for run_id in affected_runs:
+            connection.execute(
+                """
+                UPDATE lifecycle_refresh_runs
+                SET new_count = (
+                    SELECT COUNT(*)
+                    FROM lifecycle_refresh_articles
+                    WHERE run_id = ? AND was_new = 1
+                )
+                WHERE run_id = ?
+                """,
+                (run_id, run_id),
+            )
+        return survivor_id
+
     def _commit_outcome(self, connection: sqlite3.Connection, run_id: str) -> CommitOutcome:
         row = connection.execute(
             "SELECT status, new_count FROM lifecycle_refresh_runs WHERE run_id = ?",
@@ -560,6 +708,61 @@ class ArticleLifecycle:
                 last_error = excluded.last_error
             """,
             (run_id, state, article_count, now, state, now, _compact_error(last_error)),
+        )
+
+    def _migrate_canonical_dois(self, connection: sqlite3.Connection, now: str) -> None:
+        if connection.execute(
+            "SELECT 1 FROM lifecycle_migrations WHERE name = ?",
+            (_CANONICAL_DOI_MIGRATION_NAME,),
+        ).fetchone():
+            return
+
+        groups = {}
+        rows = connection.execute(
+            "SELECT article_id, doi FROM lifecycle_articles ORDER BY article_id"
+        ).fetchall()
+        for row in rows:
+            canonical_doi = normalize_doi(str(row["doi"] or ""))
+            if canonical_doi:
+                groups.setdefault(canonical_doi, []).append(row)
+
+        corrected = 0
+        merged = 0
+        for canonical_doi, doi_rows in groups.items():
+            doi_alias = hashlib.sha256(("doi:" + canonical_doi).encode("utf-8")).digest()
+            article_ids = {str(row["article_id"]) for row in doi_rows}
+            article_ids.update(self._article_ids_for_aliases(connection, (doi_alias,)))
+            corrected += sum(
+                str(row["doi"] or "").strip().casefold() != canonical_doi
+                for row in doi_rows
+            )
+            if len(article_ids) > 1:
+                merged += len(article_ids) - 1
+                survivor_id = self._merge_article_records(connection, tuple(article_ids))
+            else:
+                survivor_id = next(iter(article_ids))
+            connection.execute(
+                "UPDATE lifecycle_articles SET doi = ? WHERE article_id = ?",
+                (canonical_doi, survivor_id),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO lifecycle_article_aliases (alias_hash, article_id)
+                VALUES (?, ?)
+                """,
+                (doi_alias, survivor_id),
+            )
+
+        connection.execute(
+            """
+            INSERT INTO lifecycle_migrations (name, applied_at, details_json)
+            VALUES (?, ?, ?)
+            """,
+            (
+                _CANONICAL_DOI_MIGRATION_NAME,
+                now,
+                _json_dumps({"corrected": corrected, "merged": merged}),
+            ),
         )
 
     def _migrate_legacy_state(self, connection: sqlite3.Connection, now: str) -> None:
@@ -908,6 +1111,7 @@ class ArticleLifecycle:
             )
             connection.execute("BEGIN IMMEDIATE")
             self._migrate_legacy_state(connection, self._now())
+            self._migrate_canonical_dois(connection, self._now())
 
     def _now(self) -> str:
         return _timestamp(self._clock())
@@ -1008,6 +1212,22 @@ def _identity_text(value: str) -> str:
 
 def _compact_text(value: str) -> str:
     return " ".join(str(value or "").split())
+
+
+def _article_survivor_key(row: sqlite3.Row) -> Tuple[object, ...]:
+    raw_doi = str(row["doi"] or "").strip().casefold()
+    canonical_doi = normalize_doi(raw_doi)
+    return (
+        not canonical_doi,
+        raw_doi != canonical_doi,
+        str(row["first_detected_at"]),
+        str(row["article_id"]),
+    )
+
+
+def _earliest_optional_timestamp(values) -> Optional[str]:
+    timestamps = tuple(str(value or "").strip() for value in values if str(value or "").strip())
+    return min(timestamps) if timestamps else None
 
 
 def _compact_error(value: object, limit: int = 500) -> str:
