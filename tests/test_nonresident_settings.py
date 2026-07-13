@@ -51,12 +51,13 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertIn("RemoveScheduledRefreshTask", installer)
         self.assertIn('\\PaperMonitor Scheduled Refresh" /F', installer)
 
-    def test_documentation_promises_no_resident_windows_process(self):
+    def test_documentation_distinguishes_native_tray_from_heavy_runtime(self):
         windows_readme = read_text("README_WINDOWS.md")
         chinese_readme = read_text("README.zh-CN.md")
 
-        self.assertIn("consumes no background memory between scans", windows_readme)
-        self.assertIn("两次检索之间没有 Paper Monitor 进程常驻内存", chinese_readme)
+        self.assertIn("Python, WebView, and the local HTTP bridge consume no background memory", windows_readme)
+        self.assertIn("small native C tray executable", windows_readme)
+        self.assertIn("不会常驻 Python、WebView 或本地 HTTP 服务", chinese_readme)
 
 
 class RuntimeScheduleSettingsTests(unittest.TestCase):

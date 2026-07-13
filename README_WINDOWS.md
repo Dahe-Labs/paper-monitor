@@ -74,7 +74,7 @@ The installer registers Paper Monitor in Windows installed apps and provides an 
 
 The installer no longer adds a login process. Upgrading also removes the legacy `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PaperMonitor` entry so an older tray coordinator cannot remain resident. The installer can launch Paper Monitor after install only when the final-page launch option is selected.
 
-Enable **Background Monitoring** in App Settings to register a per-user Windows scheduled task. Windows then starts a short-lived Paper Monitor refresh worker only when the configured scan is due. The worker retrieves papers, updates local data, sends any notifications, and exits; Paper Monitor consumes no background memory between scans. The task runs with the signed-in user's session so notifications remain available. It does not wake a sleeping PC, but a missed scan starts when Windows is available again.
+Enable **Background Monitoring** in App Settings to register a per-user Windows scheduled task. Windows then starts a short-lived Paper Monitor refresh worker only when the configured scan is due. The worker retrieves papers, updates local data, sends any notifications, and exits; Python, WebView, and the local HTTP bridge consume no background memory between scans. The task runs with the signed-in user's session so notifications remain available. It does not wake a sleeping PC, but a missed scan starts when Windows is available again.
 
 The task ignores overlapping starts and retries a failed run twice at 15-minute intervals. Notification payloads are stored before delivery and remain pending after a toast failure. Dashboard HTML is regenerated when the window is opened rather than during a headless scheduled scan.
 
@@ -112,21 +112,21 @@ It does not enable background monitoring or launch the app unless requested. The
 
 ## Runtime Behavior
 
-Opening Paper Monitor starts the Dashboard/Settings window and its local loopback bridge. Closing the window stops that UI session and releases the WebView and Python processes. Reopen the app from the Start Menu or desktop shortcut when you need the Dashboard; this is independent of background monitoring.
+Opening Paper Monitor starts the Dashboard/Settings window and its local loopback bridge, plus a separate small native C tray executable. Closing the window stops that UI session and releases WebView, Python, and the bridge while the lightweight tray remains available. The tray contains no network retrieval, database, or rendering implementation; each action starts a bounded Paper Monitor worker and returns immediately.
 
 The scheduled worker has no window or tray icon. It exits after one refresh, even when a source fails; refresh diagnostics are retained for the next Dashboard session. `Refresh Now` remains available while the app window is open.
 
-The legacy resident tray command remains available for compatibility during migration, but it is no longer used for normal startup or background scheduling. Its menu contains:
+The native tray menu contains:
 
 ```text
 Open Paper Monitor
 Settings...
 Refresh Now
 Test Notification
-Quit
+Quit Tray
 ```
 
-`Open Paper Monitor` and `Settings...` reuse the same native app window and switch its in-app route. Re-launching the executable also routes and focuses the existing window. The local bridge only listens on `127.0.0.1` and uses a per-session token for in-app actions.
+`Open Paper Monitor` and `Settings...` reuse the same app window and switch its in-app route. `Refresh Now` starts the same short-lived background Refresh Execution used by Task Scheduler, so it writes to the canonical lifecycle database and respects notification deduplication. Re-launching the executable also routes and focuses the existing window. The local bridge only listens on `127.0.0.1` and uses a per-session token for in-app actions.
 
 `Test Notification` sends a Windows toast notification without running a literature search.
 

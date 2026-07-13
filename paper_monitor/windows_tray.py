@@ -1257,6 +1257,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 0
     if args.command in ("window", "settings", "run"):
         _sync_windows_runtime_settings(config_path)
+        from .windows_native_tray import ensure_native_tray
+
+        ensure_native_tray(config_path)
         window_path = "/settings" if args.command == "settings" else "/"
         if _is_windows_platform() and _is_window_mutex_running():
             if activate_existing_app_window(config_path, path=window_path):

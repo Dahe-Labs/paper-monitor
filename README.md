@@ -9,9 +9,9 @@ The app runs locally. It does not require an LLM service, and OpenAlex is disabl
 ## Features
 
 - Native macOS Dock app with an application menu for manual refresh, settings, dashboard access, and notification testing.
-- Native Windows app with a single Dashboard/Settings window, zero-resident scheduled refresh, and toast notifications.
+- Native Windows app with a single Dashboard/Settings window, a lightweight native tray, non-resident scheduled refresh, and toast notifications.
 - Local notifications for newly matched papers.
-- In normal Windows background-monitoring mode, Task Scheduler starts a short-lived refresh worker only when a scan is due; no Paper Monitor process or hidden WebView remains resident between scans.
+- In normal Windows background-monitoring mode, Task Scheduler starts a short-lived refresh worker only when a scan is due; Python, the local HTTP bridge, and WebView do not remain resident between scans. The optional native C tray stays available after the window closes without loading the search engine or UI runtime.
 - Crossref, RSS, and optional arXiv retrieval with journal scope controls.
 - Local SQLite deduplication so repeated papers are not notified again.
 - Settings Apply workflow with visible unsaved/saved state.

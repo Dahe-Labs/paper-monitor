@@ -33,6 +33,17 @@ class ReleaseHardeningTests(unittest.TestCase):
         self.assertNotIn("$AssetHashes | Set-Content", script)
         self.assertNotIn("$PackageHashes | Set-Content", script)
 
+    def test_native_tray_is_signed_before_it_is_embedded_in_frozen_apps(self):
+        build_script = (ROOT / "scripts" / "build_windows_app.ps1").read_text(encoding="utf-8")
+        package_script = (ROOT / "scripts" / "package_windows_release.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[string]$PrebuiltNativeTrayPath", build_script)
+        pre_sign = package_script.index("-Path $DistNativeTray")
+        frozen_build = package_script.index("-PrebuiltNativeTrayPath $DistNativeTray")
+        self.assertLess(pre_sign, frozen_build)
+
 
 if __name__ == "__main__":
     unittest.main()

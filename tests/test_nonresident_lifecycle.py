@@ -85,22 +85,24 @@ class NonResidentLifecycleTests(unittest.TestCase):
             saved = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertFalse(saved["app_settings"]["startup_enabled"])
 
-    def test_normal_window_commands_never_start_tray_coordinator(self):
+    def test_normal_window_commands_start_only_native_tray_coordinator(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             for command in ("window", "settings", "run"):
                 with self.subTest(command=command):
                     with patch("paper_monitor.windows_tray._is_windows_platform", return_value=False):
                         with patch("paper_monitor.windows_tray.ensure_tray_process_delayed") as ensure_tray:
-                            with patch("paper_monitor.windows_tray._sync_windows_runtime_settings") as sync:
-                                with patch(
-                                    "paper_monitor.windows_app_window.open_dashboard_window",
-                                    return_value=0,
-                                ) as open_window:
-                                    status = windows_tray.main([command, "--config", str(config_path)])
+                            with patch("paper_monitor.windows_native_tray.ensure_native_tray") as ensure_native:
+                                with patch("paper_monitor.windows_tray._sync_windows_runtime_settings") as sync:
+                                    with patch(
+                                        "paper_monitor.windows_app_window.open_dashboard_window",
+                                        return_value=0,
+                                    ) as open_window:
+                                        status = windows_tray.main([command, "--config", str(config_path)])
 
                     self.assertEqual(status, 0)
                     ensure_tray.assert_not_called()
+                    ensure_native.assert_called_once_with(config_path)
                     sync.assert_called_once_with(config_path)
                     expected_path = "/settings" if command == "settings" else "/"
                     open_window.assert_called_once_with(config_path, path=expected_path)

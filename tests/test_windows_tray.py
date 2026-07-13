@@ -182,6 +182,7 @@ class WindowsTrayTests(unittest.TestCase):
                 "windows/PaperMonitor.pyw",
                 "windows/assets/PaperMonitor.ico",
                 "scripts/build_windows_app.ps1",
+                "scripts/build_windows_native_tray.ps1",
                 "scripts/install_windows_app.ps1",
                 "scripts/generate_windows_icon.py",
                 "scripts/generate_app_icons.py",

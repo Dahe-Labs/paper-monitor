@@ -89,6 +89,10 @@ jobs:
       - name: Install Windows dependencies
         run: python -m pip install -r requirements-windows.lock.txt
 
+      - name: Install native tray compiler
+        shell: pwsh
+        run: choco install mingw --yes --no-progress
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --yes --no-progress
@@ -154,6 +158,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "The onefile self-test failed with exit code $LASTEXITCODE."
           }
+          $tray = ".\dist\windows\PaperMonitor\PaperMonitorTray.exe"
+          $trayArgs = '--self-test --app "' + (Resolve-Path ".\dist\windows\PaperMonitor\PaperMonitor.exe") + '" --config "' + (Resolve-Path ".\config.example.json") + '"'
+          $trayTest = Start-Process -FilePath $tray -ArgumentList $trayArgs -WindowStyle Hidden -Wait -PassThru
+          if ($trayTest.ExitCode -ne 0) {
+            throw "The native tray self-test failed with exit code $($trayTest.ExitCode)."
+          }
 
       - name: Verify public signatures
         if: ${{ github.event_name == 'push' || inputs.upload_release }}
@@ -163,6 +173,7 @@ jobs:
         run: |
           $files = @(
             ".\dist\windows\PaperMonitor\PaperMonitor.exe",
+            ".\dist\windows\PaperMonitor\PaperMonitorTray.exe",
             ".\public_release\Paper-Monitor-Windows-$env:RELEASE_VERSION.exe",
             ".\public_release\Paper-Monitor-Windows-$env:RELEASE_VERSION-Setup.exe"
           )

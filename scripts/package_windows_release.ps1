@@ -26,8 +26,10 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 
 $ReleaseName = "Paper-Monitor-Windows-$Version"
 $DistExe = Join-Path $Root "dist\windows\PaperMonitor.exe"
+$DistNativeTray = Join-Path $Root "dist\windows\PaperMonitorTray.exe"
 $DistAppDir = Join-Path $Root "dist\windows\PaperMonitor"
 $DistAppExe = Join-Path $DistAppDir "PaperMonitor.exe"
+$DistAppNativeTray = Join-Path $DistAppDir "PaperMonitorTray.exe"
 $InnoScript = Join-Path $Root "windows\PaperMonitor.iss"
 $InstallerIcon = Join-Path $Root "windows\assets\PaperMonitor.ico"
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
@@ -177,13 +179,38 @@ function Invoke-CodeSign {
   Invoke-Native -FilePath $SignTool -Arguments @("verify", "/pa", $Path)
 }
 
+function Invoke-CodeVerify {
+  param(
+    [Parameter(Mandatory=$true)][string]$SignTool,
+    [Parameter(Mandatory=$true)][string]$Path
+  )
+
+  Invoke-Native -FilePath $SignTool -Arguments @("verify", "/pa", $Path)
+}
+
 $SigningEnabled = -not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)
 if ($RequireSignature -and -not $SigningEnabled) {
   throw "-RequireSignature requires -CodeSigningCertificateThumbprint."
 }
+$ResolvedSignTool = $null
+if ($SigningEnabled) {
+  $ResolvedSignTool = Find-SignTool -Requested $SignToolPath
+}
 
 if (-not $SkipBuild) {
-  & (Join-Path $Root "scripts\build_windows_app.ps1") -Version $Version
+  if ($SigningEnabled) {
+    & (Join-Path $Root "scripts\build_windows_native_tray.ps1") -OutputPath $DistNativeTray
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistNativeTray `
+      -Timestamp $TimestampUrl
+    & (Join-Path $Root "scripts\build_windows_app.ps1") `
+      -Version $Version `
+      -PrebuiltNativeTrayPath $DistNativeTray
+  } else {
+    & (Join-Path $Root "scripts\build_windows_app.ps1") -Version $Version
+  }
 }
 
 if (-not (Test-Path -LiteralPath $DistExe -PathType Leaf)) {
@@ -191,6 +218,12 @@ if (-not (Test-Path -LiteralPath $DistExe -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $DistAppExe -PathType Leaf)) {
   throw "Missing built application: $DistAppExe"
+}
+if (-not (Test-Path -LiteralPath $DistNativeTray -PathType Leaf)) {
+  throw "Missing native tray executable: $DistNativeTray"
+}
+if (-not (Test-Path -LiteralPath $DistAppNativeTray -PathType Leaf)) {
+  throw "Missing onedir native tray executable: $DistAppNativeTray"
 }
 
 $BuiltProductVersion = (Get-Item -LiteralPath $DistExe).VersionInfo.ProductVersion
@@ -201,9 +234,7 @@ $BuiltAppProductVersion = (Get-Item -LiteralPath $DistAppExe).VersionInfo.Produc
 if ([string]::IsNullOrWhiteSpace($BuiltAppProductVersion) -or $BuiltAppProductVersion.Trim() -ne $Version) {
   throw "Built application ProductVersion '$BuiltAppProductVersion' does not match release version '$Version'. Rebuild without -SkipBuild."
 }
-$ResolvedSignTool = $null
 if ($SigningEnabled) {
-  $ResolvedSignTool = Find-SignTool -Requested $SignToolPath
   Invoke-CodeSign `
     -SignTool $ResolvedSignTool `
     -CertificateThumbprint $CodeSigningCertificateThumbprint `
@@ -214,6 +245,21 @@ if ($SigningEnabled) {
     -CertificateThumbprint $CodeSigningCertificateThumbprint `
     -Path $DistAppExe `
     -Timestamp $TimestampUrl
+  if ($SkipBuild) {
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistNativeTray `
+      -Timestamp $TimestampUrl
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistAppNativeTray `
+      -Timestamp $TimestampUrl
+  } else {
+    Invoke-CodeVerify -SignTool $ResolvedSignTool -Path $DistNativeTray
+    Invoke-CodeVerify -SignTool $ResolvedSignTool -Path $DistAppNativeTray
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
