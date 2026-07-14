@@ -34,6 +34,13 @@ MIN_INTERVAL_HOURS = 1
 MAX_INTERVAL_HOURS = 24 * 30
 MAX_EXPORTED_TASK_XML_BYTES = 1024 * 1024
 _FILE_NOT_FOUND_HRESULTS = {2, 3, 0x80070002, 0x80070003}
+_EXPORTED_XML_DEFAULTS = {
+    "./t:Triggers/t:TimeTrigger/t:Enabled": "true",
+    "./t:Principals/t:Principal/t:RunLevel": "LeastPrivilege",
+    "./t:Settings/t:AllowStartOnDemand": "true",
+    "./t:Settings/t:Enabled": "true",
+    "./t:Settings/t:WakeToRun": "false",
+}
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
@@ -294,7 +301,11 @@ def scheduled_task_xml_matches(
     namespaces = {"t": TASK_XML_NAMESPACE}
     for path, expected in expected_values.items():
         node = root.find(path, namespaces)
-        actual = "" if node is None or node.text is None else node.text.strip()
+        actual = (
+            _EXPORTED_XML_DEFAULTS.get(path, "")
+            if node is None
+            else "" if node.text is None else node.text.strip()
+        )
         if actual != expected:
             return False
 

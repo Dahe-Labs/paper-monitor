@@ -152,7 +152,7 @@ class WindowsScheduledTaskTests(unittest.TestCase):
         self.assertIsNotNone(captured_path)
         self.assertFalse(captured_path.exists())
 
-    def test_install_does_not_reset_matching_task_start_boundary(self):
+    def test_install_does_not_reset_scheduler_normalized_task_start_boundary(self):
         config_path = Path(r"C:\Users\A User\config.json")
         executable = Path(r"C:\Program Files\Paper Monitor\PaperMonitor.exe")
         command = scheduled.build_scheduled_refresh_command(
@@ -161,14 +161,27 @@ class WindowsScheduledTaskTests(unittest.TestCase):
             frozen=True,
         )
         work_dir = executable.resolve().parent
-        existing_xml = scheduled.build_scheduled_task_xml(
-            command,
-            interval_hours=12,
-            start_time="09:30",
-            user_name=r"DOMAIN\A User",
-            now=dt.datetime(2026, 7, 1, 8, 0, 0),
-            working_directory=work_dir,
-        ).decode("utf-16")
+        existing_root = ET.fromstring(
+            scheduled.build_scheduled_task_xml(
+                command,
+                interval_hours=12,
+                start_time="09:30",
+                user_name=r"DOMAIN\A User",
+                now=dt.datetime(2026, 7, 1, 8, 0, 0),
+                working_directory=work_dir,
+            )
+        )
+        for parent_path, child_name in (
+            ("./task:Triggers/task:TimeTrigger", "Enabled"),
+            ("./task:Principals/task:Principal", "RunLevel"),
+            ("./task:Settings", "AllowStartOnDemand"),
+            ("./task:Settings", "Enabled"),
+            ("./task:Settings", "WakeToRun"),
+        ):
+            parent = existing_root.find(parent_path, NS)
+            child = parent.find(f"task:{child_name}", NS)
+            parent.remove(child)
+        existing_xml = ET.tostring(existing_root, encoding="unicode")
         calls = []
 
         def runner(args, **_kwargs):

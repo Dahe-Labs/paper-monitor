@@ -390,6 +390,7 @@ Windows 入口：
 - 设置保存后 `sync_windows_runtime_settings()` 按 `startup_enabled` 同步当前用户的 Windows 任务计划。
 - 任务到期时启动一次 `scheduled-refresh`，刷新、存储和通知完成后退出。
 - 免安装版只要路径保持有效，同样可以注册任务计划；移动或删除程序后需要重新同步任务。
+- 同步时按稳定指纹和任务语义比较现有定义；Windows 导出 XML 省略系统默认节点时按默认语义解释，避免无变化时重建任务并推迟下一次运行。
 
 通知：
 
