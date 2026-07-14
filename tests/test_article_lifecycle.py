@@ -1,6 +1,8 @@
 import datetime as dt
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from paper_monitor.article_lifecycle import (
@@ -218,17 +220,37 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertFalse(ambiguous_repeat.attempted)
         self.assertEqual(len(ambiguous_notifier.notifications), 1)
 
-    def test_expired_listing_is_deleted_and_retired_fingerprint_blocks_redetection(self):
+    def test_expired_listing_is_hard_deleted_without_blocking_future_redetection(self):
         article = detection(doi="10.1000/expired")
         self.commit("run-original", article)
+        self.lifecycle.dashboard_snapshot()
+        self.lifecycle.deliver_notification(
+            "run-original",
+            FakeNotifier(NotificationDelivery.ACCEPTED),
+        )
 
         self.clock.advance(days=31)
-        self.assertEqual(self.lifecycle.dashboard_snapshot().articles, ())
+        self.assertEqual(self.lifecycle.list_articles(), ())
+        with closing(sqlite3.connect(str(self.lifecycle.path))) as connection:
+            remaining = tuple(
+                connection.execute(query).fetchone()[0]
+                for query in (
+                    "SELECT COUNT(*) FROM lifecycle_articles",
+                    "SELECT COUNT(*) FROM lifecycle_article_aliases",
+                    "SELECT COUNT(*) FROM lifecycle_refresh_runs",
+                    "SELECT COUNT(*) FROM lifecycle_refresh_articles",
+                    "SELECT COUNT(*) FROM lifecycle_presentation_tokens",
+                    "SELECT COUNT(*) FROM lifecycle_presentation_articles",
+                    "SELECT COUNT(*) FROM lifecycle_notification_attempts",
+                )
+            )
+        self.assertEqual(set(remaining), {0})
+
         redetected = self.commit("run-redetected", article)
 
-        self.assertEqual(redetected.new_count, 0)
-        self.assertEqual(redetected.active_count, 0)
-        self.assertEqual(self.lifecycle.dashboard_snapshot().articles, ())
+        self.assertEqual(redetected.new_count, 1)
+        self.assertEqual(redetected.active_count, 1)
+        self.assertEqual(len(self.lifecycle.dashboard_snapshot().articles), 1)
 
     def test_failed_run_preserves_existing_listing(self):
         self.commit("run-success", detection())

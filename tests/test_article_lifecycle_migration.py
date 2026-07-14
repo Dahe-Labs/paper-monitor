@@ -279,7 +279,7 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(outcome.state, "not_needed")
         self.assertEqual(notifier.notifications, [])
 
-    def test_expired_legacy_article_becomes_fingerprint_without_copying_metadata(self):
+    def test_expired_legacy_article_is_discarded_without_a_suppression_record(self):
         article = legacy_article("expired")
         self.legacy_store(article)
         with closing(sqlite3.connect(str(self.database_path))) as connection:
@@ -292,14 +292,44 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
         self.assertEqual(lifecycle.dashboard_snapshot().articles, ())
         redetected = self.commit_redetection(lifecycle, "expired-redetection", article)
 
-        self.assertEqual(redetected.new_count, 0)
-        self.assertEqual(redetected.active_count, 0)
-        self.assertEqual(lifecycle.dashboard_snapshot().articles, ())
+        self.assertEqual(redetected.new_count, 1)
+        self.assertEqual(redetected.active_count, 1)
+        self.assertEqual(len(lifecycle.dashboard_snapshot().articles), 1)
         with closing(sqlite3.connect(str(self.database_path))) as connection:
-            legacy_table = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'articles'"
+            obsolete_tables = connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table'
+                  AND name IN ('articles', 'retired_article_fingerprints')
+                """
+            ).fetchall()
+        self.assertEqual(obsolete_tables, [])
+
+    def test_obsolete_retired_fingerprint_table_is_removed_from_existing_database(self):
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE retired_article_fingerprints (
+                    alias_hash BLOB PRIMARY KEY,
+                    retired_at TEXT NOT NULL
+                );
+                INSERT INTO retired_article_fingerprints (alias_hash, retired_at)
+                VALUES (X'0102', '2026-06-01T00:00:00Z');
+                """
+            )
+
+        ArticleLifecycle(self.database_path, _clock=self.clock)
+
+        with closing(sqlite3.connect(str(self.database_path))) as connection:
+            obsolete_table = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'retired_article_fingerprints'
+                """
             ).fetchone()
-        self.assertIsNone(legacy_table)
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        self.assertIsNone(obsolete_table)
+        self.assertEqual(integrity, "ok")
 
     def test_migration_failure_rolls_back_all_new_state_and_can_retry(self):
         first = legacy_article("first")
@@ -308,12 +338,12 @@ class ArticleLifecycleMigrationTests(unittest.TestCase):
         original = ArticleLifecycle._migrate_legacy_article
         calls = 0
 
-        def fail_on_second(instance, connection, row, migrated_at, cutoff, now):
+        def fail_on_second(instance, connection, row, migrated_at, cutoff):
             nonlocal calls
             calls += 1
             if calls == 2:
                 raise RuntimeError("injected migration failure")
-            return original(instance, connection, row, migrated_at, cutoff, now)
+            return original(instance, connection, row, migrated_at, cutoff)
 
         with mock.patch.object(
             ArticleLifecycle,

@@ -57,7 +57,13 @@ class AppRefreshTests(unittest.TestCase):
         self.assertIn(fixture_article().title, dashboard)
         self.assertEqual(stored_count, 1)
         self.assertTrue(
-            {"articles", "runs", "candidates", "notification_outbox"}.isdisjoint(tables)
+            {
+                "articles",
+                "runs",
+                "candidates",
+                "notification_outbox",
+                "retired_article_fingerprints",
+            }.isdisjoint(tables)
         )
 
     def test_app_refresh_does_not_offer_duplicate_articles_again(self):

@@ -191,7 +191,7 @@ class ArticleLifecycle:
         now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection, now)
+            self._prune_expired(connection)
             if connection.execute(
                 "SELECT 1 FROM lifecycle_refresh_runs WHERE run_id = ?",
                 (run_id,),
@@ -219,10 +219,7 @@ class ArticleLifecycle:
             )
 
             for detection in detections:
-                committed = self._commit_detection(connection, detection, now)
-                if committed is None:
-                    continue
-                article_id, was_new = committed
+                article_id, was_new = self._commit_detection(connection, detection, now)
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO lifecycle_refresh_articles (run_id, article_id, was_new)
@@ -252,7 +249,7 @@ class ArticleLifecycle:
         token = uuid.uuid4().hex
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection, now)
+            self._prune_expired(connection)
             rows = self._dashboard_rows(connection)
             connection.execute(
                 """
@@ -279,10 +276,9 @@ class ArticleLifecycle:
             isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
         ):
             raise ValueError("limit must be a positive integer or None")
-        now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection, now)
+            self._prune_expired(connection)
             rows = self._dashboard_rows(connection, limit=limit)
         return _dashboard_articles(rows)
 
@@ -340,7 +336,7 @@ class ArticleLifecycle:
         now = self._now()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection, now)
+            self._prune_expired(connection)
             if connection.execute(
                 "SELECT 1 FROM lifecycle_refresh_runs WHERE run_id = ?",
                 (normalized_run_id,),
@@ -430,7 +426,7 @@ class ArticleLifecycle:
 
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection, now)
+            self._prune_expired(connection)
             if connection.execute(
                 "SELECT 1 FROM lifecycle_refresh_runs WHERE run_id = ?",
                 (normalized_run_id,),
@@ -557,28 +553,12 @@ class ArticleLifecycle:
         connection: sqlite3.Connection,
         detection: ArticleDetection,
         now: str,
-    ) -> Optional[Tuple[str, bool]]:
+    ) -> Tuple[str, bool]:
         normalized = _normalize_detection(detection)
         alias_hashes = _identity_alias_hashes(normalized)
-        placeholders = ",".join("?" for _ in alias_hashes)
         existing_ids = self._article_ids_for_aliases(connection, alias_hashes)
         if len(existing_ids) > 1:
             existing_ids = {self._merge_article_records(connection, existing_ids)}
-
-        if not existing_ids:
-            retired = connection.execute(
-                f"SELECT 1 FROM retired_article_fingerprints WHERE alias_hash IN ({placeholders}) LIMIT 1",
-                alias_hashes,
-            ).fetchone()
-            if retired is not None:
-                connection.executemany(
-                    """
-                    INSERT OR IGNORE INTO retired_article_fingerprints (alias_hash, retired_at)
-                    VALUES (?, ?)
-                    """,
-                    ((alias_hash, now) for alias_hash in alias_hashes),
-                )
-                return None
 
         was_new = not existing_ids
         article_id = (
@@ -952,7 +932,7 @@ class ArticleLifecycle:
         cutoff = migrated_at - dt.timedelta(days=self.retention_days)
         counts = {
             "active_imported": 0,
-            "retired_imported": 0,
+            "expired_discarded": 0,
             "pending_eligible": 0,
             "attempted_suppressed": 0,
             "skipped": 0,
@@ -965,7 +945,7 @@ class ArticleLifecycle:
             """
         ).fetchall()
         for row in rows:
-            result = self._migrate_legacy_article(connection, row, migrated_at, cutoff, now)
+            result = self._migrate_legacy_article(connection, row, migrated_at, cutoff)
             counts[result] += 1
 
         outbox_counts = self._migrate_legacy_outbox(connection)
@@ -986,7 +966,6 @@ class ArticleLifecycle:
         row: sqlite3.Row,
         migrated_at: dt.datetime,
         cutoff: dt.datetime,
-        now: str,
     ) -> str:
         doi = normalize_doi(str(row["doi"] or ""))
         url = str(row["url"] or "").strip()
@@ -1026,19 +1005,13 @@ class ArticleLifecycle:
             fallback=migrated_at,
         )
         if first_seen < cutoff:
-            connection.executemany(
-                """
-                INSERT OR IGNORE INTO retired_article_fingerprints (alias_hash, retired_at)
-                VALUES (?, ?)
-                """,
-                ((alias_hash, now) for alias_hash in alias_hashes),
-            )
-            return "retired_imported"
+            return "expired_discarded"
 
-        committed = self._commit_detection(connection, detection, _timestamp(first_seen))
-        if committed is None:
-            return "retired_imported"
-        article_id, _was_new = committed
+        article_id, _was_new = self._commit_detection(
+            connection,
+            detection,
+            _timestamp(first_seen),
+        )
         connection.execute(
             "UPDATE lifecycle_articles SET notification_state = 'consumed' WHERE article_id = ?",
             (article_id,),
@@ -1167,28 +1140,16 @@ class ArticleLifecycle:
             return connection.execute(query).fetchall()
         return connection.execute(query + " LIMIT ?", (limit,)).fetchall()
 
-    def _prune_expired(self, connection: sqlite3.Connection, now: str) -> None:
+    def _prune_expired(self, connection: sqlite3.Connection) -> None:
         cutoff = _timestamp(self._clock() - dt.timedelta(days=self.retention_days))
-        expired = connection.execute(
-            "SELECT article_id FROM lifecycle_articles WHERE first_detected_at < ?",
+        connection.execute(
+            "DELETE FROM lifecycle_articles WHERE first_detected_at < ?",
             (cutoff,),
-        ).fetchall()
-        expired_ids = tuple(str(row["article_id"]) for row in expired)
-        if expired_ids:
-            placeholders = ",".join("?" for _ in expired_ids)
-            connection.execute(
-                f"""
-                INSERT OR IGNORE INTO retired_article_fingerprints (alias_hash, retired_at)
-                SELECT alias_hash, ?
-                FROM lifecycle_article_aliases
-                WHERE article_id IN ({placeholders})
-                """,
-                (now, *expired_ids),
-            )
-            connection.execute(
-                f"DELETE FROM lifecycle_articles WHERE article_id IN ({placeholders})",
-                expired_ids,
-            )
+        )
+        connection.execute(
+            "DELETE FROM lifecycle_refresh_runs WHERE committed_at < ?",
+            (cutoff,),
+        )
         token_cutoff = _timestamp(
             self._clock() - dt.timedelta(days=_PRESENTATION_TOKEN_RETENTION_DAYS)
         )
@@ -1224,11 +1185,6 @@ class ArticleLifecycle:
                 CREATE TABLE IF NOT EXISTS lifecycle_article_aliases (
                     alias_hash BLOB PRIMARY KEY,
                     article_id TEXT NOT NULL REFERENCES lifecycle_articles(article_id) ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS retired_article_fingerprints (
-                    alias_hash BLOB PRIMARY KEY,
-                    retired_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS lifecycle_refresh_runs (
@@ -1286,13 +1242,18 @@ class ArticleLifecycle:
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
+            removed_retired_fingerprints = _table_exists(
+                connection,
+                "retired_article_fingerprints",
+            )
+            connection.execute("DROP TABLE IF EXISTS retired_article_fingerprints")
             self._migrate_legacy_state(connection, self._now())
             self._migrate_canonical_dois(connection, self._now())
             removed_legacy_storage = self._remove_legacy_storage(
                 connection,
                 self._now(),
             )
-        if removed_legacy_storage:
+        if removed_legacy_storage or removed_retired_fingerprints:
             with self._connect() as connection:
                 connection.execute("VACUUM")
 
