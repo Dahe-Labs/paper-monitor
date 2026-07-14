@@ -23,6 +23,8 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertIn("Background Monitoring", html)
         self.assertIn("Run short scheduled refresh tasks without keeping Paper Monitor in memory", html)
         self.assertIn('id="startup_enabled"', html)
+        self.assertIn('id="launch_at_login"', html)
+        self.assertIn("without opening the app window", html)
         self.assertIn("Keep the lightweight native tray available after the window closes", html)
         self.assertNotIn("data-legacy-resident-setting", html)
         self.assertIn("[hidden]", css)
@@ -32,6 +34,7 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         javascript = read_text("paper_monitor/static/windows/settings.js")
 
         self.assertIn('show_tray_icon: field("show_tray_icon").checked', javascript)
+        self.assertIn('launch_at_login: field("launch_at_login").checked', javascript)
         self.assertNotIn("legacyResidentSettings", javascript)
         self.assertNotIn("silent_startup_notifications", javascript)
         self.assertNotIn("refresh_on_launch", javascript)
@@ -42,11 +45,12 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertNotIn('Name: "startup"', installer)
         self.assertNotIn("ValueData:", installer)
         self.assertNotIn("if CurStep = ssInstall", installer)
-        self.assertEqual(installer.count("RegDeleteValue(HKCU"), 1)
+        self.assertEqual(installer.count("RegDeleteValue(HKCU"), 2)
         self.assertIn("[UninstallRun]", installer)
         self.assertIn('Parameters: "uninstall-startup"', installer)
         self.assertIn("RemoveScheduledRefreshTask", installer)
         self.assertIn('\\PaperMonitor Scheduled Refresh" /F', installer)
+        self.assertIn('\\PaperMonitor Tray" /F', installer)
 
     def test_documentation_distinguishes_native_tray_from_heavy_runtime(self):
         windows_readme = read_text("README_WINDOWS.md")
@@ -86,7 +90,7 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
         self.assertEqual(registry.deleted, [(registry, "Paper Monitor")])
         self.assertEqual(registry.closed, [registry])
 
-    def test_runtime_settings_replace_login_startup_with_scheduled_refresh(self):
+    def test_runtime_settings_sync_refresh_and_silent_login_tasks_independently(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             executable = Path(directory) / "PaperMonitor.exe"
@@ -95,13 +99,17 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
                     {
                         "interval_seconds": 12 * 60 * 60,
                         "refresh_start_time": "09:30",
-                        "app_settings": {"startup_enabled": True},
+                        "app_settings": {
+                            "startup_enabled": True,
+                            "launch_at_login": True,
+                        },
                     }
                 ),
                 encoding="utf-8-sig",
             )
             scheduler = types.ModuleType("paper_monitor.windows_scheduled_task")
             scheduler.sync_scheduled_refresh = Mock()
+            scheduler.sync_silent_startup = Mock()
 
             with (
                 patch.dict(sys.modules, {scheduler.__name__: scheduler}),
@@ -116,6 +124,11 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
                 True,
                 12,
                 "09:30",
+                executable=executable.resolve(),
+            )
+            scheduler.sync_silent_startup.assert_called_once_with(
+                config_path.resolve(),
+                True,
                 executable=executable.resolve(),
             )
 

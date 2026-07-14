@@ -487,6 +487,7 @@ def _app_settings_payload(value: object) -> Dict[str, bool]:
     mapping = value if isinstance(value, Mapping) else {}
     return {
         "startup_enabled": _bool_value(mapping.get("startup_enabled", defaults["startup_enabled"])),
+        "launch_at_login": _bool_value(mapping.get("launch_at_login", defaults["launch_at_login"])),
         "show_tray_icon": _bool_value(mapping.get("show_tray_icon", defaults["show_tray_icon"])),
         "notifications_enabled": _bool_value(mapping.get("notifications_enabled", defaults["notifications_enabled"])),
     }
@@ -496,6 +497,10 @@ def _validated_app_settings(value: object) -> Dict[str, bool]:
     mapping = _mapping(value, "app_settings")
     return {
         "startup_enabled": _required_bool(mapping.get("startup_enabled"), "app_settings.startup_enabled"),
+        "launch_at_login": _required_bool(
+            mapping.get("launch_at_login", DEFAULT_CONFIG["app_settings"]["launch_at_login"]),
+            "app_settings.launch_at_login",
+        ),
         "show_tray_icon": _required_bool(mapping.get("show_tray_icon"), "app_settings.show_tray_icon"),
         "notifications_enabled": _required_bool(mapping.get("notifications_enabled"), "app_settings.notifications_enabled"),
     }

@@ -674,6 +674,7 @@
       setValue("journal_scope_top_n", journalScope.top_n);
       fillSearchDirection(direction);
       setChecked("startup_enabled", appSettings.startup_enabled);
+      setChecked("launch_at_login", appSettings.launch_at_login);
       setChecked("show_tray_icon", appSettings.show_tray_icon);
       setChecked("notifications_enabled", appSettings.notifications_enabled);
 
@@ -722,6 +723,7 @@
         max_notifications: numberValue("max_notifications"),
         app_settings: {
           startup_enabled: field("startup_enabled").checked,
+          launch_at_login: field("launch_at_login").checked,
           show_tray_icon: field("show_tray_icon").checked,
           notifications_enabled: field("notifications_enabled").checked
         },

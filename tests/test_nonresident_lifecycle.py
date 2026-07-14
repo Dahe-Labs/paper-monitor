@@ -114,7 +114,20 @@ class NonResidentLifecycleTests(unittest.TestCase):
         self.assertTrue(closing())
         self.assertTrue(close_requested.is_set())
 
-    def test_dashboard_registers_native_close_to_exit_handler(self):
+    def test_control_close_defers_webview_cleanup_until_after_destroy(self):
+        destroyed = threading.Event()
+        window = types.SimpleNamespace(destroy=destroyed.set)
+
+        with patch(
+            "paper_monitor.windows_app_window._release_webview2_resources"
+        ) as release:
+            result = windows_app_window._destroy_window(window)
+            self.assertTrue(destroyed.wait(timeout=1.0))
+
+        self.assertEqual(result, {"ok": True})
+        release.assert_not_called()
+
+    def test_dashboard_allows_native_close_and_cleans_up_after_loop(self):
         class FakeWindow:
             def __init__(self):
                 self.events = types.SimpleNamespace(
@@ -137,7 +150,6 @@ class NonResidentLifecycleTests(unittest.TestCase):
 
             def start(self, **_kwargs):
                 self.close_allowed = self.window.events.closing.callback()
-                self.window.events.closed.callback()
 
         class FakeServer:
             def __init__(self):

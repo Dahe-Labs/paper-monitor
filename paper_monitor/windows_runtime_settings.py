@@ -15,6 +15,7 @@ def sync_windows_runtime_settings(
     executable_path: Optional[Path] = None,
     *,
     enabled_override: Optional[bool] = None,
+    launch_at_login_override: Optional[bool] = None,
     cleanup_legacy_startup: bool = True,
 ) -> None:
     if os.name != "nt":
@@ -24,7 +25,7 @@ def sync_windows_runtime_settings(
     interval_hours = _interval_hours(payload)
     start_time = str(payload.get("refresh_start_time") or "").strip()
 
-    from .windows_scheduled_task import sync_scheduled_refresh
+    from .windows_scheduled_task import sync_scheduled_refresh, sync_silent_startup
 
     executable = Path(executable_path or sys.executable).resolve()
     scheduler_kwargs = {"executable": executable} if executable_path is not None else {}
@@ -37,8 +38,28 @@ def sync_windows_runtime_settings(
         start_time,
         **scheduler_kwargs,
     )
+    sync_silent_startup(
+        Path(config_path).resolve(),
+        bool(settings.get("launch_at_login", False))
+        if launch_at_login_override is None
+        else bool(launch_at_login_override),
+        **scheduler_kwargs,
+    )
     if cleanup_legacy_startup:
         remove_legacy_startup_entry()
+
+
+def remove_windows_runtime_integrations(config_path: Path) -> None:
+    """Remove both per-user Paper Monitor tasks without rewriting saved preferences."""
+
+    if os.name != "nt":
+        return
+    from .windows_scheduled_task import sync_scheduled_refresh, sync_silent_startup
+
+    resolved_config = Path(config_path).resolve()
+    sync_scheduled_refresh(resolved_config, False, 1)
+    sync_silent_startup(resolved_config, False)
+    remove_legacy_startup_entry()
 
 
 def remove_legacy_startup_entry(*, registry_module=None) -> None:

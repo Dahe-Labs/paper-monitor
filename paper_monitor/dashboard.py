@@ -9,7 +9,13 @@ from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 
 from .app_identity import DISPLAY_NAME
-from .date_utils import display_article_date, first_iso_date, format_display_date
+from .date_utils import (
+    display_article_date,
+    first_iso_date,
+    first_iso_date_key,
+    format_display_date,
+    iso_date_sort_key,
+)
 from .journal_metrics import JournalMetrics
 from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
 
@@ -151,11 +157,10 @@ def render_dashboard(
     .analysis-dual-pane h4 { margin: 0; font-size: 12px; }
     .analysis-dual-listbox { display: grid; align-content: start; gap: 0; min-height: 120px; max-height: 280px; overflow: auto; padding: 0; }
     .analysis-dual-listbox.drag-over { outline: 2px solid #0969da; outline-offset: -3px; background: #eff6ff; }
-    .analysis-dual-item { border: 0; border-bottom: 1px solid #e4e4e8; border-radius: 0; background: #ffffff; color: #1f2933; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 29px; padding: 4px 7px; text-align: left; font: inherit; font-size: 12px; font-weight: 700; }
+    .analysis-dual-item { border: 0; border-bottom: 1px solid #e4e4e8; border-radius: 0; background: #ffffff; color: #1f2933; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-height: 29px; padding: 5px 7px; text-align: left; font: inherit; font-size: 12px; font-weight: 700; }
     .analysis-dual-item:hover { background: #f6f8fa; border-color: #afb8c1; }
     .analysis-dual-item:focus-visible { position: relative; z-index: 1; outline: 2px solid #0969da; outline-offset: -2px; }
-    .analysis-journal-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .analysis-journal-impact { color: #57606a; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .analysis-journal-name { min-width: 0; line-height: 1.3; overflow-wrap: anywhere; white-space: normal; }
     .checkbox-option { display: flex; gap: 7px; align-items: flex-start; font-size: 13px; line-height: 1.35; }
     .checkbox-option input { flex: 0 0 auto; margin-top: 2px; }
     .secondary-button, .mini-button { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; font-weight: 700; }
@@ -1812,17 +1817,13 @@ function renderAnalysisJournalDualList(selection) {
 
 function renderAnalysisJournalItem(journal, action) {
   const entry = analysisJournalEntry(journal);
-  const impact = entry.impact_factor == null
-    ? (entry.impact_label || "-")
-    : (entry.impact_label || "Impact") + " " + Number(entry.impact_factor).toFixed(1);
   const actionLabel = action === "remove" ? "Remove " : "Add ";
   const actionAttribute = action === "remove"
     ? 'data-analysis-journal-action="remove"'
     : 'data-analysis-journal-action="add"';
-  const tooltip = [actionLabel + entry.journal, entry.category, entry.impact_metric].filter(Boolean).join(" · ");
+  const tooltip = [actionLabel + entry.journal, entry.category].filter(Boolean).join(" · ");
   return '<button type="button" class="analysis-dual-item" draggable="true" title="' + escapeHtml(tooltip) + '" aria-label="' + escapeHtml(actionLabel + entry.journal) + '" ' + actionAttribute + ' data-journal="' + escapeHtml(entry.journal) + '">' +
     '<span class="analysis-journal-name">' + escapeHtml(entry.journal) + '</span>' +
-    '<span class="analysis-journal-impact">' + escapeHtml(impact) + '</span>' +
     '</button>';
 }
 
@@ -2770,16 +2771,19 @@ def _render_date_group(group_value: str, candidates: List[Dict[str, object]], me
 
 
 def _date_group_display_label(value: object) -> str:
-    group_date = first_iso_date(value)
-    if group_date is None:
+    group_key = first_iso_date_key(value)
+    if not group_key:
         return "Unknown date"
-    return format_display_date(group_date, style="long")
+    return format_display_date(group_key, style="long")
 
 
 def _date_group_short_label(value: object) -> str:
+    group_key = first_iso_date_key(value)
+    if not group_key:
+        return "Unknown date"
     group_date = first_iso_date(value)
     if group_date is None:
-        return "Unknown date"
+        return format_display_date(group_key, style="short")
 
     today = date.today()
     if group_date == today:
@@ -2886,10 +2890,7 @@ def _sort_candidates_by_detected_date(candidates: List[Dict[str, object]]) -> Li
 
 
 def _detected_sort_key(candidate: Dict[str, object]):
-    detected_date = first_iso_date(_candidate_detected_value(candidate))
-    if detected_date is None:
-        return (0, date.min)
-    return (1, detected_date)
+    return iso_date_sort_key(_candidate_detected_value(candidate))
 
 
 def _date_group_label(candidate: Dict[str, object]) -> str:
@@ -2897,8 +2898,7 @@ def _date_group_label(candidate: Dict[str, object]) -> str:
 
 
 def _date_group_sort_value(candidate: Dict[str, object]) -> str:
-    detected_date = first_iso_date(_candidate_detected_value(candidate))
-    return detected_date.isoformat() if detected_date is not None else ""
+    return first_iso_date_key(_candidate_detected_value(candidate))
 
 
 def _candidate_date_text(candidate: Dict[str, object]) -> str:

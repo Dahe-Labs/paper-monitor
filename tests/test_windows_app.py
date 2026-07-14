@@ -1,3 +1,5 @@
+import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
@@ -5,6 +7,34 @@ from unittest.mock import patch
 
 
 class WindowsAppTests(unittest.TestCase):
+    def test_silent_startup_only_launches_tray_when_setting_is_enabled(self):
+        from paper_monitor import windows_app, windows_native_tray
+        from paper_monitor.config import DEFAULT_CONFIG
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            payload = copy.deepcopy(DEFAULT_CONFIG)
+            payload["app_settings"]["launch_at_login"] = True
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            with patch.object(windows_native_tray, "ensure_native_tray") as ensure_tray:
+                status = windows_app.main(
+                    ["silent-startup", "--config", str(config_path)]
+                )
+
+            self.assertEqual(status, 0)
+            ensure_tray.assert_called_once_with(config_path)
+
+            payload["app_settings"]["launch_at_login"] = False
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.object(windows_native_tray, "ensure_native_tray") as ensure_tray:
+                status = windows_app.main(
+                    ["silent-startup", "--config", str(config_path)]
+                )
+
+            self.assertEqual(status, 0)
+            ensure_tray.assert_not_called()
+
     def test_default_windows_app_dir_uses_appdata(self):
         from paper_monitor.windows_app import default_windows_app_dir
 

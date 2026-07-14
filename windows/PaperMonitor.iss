@@ -74,10 +74,18 @@ procedure RemoveScheduledRefreshTask;
 var
   ResultCode: Integer;
 begin
-  { The application files may be gone after uninstall, so remove the task directly. }
+  { The application command removes account-scoped tasks; these are legacy fallbacks. }
   Exec(
     ExpandConstant('{sys}\schtasks.exe'),
     '/Delete /TN "\PaperMonitor Scheduled Refresh" /F',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Exec(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "\PaperMonitor Tray" /F',
     '',
     SW_HIDE,
     ewWaitUntilTerminated,
@@ -91,5 +99,6 @@ begin
   begin
     RemoveScheduledRefreshTask;
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PaperMonitor');
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Paper Monitor');
   end;
 end;

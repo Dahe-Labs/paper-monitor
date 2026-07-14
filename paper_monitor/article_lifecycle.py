@@ -101,6 +101,7 @@ class DashboardArticle:
     journal: str
     impact_reference: Optional[float]
     url: str
+    published: str
     first_detected_at: str
 
 
@@ -1132,7 +1133,7 @@ class ArticleLifecycle:
     ) -> Sequence[sqlite3.Row]:
         query = """
             SELECT article_id, title, authors_json, journal, impact_reference, url,
-                   first_detected_at
+                   published, first_detected_at
             FROM lifecycle_articles
             ORDER BY first_detected_at DESC, article_id ASC
         """
@@ -1371,6 +1372,7 @@ def _dashboard_articles(rows: Sequence[sqlite3.Row]) -> Tuple[DashboardArticle, 
                 else None
             ),
             url=str(row["url"]),
+            published=str(row["published"]),
             first_detected_at=str(row["first_detected_at"]),
         )
         for row in rows

@@ -72,11 +72,13 @@ Use `Paper-Monitor-Windows-<version>-Setup.exe` for a normal Windows install. It
 
 The installer registers Paper Monitor in Windows installed apps and provides an uninstaller. It creates one Paper Monitor Start Menu shortcut; Settings remains an in-app view. The desktop shortcut is optional.
 
-The installer no longer adds a login process. Upgrading also removes the legacy `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\PaperMonitor` entry so an older tray coordinator cannot remain resident. The installer can launch Paper Monitor after install only when the final-page launch option is selected.
+The installer does not add a registry login process. Upgrading also removes legacy `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entries so an older tray coordinator cannot remain resident. The installer can launch Paper Monitor after install only when the final-page launch option is selected.
 
 Enable **Background Monitoring** in App Settings to register a per-user Windows scheduled task. Windows then starts a short-lived Paper Monitor refresh worker only when the configured scan is due. The worker retrieves papers, updates local data, sends any notifications, and exits; Python, WebView, and the local HTTP bridge consume no background memory between scans. The task runs with the signed-in user's session so notifications remain available. It does not wake a sleeping PC, but a missed scan starts when Windows is available again.
 
 The task ignores overlapping starts and retries a failed run twice at 15-minute intervals. Notification payloads are stored before delivery and remain pending after a toast failure. Dashboard HTML is regenerated when the window is opened rather than during a headless scheduled scan.
+
+Enable **Start at Windows Sign-in** to register a separate per-user logon task. It starts only the lightweight native tray after sign-in and exits the Python launcher without opening the Dashboard window or running a literature refresh. This option is independent from **Background Monitoring**.
 
 User config is stored under:
 
@@ -84,11 +86,13 @@ User config is stored under:
 %APPDATA%\PaperMonitor\config.json
 ```
 
-The uninstaller removes the scheduled refresh task and legacy Run entry. Upgrades and uninstall preserve the user config by default.
+The uninstaller removes both the scheduled refresh task and the optional sign-in tray task, plus legacy Run entries. Upgrades and uninstall preserve the user config by default.
 
 ## Portable
 
 Use `Paper-Monitor-Windows-<version>.zip` or the standalone `.exe` when you do not want an installed app. The portable artifacts are directly runnable and do not register uninstall entries or installer registry keys. The extracted zip uses the faster onedir layout; the standalone executable is a onefile build and may take longer to unpack at startup.
+
+Portable builds can also use **Background Monitoring** and **Start at Windows Sign-in** because both are current-user Task Scheduler entries. Each task records the executable's current absolute path. If the portable folder is moved, open Paper Monitor once from the new location to reconcile the tasks; deleting the portable files without disabling these options leaves harmless broken task entries that must be removed manually.
 
 For the zip, extract it and run:
 
@@ -130,6 +134,8 @@ Quit Tray
 
 `Test Notification` sends a Windows toast notification without running a literature search.
 
-## Disable Background Monitoring
+## Disable Windows Tasks
 
 Clear **Background Monitoring** in App Settings and save. Paper Monitor removes its scheduled task immediately; disabling it does not delete your configuration, database, or Dashboard history.
+
+Clear **Start at Windows Sign-in** to remove the separate login-triggered tray task. The tray that is already running can still be closed with **Quit Tray**.

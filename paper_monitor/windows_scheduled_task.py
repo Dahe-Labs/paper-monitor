@@ -25,10 +25,15 @@ TASK_XML_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LEGACY_TASK_NAME = r"\PaperMonitor Scheduled Refresh"
 DEFAULT_TASK_NAME = LEGACY_TASK_NAME
 TASK_NAME_PREFIX = r"\PaperMonitor\Scheduled Refresh - "
+LEGACY_SILENT_STARTUP_TASK_NAME = r"\PaperMonitor Tray"
+SILENT_STARTUP_TASK_NAME_PREFIX = r"\PaperMonitor\Tray at sign-in - "
 DEFAULT_EXECUTION_TIME_LIMIT = "PT2H"
+SILENT_STARTUP_EXECUTION_TIME_LIMIT = "PT5M"
+SILENT_STARTUP_DELAY = "PT15S"
 DEFAULT_RESTART_INTERVAL = "PT15M"
 DEFAULT_RESTART_COUNT = 2
 TASK_DEFINITION_REVISION = 3
+SILENT_STARTUP_TASK_DEFINITION_REVISION = 1
 FINGERPRINT_PREFIX = "PaperMonitor schedule fingerprint: "
 MIN_INTERVAL_HOURS = 1
 MAX_INTERVAL_HOURS = 24 * 30
@@ -36,9 +41,11 @@ MAX_EXPORTED_TASK_XML_BYTES = 1024 * 1024
 _FILE_NOT_FOUND_HRESULTS = {2, 3, 0x80070002, 0x80070003}
 _EXPORTED_XML_DEFAULTS = {
     "./t:Triggers/t:TimeTrigger/t:Enabled": "true",
+    "./t:Triggers/t:LogonTrigger/t:Enabled": "true",
     "./t:Principals/t:Principal/t:RunLevel": "LeastPrivilege",
     "./t:Settings/t:AllowStartOnDemand": "true",
     "./t:Settings/t:Enabled": "true",
+    "./t:Settings/t:RunOnlyIfNetworkAvailable": "false",
     "./t:Settings/t:WakeToRun": "false",
 }
 
@@ -83,10 +90,36 @@ def current_windows_user(env: Mapping[str, str] | None = None) -> str:
 def default_task_name(user_name: str | None = None) -> str:
     """Return a stable, account-specific task name without exposing the account name."""
 
-    principal = str(user_name or current_windows_user()).strip()
-    _validate_text(principal, "user name")
-    account_key = hashlib.sha256(principal.casefold().encode("utf-8")).hexdigest()[:16]
-    return TASK_NAME_PREFIX + account_key
+    return _account_scoped_task_name(TASK_NAME_PREFIX, user_name)
+
+
+def default_silent_startup_task_name(user_name: str | None = None) -> str:
+    """Return a stable account-specific name for the login-triggered tray task."""
+
+    return _account_scoped_task_name(SILENT_STARTUP_TASK_NAME_PREFIX, user_name)
+
+
+def build_silent_startup_command(
+    config_path: Path,
+    *,
+    executable: Path | str | None = None,
+    frozen: bool | None = None,
+) -> list[str]:
+    """Return a no-window command that starts only the configured native tray."""
+
+    executable_path = _absolute_path(executable or sys.executable, "executable")
+    config = _absolute_path(config_path, "config path")
+    is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
+    if is_frozen:
+        return [executable_path, "silent-startup", "--config", config]
+    return [
+        executable_path,
+        "-m",
+        "paper_monitor.windows_app",
+        "silent-startup",
+        "--config",
+        config,
+    ]
 
 
 def next_start_boundary(
@@ -241,38 +274,13 @@ def scheduled_task_xml_matches(
 ) -> bool:
     """Return whether exported task XML has the requested hash and semantics."""
 
-    _validate_fingerprint(fingerprint)
-    if isinstance(xml_payload, bytes):
-        if len(xml_payload) > MAX_EXPORTED_TASK_XML_BYTES:
-            return False
-        try:
-            if xml_payload.startswith((b"\xff\xfe", b"\xfe\xff")):
-                encoding = "utf-16"
-            else:
-                encoding = "utf-8-sig"
-            payload_text = xml_payload.decode(encoding)
-        except UnicodeDecodeError:
-            return False
-    elif isinstance(xml_payload, str):
-        payload_text = xml_payload
-    else:
-        return False
-    if len(payload_text.encode("utf-8", errors="ignore")) > MAX_EXPORTED_TASK_XML_BYTES:
-        return False
-    marker = f"{FINGERPRINT_PREFIX}{fingerprint}"
-    if marker not in payload_text:
+    root = _bounded_task_xml_root(xml_payload, fingerprint)
+    if root is None:
         return False
     if command is None:
         return True
     if interval_hours is None or working_directory is None:
         raise ValueError("semantic task matching requires interval_hours and working_directory")
-    if "<!doctype" in payload_text.casefold() or "<!entity" in payload_text.casefold():
-        return False
-    try:
-        # Input is bounded and DTD/entity declarations were rejected above.
-        root = ET.fromstring(payload_text)  # nosec B314
-    except ET.ParseError:
-        return False
 
     command_parts = [_validated_command_part(part) for part in command]
     if not command_parts:
@@ -533,6 +541,318 @@ def sync_scheduled_refresh(
     return True
 
 
+def build_silent_startup_task_xml(
+    command: Sequence[str],
+    *,
+    user_name: str | None = None,
+    working_directory: Path | str | None = None,
+    fingerprint: str | None = None,
+) -> bytes:
+    """Build a per-user logon task that starts the native tray without a window."""
+
+    command_parts = [_validated_command_part(part) for part in command]
+    if not command_parts:
+        raise ValueError("silent startup command must not be empty")
+    principal = str(user_name or current_windows_user()).strip()
+    _validate_text(principal, "user name")
+    work_dir = _absolute_path(
+        working_directory or Path(command_parts[0]).parent,
+        "working directory",
+    )
+    task_fingerprint = fingerprint or silent_startup_fingerprint(
+        command_parts,
+        user_name=principal,
+        working_directory=work_dir,
+    )
+    _validate_fingerprint(task_fingerprint)
+
+    ET.register_namespace("", TASK_XML_NAMESPACE)
+    task = ET.Element(_tag("Task"), {"version": "1.3"})
+
+    registration = ET.SubElement(task, _tag("RegistrationInfo"))
+    ET.SubElement(registration, _tag("Author")).text = principal
+    ET.SubElement(registration, _tag("Description")).text = (
+        "Starts the lightweight Paper Monitor tray after sign-in without opening a window.\n"
+        f"{FINGERPRINT_PREFIX}{task_fingerprint}"
+    )
+
+    triggers = ET.SubElement(task, _tag("Triggers"))
+    trigger = ET.SubElement(triggers, _tag("LogonTrigger"))
+    ET.SubElement(trigger, _tag("Enabled")).text = "true"
+    ET.SubElement(trigger, _tag("Delay")).text = SILENT_STARTUP_DELAY
+    ET.SubElement(trigger, _tag("UserId")).text = principal
+
+    principals = ET.SubElement(task, _tag("Principals"))
+    task_principal = ET.SubElement(principals, _tag("Principal"), {"id": "CurrentUser"})
+    ET.SubElement(task_principal, _tag("UserId")).text = principal
+    ET.SubElement(task_principal, _tag("LogonType")).text = "InteractiveToken"
+    ET.SubElement(task_principal, _tag("RunLevel")).text = "LeastPrivilege"
+
+    settings = ET.SubElement(task, _tag("Settings"))
+    ET.SubElement(settings, _tag("MultipleInstancesPolicy")).text = "IgnoreNew"
+    ET.SubElement(settings, _tag("DisallowStartIfOnBatteries")).text = "false"
+    ET.SubElement(settings, _tag("StopIfGoingOnBatteries")).text = "false"
+    ET.SubElement(settings, _tag("StartWhenAvailable")).text = "true"
+    ET.SubElement(settings, _tag("RunOnlyIfNetworkAvailable")).text = "false"
+    ET.SubElement(settings, _tag("AllowStartOnDemand")).text = "true"
+    ET.SubElement(settings, _tag("Enabled")).text = "true"
+    ET.SubElement(settings, _tag("WakeToRun")).text = "false"
+    ET.SubElement(settings, _tag("ExecutionTimeLimit")).text = (
+        SILENT_STARTUP_EXECUTION_TIME_LIMIT
+    )
+
+    actions = ET.SubElement(task, _tag("Actions"), {"Context": "CurrentUser"})
+    execute = ET.SubElement(actions, _tag("Exec"))
+    ET.SubElement(execute, _tag("Command")).text = command_parts[0]
+    if len(command_parts) > 1:
+        ET.SubElement(execute, _tag("Arguments")).text = subprocess.list2cmdline(
+            command_parts[1:]
+        )
+    ET.SubElement(execute, _tag("WorkingDirectory")).text = work_dir
+    return ET.tostring(task, encoding="utf-16", xml_declaration=True)
+
+
+def silent_startup_fingerprint(
+    command: Sequence[str],
+    *,
+    user_name: str | None = None,
+    working_directory: Path | str | None = None,
+) -> str:
+    command_parts = [_validated_command_part(part) for part in command]
+    if not command_parts:
+        raise ValueError("silent startup command must not be empty")
+    principal = str(user_name or current_windows_user()).strip()
+    _validate_text(principal, "user name")
+    work_dir = _absolute_path(
+        working_directory or Path(command_parts[0]).parent,
+        "working directory",
+    )
+    payload = {
+        "revision": SILENT_STARTUP_TASK_DEFINITION_REVISION,
+        "command": command_parts,
+        "user_name": principal,
+        "working_directory": work_dir,
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def silent_startup_task_xml_matches(
+    xml_payload: str | bytes,
+    fingerprint: str,
+    *,
+    command: Sequence[str],
+    user_name: str,
+    working_directory: Path | str,
+) -> bool:
+    """Return whether an exported login task still has the requested behavior."""
+
+    root = _bounded_task_xml_root(xml_payload, fingerprint)
+    if root is None:
+        return False
+    command_parts = [_validated_command_part(part) for part in command]
+    if not command_parts:
+        raise ValueError("silent startup command must not be empty")
+    principal = str(user_name).strip()
+    _validate_text(principal, "user name")
+    expected_arguments = (
+        subprocess.list2cmdline(command_parts[1:]) if len(command_parts) > 1 else ""
+    )
+    expected_values = {
+        "./t:Triggers/t:LogonTrigger/t:Enabled": "true",
+        "./t:Triggers/t:LogonTrigger/t:Delay": SILENT_STARTUP_DELAY,
+        "./t:Triggers/t:LogonTrigger/t:UserId": principal,
+        "./t:Principals/t:Principal/t:UserId": principal,
+        "./t:Principals/t:Principal/t:LogonType": "InteractiveToken",
+        "./t:Principals/t:Principal/t:RunLevel": "LeastPrivilege",
+        "./t:Settings/t:MultipleInstancesPolicy": "IgnoreNew",
+        "./t:Settings/t:StartWhenAvailable": "true",
+        "./t:Settings/t:RunOnlyIfNetworkAvailable": "false",
+        "./t:Settings/t:AllowStartOnDemand": "true",
+        "./t:Settings/t:Enabled": "true",
+        "./t:Settings/t:WakeToRun": "false",
+        "./t:Settings/t:ExecutionTimeLimit": SILENT_STARTUP_EXECUTION_TIME_LIMIT,
+        "./t:Actions/t:Exec/t:Arguments": expected_arguments,
+    }
+    namespaces = {"t": TASK_XML_NAMESPACE}
+    for path, expected in expected_values.items():
+        node = root.find(path, namespaces)
+        actual = (
+            _EXPORTED_XML_DEFAULTS.get(path, "")
+            if node is None
+            else "" if node.text is None else node.text.strip()
+        )
+        if actual != expected:
+            return False
+
+    command_node = root.find("./t:Actions/t:Exec/t:Command", namespaces)
+    working_directory_node = root.find(
+        "./t:Actions/t:Exec/t:WorkingDirectory",
+        namespaces,
+    )
+    actual_command = "" if command_node is None or command_node.text is None else command_node.text
+    actual_working_directory = (
+        ""
+        if working_directory_node is None or working_directory_node.text is None
+        else working_directory_node.text
+    )
+    return _windows_path_equal(actual_command, command_parts[0]) and _windows_path_equal(
+        actual_working_directory,
+        _absolute_path(working_directory, "working directory"),
+    )
+
+
+def install_or_update_silent_startup(
+    config_path: Path,
+    *,
+    task_name: str | None = None,
+    executable: Path | str | None = None,
+    frozen: bool | None = None,
+    user_name: str | None = None,
+    working_directory: Path | str | None = None,
+    runner: Runner | None = None,
+    schtasks_executable: Path | str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Create or repair the login task without resetting it on every app launch."""
+
+    command = build_silent_startup_command(
+        config_path,
+        executable=executable,
+        frozen=frozen,
+    )
+    if working_directory is None:
+        is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
+        working_directory = (
+            Path(command[0]).parent if is_frozen else Path(__file__).resolve().parents[1]
+        )
+    principal = str(user_name or current_windows_user()).strip()
+    resolved_task_name = task_name or default_silent_startup_task_name(principal)
+    fingerprint = silent_startup_fingerprint(
+        command,
+        user_name=principal,
+        working_directory=working_directory,
+    )
+    query_args = build_schtasks_query_args(
+        task_name=resolved_task_name,
+        schtasks_executable=schtasks_executable,
+    )
+    existing = _run_schtasks(query_args, runner=runner, check=False)
+    if existing.returncode == 0:
+        if silent_startup_task_xml_matches(
+            existing.stdout or "",
+            fingerprint,
+            command=command,
+            user_name=principal,
+            working_directory=working_directory,
+        ):
+            return existing
+    elif not _is_task_not_found(existing):
+        raise subprocess.CalledProcessError(
+            existing.returncode,
+            query_args,
+            output=existing.stdout,
+            stderr=existing.stderr,
+        )
+
+    xml_payload = build_silent_startup_task_xml(
+        command,
+        user_name=principal,
+        working_directory=working_directory,
+        fingerprint=fingerprint,
+    )
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix="PaperMonitor-login-task-",
+        suffix=".xml",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(xml_payload)
+            stream.flush()
+        args = build_schtasks_create_args(
+            temporary_path,
+            task_name=resolved_task_name,
+            schtasks_executable=schtasks_executable,
+        )
+        return _run_schtasks(args, runner=runner, check=True)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def remove_silent_startup(
+    *,
+    task_name: str | None = None,
+    user_name: str | None = None,
+    runner: Runner | None = None,
+    schtasks_executable: Path | str | None = None,
+    missing_ok: bool = True,
+) -> bool:
+    """Delete the current user's silent-startup task."""
+
+    resolved_name = task_name or default_silent_startup_task_name(user_name)
+    args = build_schtasks_delete_args(
+        task_name=resolved_name,
+        schtasks_executable=schtasks_executable,
+    )
+    completed = _run_schtasks(args, runner=runner, check=False)
+    if completed.returncode == 0:
+        return True
+    if missing_ok and _is_task_not_found(completed):
+        return False
+    raise subprocess.CalledProcessError(
+        completed.returncode,
+        args,
+        output=completed.stdout,
+        stderr=completed.stderr,
+    )
+
+
+def sync_silent_startup(
+    config_path: Path,
+    enabled: bool,
+    *,
+    task_name: str | None = None,
+    executable: Path | str | None = None,
+    frozen: bool | None = None,
+    user_name: str | None = None,
+    working_directory: Path | str | None = None,
+    runner: Runner | None = None,
+    schtasks_executable: Path | str | None = None,
+) -> bool:
+    """Apply the Start at Windows Sign-in setting to Task Scheduler."""
+
+    if enabled:
+        install_or_update_silent_startup(
+            config_path,
+            task_name=task_name,
+            executable=executable,
+            frozen=frozen,
+            user_name=user_name,
+            working_directory=working_directory,
+            runner=runner,
+            schtasks_executable=schtasks_executable,
+        )
+    else:
+        remove_silent_startup(
+            task_name=task_name,
+            user_name=user_name,
+            runner=runner,
+            schtasks_executable=schtasks_executable,
+            missing_ok=True,
+        )
+
+    resolved_name = task_name or default_silent_startup_task_name(user_name)
+    if resolved_name != LEGACY_SILENT_STARTUP_TASK_NAME:
+        remove_silent_startup(
+            task_name=LEGACY_SILENT_STARTUP_TASK_NAME,
+            user_name=user_name,
+            runner=runner,
+            schtasks_executable=schtasks_executable,
+            missing_ok=True,
+        )
+    return True
+
+
 def default_schtasks_executable(env: Mapping[str, str] | None = None) -> str:
     """Resolve the system copy instead of trusting the process search path."""
 
@@ -560,6 +880,39 @@ def _run_schtasks(
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     return run(list(args), **kwargs)
+
+
+def _bounded_task_xml_root(
+    xml_payload: str | bytes,
+    fingerprint: str,
+) -> ET.Element | None:
+    _validate_fingerprint(fingerprint)
+    if isinstance(xml_payload, bytes):
+        if len(xml_payload) > MAX_EXPORTED_TASK_XML_BYTES:
+            return None
+        try:
+            encoding = (
+                "utf-16"
+                if xml_payload.startswith((b"\xff\xfe", b"\xfe\xff"))
+                else "utf-8-sig"
+            )
+            payload_text = xml_payload.decode(encoding)
+        except UnicodeDecodeError:
+            return None
+    elif isinstance(xml_payload, str):
+        payload_text = xml_payload
+    else:
+        return None
+    if len(payload_text.encode("utf-8", errors="ignore")) > MAX_EXPORTED_TASK_XML_BYTES:
+        return None
+    if f"{FINGERPRINT_PREFIX}{fingerprint}" not in payload_text:
+        return None
+    if "<!doctype" in payload_text.casefold() or "<!entity" in payload_text.casefold():
+        return None
+    try:
+        return ET.fromstring(payload_text)  # nosec B314
+    except ET.ParseError:
+        return None
 
 
 def _tag(name: str) -> str:
@@ -629,6 +982,13 @@ def _validated_task_name(value: str) -> str:
     if any(part in {".", ".."} for part in path_parts):
         raise ValueError("task name must not contain relative path segments")
     return name
+
+
+def _account_scoped_task_name(prefix: str, user_name: str | None) -> str:
+    principal = str(user_name or current_windows_user()).strip()
+    _validate_text(principal, "user name")
+    account_key = hashlib.sha256(principal.casefold().encode("utf-8")).hexdigest()[:16]
+    return prefix + account_key
 
 
 def _validate_text(value: str, label: str, *, allow_empty: bool = False) -> None:

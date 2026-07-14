@@ -9,7 +9,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from paper_monitor import (
     sources,
@@ -78,25 +78,10 @@ class StabilityFixTests(unittest.TestCase):
         self.assertEqual(app_config.interval_seconds, DEFAULT_CONFIG["interval_seconds"])
         self.assertFalse(saved.startswith(b"\xef\xbb\xbf"))
 
-    def test_window_closed_callback_never_raises_into_dotnet(self):
-        def fail():
-            raise UnicodeEncodeError("charmap", "Paper Monitor", 0, 1, "character maps to <undefined>")
-
-        callback = windows_app_window._safe_closed_callback(fail)
-        callback()
-
     def test_dashboard_window_uses_private_webview_storage_for_prompt_cleanup(self):
-        class FakeClosedEvent:
-            def __init__(self):
-                self.callback = None
-
-            def __iadd__(self, callback):
-                self.callback = callback
-                return self
-
         class FakeWindow:
             def __init__(self):
-                self.events = types.SimpleNamespace(closed=FakeClosedEvent())
+                self.events = types.SimpleNamespace()
 
         class FakeWebview:
             def __init__(self):
@@ -125,15 +110,19 @@ class StabilityFixTests(unittest.TestCase):
             fake_server = FakeServer()
             with patch.dict(os.environ, {"LOCALAPPDATA": directory}):
                 with patch("paper_monitor.windows_app_window._load_webview", return_value=fake_webview):
-                    status = windows_app_window.open_dashboard_window(
-                        config_path,
-                        dashboard_server_factory=lambda _path: fake_server,
-                    )
+                    with patch(
+                        "paper_monitor.windows_app_window._release_webview2_resources"
+                    ) as release_webview:
+                        status = windows_app_window.open_dashboard_window(
+                            config_path,
+                            dashboard_server_factory=lambda _path: fake_server,
+                        )
+
+                        self.assertEqual(release_webview.call_count, 1)
 
             self.assertEqual(status, 0)
             self.assertEqual(fake_webview.start_kwargs, {"private_mode": True})
             self.assertEqual(fake_server.stop_count, 1)
-            fake_webview.window.events.closed.callback()
             self.assertEqual(fake_server.stop_count, 1)
 
     def test_dashboard_window_registers_local_control_endpoint(self):
@@ -204,8 +193,30 @@ class StabilityFixTests(unittest.TestCase):
         close_requested = threading.Event()
         callback = windows_app_window._close_window_process(close_requested)
 
-        self.assertTrue(callback())
+        with patch("paper_monitor.windows_app_window._release_webview2_resources") as release_webview:
+            self.assertTrue(callback())
+
         self.assertTrue(close_requested.is_set())
+        release_webview.assert_not_called()
+
+    def test_control_close_destroys_before_post_close_webview_cleanup(self):
+        window = types.SimpleNamespace(destroy=Mock())
+        close_requested = threading.Event()
+
+        def run_deferred(callback, on_error=None):
+            callback()
+            return True
+
+        with patch(
+            "paper_monitor.windows_app_window._defer_window_call",
+            side_effect=run_deferred,
+        ):
+            with patch("paper_monitor.windows_app_window._release_webview2_resources") as release_webview:
+                result = windows_app_window._destroy_window(window, close_requested)
+
+        self.assertEqual(result, {"ok": True})
+        window.destroy.assert_called_once_with()
+        release_webview.assert_not_called()
 
     def test_dashboard_window_returns_when_window_mutex_already_exists(self):
         class FakeServer:
@@ -469,6 +480,8 @@ class StabilityFixTests(unittest.TestCase):
         self.assertIn('id="openalex_max_pages"', html)
         self.assertIn("Background Monitoring", html)
         self.assertIn("Run short scheduled refresh tasks", html)
+        self.assertIn("Start at Windows Sign-in", html)
+        self.assertIn("without opening the app window", html)
         self.assertIn("Tray Icon", html)
         self.assertIn("Keep the lightweight native tray available", html)
         self.assertIn("Notifications", html)
@@ -488,7 +501,12 @@ class StabilityFixTests(unittest.TestCase):
             defaults["app_settings"],
             {
                 key: DEFAULT_CONFIG["app_settings"][key]
-                for key in ("startup_enabled", "show_tray_icon", "notifications_enabled")
+                for key in (
+                    "startup_enabled",
+                    "launch_at_login",
+                    "show_tray_icon",
+                    "notifications_enabled",
+                )
             },
         )
         formal_candidates = [
@@ -561,6 +579,7 @@ class StabilityFixTests(unittest.TestCase):
                 payload["app_settings"],
                 {
                     "startup_enabled": True,
+                    "launch_at_login": False,
                     "show_tray_icon": False,
                     "notifications_enabled": False,
                     "silent_startup_notifications": True,

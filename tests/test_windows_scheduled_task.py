@@ -402,6 +402,95 @@ class WindowsScheduledTaskTests(unittest.TestCase):
         self.assertTrue(first.startswith(scheduled.TASK_NAME_PREFIX))
         self.assertNotIn("Researcher", first)
 
+    def test_silent_startup_command_and_task_are_windowless_login_only(self):
+        config_path = Path(r"C:\Users\Example User\Paper Monitor\config.json")
+        executable = Path(r"C:\Program Files\Paper Monitor\PaperMonitor.exe")
+        command = scheduled.build_silent_startup_command(
+            config_path,
+            executable=executable,
+            frozen=True,
+        )
+        payload = scheduled.build_silent_startup_task_xml(
+            command,
+            user_name=r"DOMAIN\Example User",
+            working_directory=executable.resolve().parent,
+        )
+        root = ET.fromstring(payload)
+
+        self.assertEqual(command[1:3], ["silent-startup", "--config"])
+        self.assertIsNone(root.find(".//task:TimeTrigger", NS))
+        self.assertIsNotNone(root.find(".//task:LogonTrigger", NS))
+        self.assertEqual(
+            root.findtext(".//task:LogonTrigger/task:Delay", namespaces=NS),
+            scheduled.SILENT_STARTUP_DELAY,
+        )
+        self.assertEqual(
+            root.findtext(".//task:RunOnlyIfNetworkAvailable", namespaces=NS),
+            "false",
+        )
+        self.assertEqual(
+            root.findtext(".//task:ExecutionTimeLimit", namespaces=NS),
+            scheduled.SILENT_STARTUP_EXECUTION_TIME_LIMIT,
+        )
+        self.assertIn("silent-startup", root.findtext(".//task:Arguments", namespaces=NS))
+        self.assertTrue(payload.startswith((b"\xff\xfe", b"\xfe\xff")))
+
+    def test_silent_startup_install_is_stable_when_exported_task_matches(self):
+        config_path = Path("config.json")
+        executable = Path("PaperMonitor.exe")
+        command = scheduled.build_silent_startup_command(
+            config_path,
+            executable=executable,
+            frozen=True,
+        )
+        existing_xml = scheduled.build_silent_startup_task_xml(
+            command,
+            user_name="Example",
+            working_directory=executable.resolve().parent,
+        ).decode("utf-16")
+        calls = []
+
+        def runner(args, **_kwargs):
+            calls.append(list(args))
+            return subprocess.CompletedProcess(args, 0, stdout=existing_xml, stderr="")
+
+        result = scheduled.install_or_update_silent_startup(
+            config_path,
+            executable=executable,
+            frozen=True,
+            user_name="Example",
+            runner=runner,
+            schtasks_executable="schtasks.exe",
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("/Query", calls[0])
+
+    def test_silent_startup_sync_removes_account_and_legacy_tasks(self):
+        with patch.object(scheduled, "remove_silent_startup", return_value=False) as remove:
+            self.assertTrue(
+                scheduled.sync_silent_startup(
+                    Path("config.json"),
+                    False,
+                    user_name="Example",
+                )
+            )
+
+        self.assertEqual(remove.call_count, 2)
+        self.assertEqual(
+            remove.call_args_list[1].kwargs["task_name"],
+            scheduled.LEGACY_SILENT_STARTUP_TASK_NAME,
+        )
+
+    def test_silent_startup_task_name_is_stable_and_distinct_from_refresh(self):
+        first = scheduled.default_silent_startup_task_name(r"LAB\Researcher One")
+        same = scheduled.default_silent_startup_task_name(r"lab\researcher one")
+
+        self.assertEqual(first, same)
+        self.assertTrue(first.startswith(scheduled.SILENT_STARTUP_TASK_NAME_PREFIX))
+        self.assertNotEqual(first, scheduled.default_task_name(r"LAB\Researcher One"))
+
     def test_rejects_invalid_intervals_times_and_control_characters(self):
         for interval in (0, 721, True, 1.5):
             with self.subTest(interval=interval):

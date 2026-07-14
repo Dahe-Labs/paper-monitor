@@ -302,6 +302,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             "window",
             "settings",
             "scheduled-refresh",
+            "silent-startup",
             "sync-runtime",
             "run",
             "install-startup",
@@ -323,18 +324,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             _write_stderr(f"{APP_NAME} self-test failed: {type(exc).__name__}: {exc}")
             return 1
         return 0
-    if args.command in ("install-startup", "uninstall-startup"):
+    if args.command == "uninstall-startup":
         config_path = args.config or ensure_windows_app_files(args.app_dir)
-        enabled = args.command == "install-startup"
+        try:
+            from .windows_runtime_settings import remove_windows_runtime_integrations
+
+            remove_windows_runtime_integrations(config_path)
+        except Exception as exc:
+            _write_stderr(
+                f"Could not remove Windows runtime tasks: {type(exc).__name__}: {exc}"
+            )
+            return 1
+        return 0
+    if args.command == "install-startup":
+        config_path = args.config or ensure_windows_app_files(args.app_dir)
         try:
             set_background_monitoring_enabled(
                 config_path,
-                enabled,
+                True,
                 executable_path=Path(sys.executable).resolve(),
             )
         except Exception as exc:
-            action = "enable" if enabled else "disable"
-            _write_stderr(f"Could not {action} background monitoring: {type(exc).__name__}: {exc}")
+            _write_stderr(
+                f"Could not enable background monitoring: {type(exc).__name__}: {exc}"
+            )
             return 1
         return 0
     if args.command == "test-notification":
@@ -357,6 +370,18 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     config_path = args.config or ensure_windows_app_files(args.app_dir)
     if args.command == "scheduled-refresh":
         return run_scheduled_refresh(config_path)
+    if args.command == "silent-startup":
+        try:
+            app_config = load_app_config(config_path)
+            if not app_config.app_settings.launch_at_login:
+                return 0
+            from .windows_native_tray import ensure_native_tray
+
+            ensure_native_tray(config_path)
+        except Exception as exc:
+            _log_app_error(config_path, "Could not start Paper Monitor silently", exc)
+            return 1
+        return 0
     if args.command == "sync-runtime":
         try:
             from .windows_runtime_settings import sync_windows_runtime_settings

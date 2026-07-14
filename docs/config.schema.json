@@ -52,6 +52,9 @@
         "startup_enabled": {
           "type": "boolean"
         },
+        "launch_at_login": {
+          "type": "boolean"
+        },
         "show_tray_icon": {
           "type": "boolean"
         },

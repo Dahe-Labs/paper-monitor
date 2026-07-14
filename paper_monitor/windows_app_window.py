@@ -64,6 +64,7 @@ def open_dashboard_window(
         return 0
 
     server: Optional[DashboardServer] = None
+    window = None
     stopped = False
     close_requested = threading.Event()
 
@@ -97,7 +98,6 @@ def open_dashboard_window(
             close_requested,
         )
         _attach_closing_handler(window, close_requested)
-        _attach_closed_handler(window, lambda: _close_native_window(window, stop_server))
         _attach_loaded_handler(window)
         # The local dashboard does not need persistent browser cookies or
         # storage. Private mode makes pywebview dispose the WebView2 control on
@@ -106,6 +106,8 @@ def open_dashboard_window(
         return 0
     finally:
         clear_window_control(config_path)
+        if window is not None:
+            _release_webview2_resources(window)
         stop_server()
         close_handle(window_mutex)
 
@@ -317,26 +319,6 @@ def _defer_window_call(
     return True
 
 
-def _attach_closed_handler(window, callback: Callable[[], None]) -> None:
-    events = getattr(window, "events", None)
-    closed = getattr(events, "closed", None)
-    if closed is None:
-        return
-    try:
-        events.closed += _safe_closed_callback(callback)
-    except (AttributeError, TypeError):
-        return
-
-
-def _close_native_window(window, stop_server: Callable[[], None]) -> None:
-    """Release this window's WebView2 process tree, then stop its local server."""
-
-    try:
-        _release_webview2_resources(window)
-    finally:
-        stop_server()
-
-
 def _release_webview2_resources(window) -> None:
     """Dispose a private WebView2 controller and reap only its browser tree."""
 
@@ -522,32 +504,20 @@ def _attach_closing_handler(
     if closing is None:
         return
     try:
-        closing += _close_window_process(close_requested, window)
+        closing += _close_window_process(close_requested)
     except (AttributeError, TypeError):
         return
 
 
 def _close_window_process(
     close_requested: threading.Event,
-    window=None,
 ) -> Callable[..., bool]:
     """Allow the native close and mark this short-lived UI process as closing."""
 
     def wrapped(*_args, **_kwargs) -> bool:
         close_requested.set()
-        if window is not None:
-            _release_webview2_resources(window)
+        # pywebview cancels closing when any callback explicitly returns False.
         return True
-
-    return wrapped
-
-
-def _safe_closed_callback(callback: Callable[[], None]) -> Callable[..., None]:
-    def wrapped(*_args, **_kwargs) -> None:
-        try:
-            callback()
-        except Exception:
-            return
 
     return wrapped
 

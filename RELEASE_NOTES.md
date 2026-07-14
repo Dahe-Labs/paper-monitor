@@ -1,3 +1,16 @@
+# Paper Monitor 0.1.13
+
+Publication-date accuracy, journal selection clarity, and silent sign-in startup update.
+
+## Included
+
+- The Dashboard timeline now uses each paper's source publication date while keeping first-detected timestamps exclusively for retention and notification decisions.
+- Month-precision publication dates remain month-precision in the UI instead of inventing a day.
+- Keyword Analysis journal selectors wrap long names and no longer show impact-factor metadata.
+- Settings now provides an independent `Start at Windows sign-in` option backed by a per-user Task Scheduler logon task.
+- Sign-in startup launches only the lightweight tray after a short delay; it neither opens the main window nor performs a network refresh.
+- Closing the main window explicitly releases WebView2 resources before destruction so no UI child process is left resident.
+
 # Paper Monitor 0.1.8
 
 Windows zero-resident monitoring, refresh feedback, and startup performance update.
