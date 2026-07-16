@@ -1,5 +1,5 @@
 pystray>=0.19,<1
 Pillow>=10,<13
 win11toast>=0.35,<1
-pyinstaller>=6,<7
+pyinstaller>=6.21.0,<7
 pywebview>=6.2,<7
