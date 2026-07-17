@@ -6,7 +6,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TARGET = ROOT / "windows_project" / "PaperMonitorWindows"
 
 PROJECT_FILES = (
-    "LICENSE",
     "README.md",
     "README_WINDOWS.md",
     "config.example.json",
