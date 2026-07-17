@@ -118,7 +118,3 @@ config.example.json      Public default configuration template
 ## Privacy
 
 Paper Monitor stores runtime data locally. It does not upload your reading history or matched papers to a server. Crossref/RSS requests are made directly from your machine to the configured data sources.
-
-## License
-
-MIT License. See `LICENSE`.
