@@ -1,24 +1,18 @@
 from pathlib import Path
 
+from .article_lifecycle import ArticleLifecycle
 from .config import AppConfig
-from .dashboard import write_dashboard
-from .journal_metrics import load_journal_metrics
-from .keyword_analysis import AnalysisScope
-from .storage import ArticleStore
+from .lifecycle_dashboard import write_lifecycle_dashboard
 
 
-def write_latest_dashboard(app_config: AppConfig) -> Path:
-    store = ArticleStore(app_config.database_path)
-    latest_run = store.latest_run()
-    candidates = store.candidates_for_run(int(latest_run["id"])) if latest_run else []
-    write_dashboard(
-        app_config.dashboard_path,
-        latest_run,
-        candidates,
-        load_journal_metrics(app_config.journal_metrics_path),
-        AnalysisScope(
-            selected_journals=tuple(app_config.monitor_config.filter_config.journals),
-            top_n=app_config.journal_scope_top_n,
-        ),
-    )
-    return app_config.dashboard_path
+def write_latest_dashboard(
+    app_config: AppConfig,
+    *,
+    confirm_presentation: bool = False,
+) -> Path:
+    lifecycle = ArticleLifecycle(app_config.database_path)
+    snapshot = lifecycle.dashboard_snapshot()
+    path = write_lifecycle_dashboard(app_config, snapshot)
+    if confirm_presentation:
+        lifecycle.confirm_presentation(snapshot.presentation_token)
+    return path

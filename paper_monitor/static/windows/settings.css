@@ -6,15 +6,19 @@
       --muted: #63666d;
       --border: #d8d8dd;
       --control: #ececee;
-      --control-border: #e4e4e8;
-      --blue: #0a84ff;
-      --blue-ring: rgba(10, 132, 255, 0.25);
+      --control-border: #9ca3af;
+      --blue: #0067c0;
+      --blue-ring: rgba(0, 103, 192, 0.25);
       --ok: #197a38;
       --error: #aa2d2d;
       --shadow: 0 18px 60px rgba(0, 0, 0, 0.08);
     }
 
     * { box-sizing: border-box; }
+
+    [hidden] {
+      display: none !important;
+    }
 
     body {
       margin: 0;
@@ -259,11 +263,14 @@
       min-width: 0;
     }
 
-    .field span {
+    .field span,
+    .field label {
       color: var(--muted);
+      display: block;
       font-size: 12px;
       font-weight: 650;
       letter-spacing: 0;
+      text-align: left;
       text-transform: uppercase;
     }
 

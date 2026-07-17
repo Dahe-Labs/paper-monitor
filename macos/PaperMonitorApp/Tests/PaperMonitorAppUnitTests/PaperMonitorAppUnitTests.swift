@@ -8,7 +8,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
     func testParsesRefreshResultJSON() throws {
         let json = """
         {
-          "run_id": 12,
+          "run_id": "run-12",
           "fetched": 793,
           "matched": 4,
           "new_matches": 1,
@@ -31,7 +31,7 @@ final class PaperMonitorAppUnitTests: XCTestCase {
 
         let result = try JSONDecoder().decode(RefreshResult.self, from: json)
 
-        XCTAssertEqual(result.runId, 12)
+        XCTAssertEqual(result.runId, "run-12")
         XCTAssertEqual(result.fetched, 793)
         XCTAssertEqual(result.articles.count, 1)
         XCTAssertEqual(result.articles[0].url, "https://example.org/article")

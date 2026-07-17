@@ -1,6 +1,6 @@
 # Paper Monitor Architecture Hardening Plan
 
-This plan keeps the current product direction: shared Python core, Windows pywebview/pystray shell, and Mac Swift/AppKit shell.
+This plan keeps the current product direction: shared Python core, a short-lived Windows pywebview window plus native C tray, and a Mac Swift/AppKit shell.
 
 ## Phase 1: Contract And Safety (Completed)
 

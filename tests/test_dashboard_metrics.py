@@ -818,6 +818,152 @@ if (timeHtml.indexOf("Low") > timeHtml.indexOf("High")) {{
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_dashboard_refresh_script_guards_requests_bounds_retries_and_completes(self):
+        node = shutil.which("node")
+        script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
+        if node is None:
+            self.assertIn(
+                "}).then(function (state) {\n    if (!isCurrentDashboardRefreshGeneration(generation)) return;",
+                script,
+            )
+            self.assertIn(
+                "}).catch(function () {\n    if (!isCurrentDashboardRefreshGeneration(generation)) return;",
+                script,
+            )
+            self.assertIn("const DASHBOARD_REFRESH_MAX_STATUS_RETRIES = 3;", script)
+            self.assertIn("dashboardRefreshStatusFailureCount > DASHBOARD_REFRESH_MAX_STATUS_RETRIES", script)
+            self.assertIn('status === "succeeded" || status === "completed"', script)
+            return
+
+        harness = r"""
+const button = {
+  disabled: false,
+  textContent: "Refresh Now",
+  dataset: {},
+  addEventListener() {}
+};
+const payloadElement = { textContent: JSON.stringify({ scope: {}, taxonomy: [], blocklist: [], papers: [] }) };
+const timers = new Map();
+let nextTimerId = 1;
+global.document = {
+  getElementById(id) {
+    if (id === "keyword-analysis-data") return payloadElement;
+    if (id === "paper-monitor-refresh-button") return button;
+    return null;
+  },
+  addEventListener() {},
+  createElement() { return {}; }
+};
+global.localStorage = { getItem() { return null; }, setItem() {} };
+global.navigator = {};
+global.window = {
+  paperMonitorBridgeBaseURL: "http://127.0.0.1:8765",
+  paperMonitorBridgeToken: "token",
+  location: { href: "", reload() {} },
+  setTimeout(callback, delay) {
+    const id = nextTimerId++;
+    timers.set(id, { callback, delay });
+    return id;
+  },
+  clearTimeout(id) { timers.delete(id); }
+};
+""" + script + r"""
+function jsonResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json() { return Promise.resolve(body); }
+  };
+}
+
+async function flushPromises() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+}
+
+function runNextTimer(expectedDelay) {
+  const entry = timers.entries().next();
+  if (entry.done) throw new Error("missing timer for delay " + expectedDelay);
+  const [id, timer] = entry.value;
+  timers.delete(id);
+  if (timer.delay !== expectedDelay) {
+    throw new Error("expected delay " + expectedDelay + ", got " + timer.delay);
+  }
+  timer.callback();
+}
+
+(async function () {
+  const pending = [];
+  global.fetch = function (url, options) {
+    return new Promise(function (resolve, reject) {
+      pending.push({ url, options, resolve, reject });
+    });
+  };
+
+  syncDashboardRefreshState(button);
+  fetchDashboardRefreshState(button, false, dashboardRefreshGeneration);
+  requestDashboardRefresh(button);
+  pending[2].resolve(jsonResponse(202, { ok: true, status: "running", request_id: "new-refresh" }));
+  await flushPromises();
+  const currentTimerCount = timers.size;
+
+  pending[0].resolve(jsonResponse(200, { ok: true, status: "idle", request_id: "" }));
+  pending[1].reject(new Error("stale status failure"));
+  await flushPromises();
+  if (!button.disabled || button.textContent !== "Refreshing...") {
+    throw new Error("stale GET overwrote the new refresh state");
+  }
+  if (activeDashboardRefreshRequestId !== "new-refresh" || timers.size !== currentTimerCount) {
+    throw new Error("stale GET callback changed active polling");
+  }
+
+  let statusCalls = 0;
+  global.fetch = function (_url, options) {
+    if (options.method === "POST") {
+      return Promise.resolve(jsonResponse(202, { ok: true, status: "running", request_id: "retry-refresh" }));
+    }
+    statusCalls += 1;
+    return Promise.reject(new Error("status unavailable"));
+  };
+  requestDashboardRefresh(button);
+  await flushPromises();
+  for (const delay of [750, 1000, 2000, 4000]) {
+    runNextTimer(delay);
+    await flushPromises();
+  }
+  if (statusCalls !== 4 || timers.size !== 0) {
+    throw new Error("status retries were not capped: calls=" + statusCalls + " timers=" + timers.size);
+  }
+  if (button.disabled || button.textContent !== "Status Unavailable") {
+    throw new Error("retry exhaustion did not release the refresh button");
+  }
+
+  const exhaustedGeneration = dashboardRefreshGeneration;
+  global.fetch = function (_url, options) {
+    const state = options.method === "POST"
+      ? { ok: true, status: "running", request_id: "external-refresh" }
+      : { ok: true, status: "completed", request_id: "external-refresh" };
+    return Promise.resolve(jsonResponse(options.method === "POST" ? 202 : 200, state));
+  };
+  requestDashboardRefresh(button);
+  if (dashboardRefreshGeneration <= exhaustedGeneration || dashboardRefreshStatusFailureCount !== 0) {
+    throw new Error("new refresh did not reset generation and failure count");
+  }
+  await flushPromises();
+  runNextTimer(750);
+  await flushPromises();
+  if (!window.location.href.startsWith("http://127.0.0.1:8765/?t=")) {
+    throw new Error("completed refresh did not reload the dashboard");
+  }
+})().catch(function (error) {
+  console.error(error && error.stack || error);
+  process.exitCode = 1;
+});
+"""
+
+        result = _run_node_script(node, harness)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_keyword_analysis_analyze_button_posts_scope_to_native_bridge(self):
         node = shutil.which("node")
         if node is None:

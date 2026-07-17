@@ -1,7 +1,8 @@
 param(
   [ValidateSet("OneFile", "OneDir", "Both")]
   [string]$Mode = "Both",
-  [string]$Version = "0.0.0"
+  [string]$Version = "0.0.0",
+  [string]$PrebuiltNativeTrayPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,10 +19,16 @@ $Launcher = Join-Path $Root "windows\PaperMonitor.pyw"
 $Icon = Join-Path $Root "windows\assets\PaperMonitor.ico"
 $IconScript = Join-Path $Root "scripts\generate_windows_icon.py"
 $VersionInfoScript = Join-Path $Root "scripts\generate_windows_version_info.py"
+$NativeTrayBuildScript = Join-Path $Root "scripts\build_windows_native_tray.ps1"
 $VersionInfo = Join-Path $BuildDir "PaperMonitor.version.txt"
 $OneFileExe = Join-Path $DistDir "PaperMonitor.exe"
 $OneDirRoot = Join-Path $DistDir "PaperMonitor"
 $OneDirExe = Join-Path $OneDirRoot "PaperMonitor.exe"
+$NativeTrayExe = if ([string]::IsNullOrWhiteSpace($PrebuiltNativeTrayPath)) {
+  Join-Path $DistDir "PaperMonitorTray.exe"
+} else {
+  [System.IO.Path]::GetFullPath($PrebuiltNativeTrayPath)
+}
 $BuildMode = $Mode
 $RequiredWebViewRuntimeFiles = @(
   "webview\lib\Microsoft.Web.WebView2.Core.dll",
@@ -266,6 +273,18 @@ Set-Location -LiteralPath $Root
 if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) {
   throw "Missing Windows launcher: $Launcher"
 }
+if ([string]::IsNullOrWhiteSpace($PrebuiltNativeTrayPath)) {
+  if (-not (Test-Path -LiteralPath $NativeTrayBuildScript -PathType Leaf)) {
+    throw "Missing native tray build script: $NativeTrayBuildScript"
+  }
+  & $NativeTrayBuildScript -OutputPath $NativeTrayExe
+  if ($LASTEXITCODE -ne 0) {
+    throw "Native tray build failed with exit code $LASTEXITCODE."
+  }
+}
+if (-not (Test-Path -LiteralPath $NativeTrayExe -PathType Leaf)) {
+  throw "Native tray executable was not found: $NativeTrayExe"
+}
 
 $Python = Get-PythonCommand
 Write-Host "Using Python: $($Python.DisplayName) ($($Python.Executable))"
@@ -316,6 +335,8 @@ $CommonPyInstallerArguments = @(
   ((Join-Path $Root "paper_monitor\resources") + ";paper_monitor\resources"),
   "--add-data",
   ($WebViewLib + ";webview\lib"),
+  "--add-binary",
+  ($NativeTrayExe + ";."),
   "--collect-data",
   "webview",
   "--collect-binaries",
@@ -323,15 +344,9 @@ $CommonPyInstallerArguments = @(
   "--collect-submodules",
   "webview",
   "--hidden-import",
-  "pystray",
-  "--hidden-import",
   "_sqlite3",
   "--hidden-import",
   "unicodedata",
-  "--hidden-import",
-  "PIL.Image",
-  "--hidden-import",
-  "PIL.ImageDraw",
   "--hidden-import",
   "win11toast",
   "--hidden-import",
@@ -363,13 +378,14 @@ $CommonPyInstallerArguments = @(
 $BuildOneDir = $BuildMode -in @("OneDir", "Both")
 $BuildOneFile = $BuildMode -in @("OneFile", "Both")
 
-# PyInstaller is provided by requirements-windows.txt.
+# PyInstaller is installed from requirements-windows.lock.txt, compiled from requirements-windows.txt.
 if ($BuildOneDir) {
   Invoke-Python -Python $Python -Arguments @($CommonPyInstallerArguments + @("--onedir", $Launcher))
   if (-not (Test-Path -LiteralPath $OneDirExe -PathType Leaf)) {
     throw "PyInstaller completed but expected onedir exe was not found: $OneDirExe"
   }
   Test-OnedirWebViewRuntime -AppRoot $OneDirRoot
+  Copy-Item -LiteralPath $NativeTrayExe -Destination (Join-Path $OneDirRoot "PaperMonitorTray.exe") -Force
   Write-Host "Built $OneDirExe"
 }
 

@@ -18,10 +18,10 @@ __SETTINGS_CSS__
     <main>
       <div class="tabs-wrap">
         <div class="tabs" role="tablist" aria-label="Settings sections">
-          <button class="tab" id="tab-search" type="button" role="tab" aria-selected="true" data-panel="panel-search" data-testid="tab-search-settings">Search Settings</button>
-          <button class="tab" id="tab-app" type="button" role="tab" aria-selected="false" data-panel="panel-app" data-testid="tab-app-settings">App Settings</button>
-          <button class="tab" id="tab-terms" type="button" role="tab" aria-selected="false" data-panel="panel-terms" data-testid="tab-search-terms">Search Terms</button>
-          <button class="tab" id="tab-journals" type="button" role="tab" aria-selected="false" data-panel="panel-journals" data-testid="tab-journal-filter">Journal Filter</button>
+          <button class="tab" id="tab-search" type="button" role="tab" aria-selected="true" aria-controls="panel-search" tabindex="0" data-panel="panel-search" data-testid="tab-search-settings">Search Settings</button>
+          <button class="tab" id="tab-app" type="button" role="tab" aria-selected="false" aria-controls="panel-app" tabindex="-1" data-panel="panel-app" data-testid="tab-app-settings">App Settings</button>
+          <button class="tab" id="tab-terms" type="button" role="tab" aria-selected="false" aria-controls="panel-terms" tabindex="-1" data-panel="panel-terms" data-testid="tab-search-terms">Search Terms</button>
+          <button class="tab" id="tab-journals" type="button" role="tab" aria-selected="false" aria-controls="panel-journals" tabindex="-1" data-panel="panel-journals" data-testid="tab-journal-filter">Journal Filter</button>
         </div>
       </div>
 
@@ -34,12 +34,12 @@ __SETTINGS_CSS__
             </div>
 
             <div class="row compact">
-              <label for="interval_seconds">Refresh Frequency</label>
+              <label for="interval_seconds">Background Refresh Frequency</label>
               <select id="interval_seconds" required data-testid="refresh-frequency"></select>
             </div>
 
             <div class="row compact">
-              <label for="refresh_start_time">Start Refresh Time</label>
+              <label for="refresh_start_time">Preferred Start Time</label>
               <input id="refresh_start_time" type="time" data-testid="refresh-start-time">
             </div>
 
@@ -73,39 +73,44 @@ __SETTINGS_CSS__
             <summary>Source Options</summary>
             <div class="source-grid">
               <label class="check"><input id="crossref_enabled" type="checkbox"> Crossref</label>
-              <div class="field"><span>Crossref Days</span><input id="crossref_days_back" type="number" min="1" max="3650" step="1" required></div>
-              <div class="field"><span>Rows</span><input id="crossref_rows" type="number" min="1" max="1000" step="1" required></div>
-              <div class="field"><span>Rows / Journal</span><input id="crossref_rows_per_journal" type="number" min="1" max="1000" step="1" required></div>
-              <div class="field"><span>Timeout</span><input id="crossref_timeout_seconds" type="number" min="1" max="120" step="1" required></div>
-              <div class="field"><span>Workers</span><input id="crossref_max_workers" type="number" min="1" max="16" step="1" required></div>
-              <div class="field"><span>Mailto</span><input id="crossref_mailto" type="email"></div>
+              <div class="field"><label for="crossref_days_back">Crossref Days</label><input id="crossref_days_back" type="number" min="1" max="3650" step="1" required></div>
+              <div class="field"><label for="crossref_rows">Rows</label><input id="crossref_rows" type="number" min="1" max="1000" step="1" required></div>
+              <div class="field"><label for="crossref_rows_per_journal">Rows / Journal</label><input id="crossref_rows_per_journal" type="number" min="1" max="1000" step="1" required></div>
+              <div class="field"><label for="crossref_timeout_seconds">Timeout</label><input id="crossref_timeout_seconds" type="number" min="1" max="120" step="1" required></div>
+              <div class="field"><label for="crossref_max_workers">Workers</label><input id="crossref_max_workers" type="number" min="1" max="16" step="1" required></div>
+              <div class="field"><label for="crossref_mailto">Mailto</label><input id="crossref_mailto" type="email"></div>
 
               <label class="check"><input id="openalex_enabled" type="checkbox"> OpenAlex</label>
-              <div class="field"><span>OpenAlex Days</span><input id="openalex_days_back" type="number" min="1" max="3650" step="1" required></div>
-              <div class="field"><span>Per Page</span><input id="openalex_per_page" type="number" min="1" max="200" step="1" required></div>
-              <div class="field"><span>Pages</span><input id="openalex_max_pages" type="number" min="1" max="50" step="1" required></div>
-              <div class="field"><span>API Key</span><input id="openalex_api_key" type="password" autocomplete="off"></div>
+              <div class="field"><label for="openalex_days_back">OpenAlex Days</label><input id="openalex_days_back" type="number" min="1" max="3650" step="1" required></div>
+              <div class="field"><label for="openalex_per_page">Per Page</label><input id="openalex_per_page" type="number" min="1" max="200" step="1" required></div>
+              <div class="field"><label for="openalex_max_pages">Pages</label><input id="openalex_max_pages" type="number" min="1" max="50" step="1" required></div>
+              <div class="field"><label for="openalex_api_key">API Key</label><input id="openalex_api_key" type="password" autocomplete="off"></div>
 
               <label class="check"><input id="arxiv_enabled" type="checkbox"> arXiv</label>
-              <div class="field"><span>arXiv Days</span><input id="arxiv_days_back" type="number" min="1" max="3650" step="1" required></div>
-              <div class="field"><span>Max Results</span><input id="arxiv_max_results" type="number" min="1" max="2000" step="1" required></div>
-              <div class="field"><span>Search Field</span><select id="arxiv_search_field"><option value="title">Title</option><option value="all">All</option></select></div>
-              <div class="field"><span>arXiv Timeout</span><input id="arxiv_timeout_seconds" type="number" min="1" max="120" step="1" required></div>
-              <div class="field"><span>arXiv Query</span><input id="arxiv_query" type="text" autocomplete="off"></div>
+              <div class="field"><label for="arxiv_days_back">arXiv Days</label><input id="arxiv_days_back" type="number" min="1" max="3650" step="1" required></div>
+              <div class="field"><label for="arxiv_max_results">Max Results</label><input id="arxiv_max_results" type="number" min="1" max="2000" step="1" required></div>
+              <div class="field"><label for="arxiv_search_field">Search Field</label><select id="arxiv_search_field"><option value="title">Title</option><option value="all">All</option></select></div>
+              <div class="field"><label for="arxiv_timeout_seconds">arXiv Timeout</label><input id="arxiv_timeout_seconds" type="number" min="1" max="120" step="1" required></div>
+              <div class="field"><label for="arxiv_query">arXiv Query</label><input id="arxiv_query" type="text" autocomplete="off"></div>
             </div>
           </details>
         </section>
 
-        <section class="panel" id="panel-app" role="tabpanel" aria-labelledby="tab-app">
+        <section class="panel" id="panel-app" role="tabpanel" aria-labelledby="tab-app" hidden>
           <div class="form-grid">
             <div class="row compact">
-              <label for="startup_enabled">Launch at Startup</label>
-              <label class="check"><input id="startup_enabled" type="checkbox" data-testid="startup-enabled"> Start Paper Monitor when Windows starts</label>
+              <label for="startup_enabled">Background Monitoring</label>
+              <label class="check"><input id="startup_enabled" type="checkbox" data-testid="startup-enabled"> Run short scheduled refresh tasks without keeping Paper Monitor in memory</label>
+            </div>
+
+            <div class="row compact">
+              <label for="launch_at_login">Start at Windows Sign-in</label>
+              <label class="check"><input id="launch_at_login" type="checkbox" data-testid="launch-at-login"> Start the lightweight tray silently after sign-in without opening the app window</label>
             </div>
 
             <div class="row compact">
               <label for="show_tray_icon">Tray Icon</label>
-              <label class="check"><input id="show_tray_icon" type="checkbox" data-testid="show-tray-icon"> Show Paper Monitor in the system tray</label>
+              <label class="check"><input id="show_tray_icon" type="checkbox" data-testid="show-tray-icon"> Keep the lightweight native tray available after the window closes</label>
             </div>
 
             <div class="row compact">
@@ -113,19 +118,10 @@ __SETTINGS_CSS__
               <label class="check"><input id="notifications_enabled" type="checkbox" data-testid="notifications-enabled"> Send desktop notifications for new matched papers</label>
             </div>
 
-            <div class="row compact">
-              <label for="silent_startup_notifications">Quiet Startup</label>
-              <label class="check"><input id="silent_startup_notifications" type="checkbox" data-testid="silent-startup-notifications"> Suppress notifications during quiet startup refresh</label>
-            </div>
-
-            <div class="row compact">
-              <label for="refresh_on_launch">Launch Refresh</label>
-              <label class="check"><input id="refresh_on_launch" type="checkbox" data-testid="refresh-on-launch"> Refresh automatically when the app starts</label>
-            </div>
           </div>
         </section>
 
-        <section class="panel" id="panel-terms" role="tabpanel" aria-labelledby="tab-terms">
+        <section class="panel" id="panel-terms" role="tabpanel" aria-labelledby="tab-terms" hidden>
           <div class="terms-grid">
             <div class="terms-box">
               <label for="include_terms">Include Terms</label>
@@ -138,7 +134,7 @@ __SETTINGS_CSS__
           </div>
         </section>
 
-        <section class="panel" id="panel-journals" role="tabpanel" aria-labelledby="tab-journals">
+        <section class="panel" id="panel-journals" role="tabpanel" aria-labelledby="tab-journals" hidden>
           <div class="journal-box">
             <textarea class="journal-state" id="selected_journals" spellcheck="false" aria-hidden="true" tabindex="-1"></textarea>
             <div class="journal-board" data-testid="journal-picker">
@@ -159,18 +155,18 @@ __SETTINGS_CSS__
                 </header>
                 <div class="journal-toolbar">
                   <div class="journal-toolbar-row journal-filter-row">
-                    <input id="journal_search" type="search" placeholder="Search candidates" autocomplete="off" data-testid="journal-search">
+                    <input id="journal_search" type="search" placeholder="Search candidates" aria-label="Search candidate journals" autocomplete="off" data-testid="journal-search">
                     <select id="journal_category" aria-label="Journal category" data-testid="journal-category">
                       <option value="">All categories</option>
                     </select>
-                    <select id="journal_sort_mode" data-testid="journal-sort-mode">
+                    <select id="journal_sort_mode" aria-label="Sort candidate journals" data-testid="journal-sort-mode">
                       <option value="impact_factor">2Y Impact</option>
                       <option value="rank">Catalog rank</option>
                       <option value="name">Name</option>
                     </select>
                   </div>
                   <div class="journal-toolbar-row">
-                    <input id="manual_journal_name" type="text" placeholder="Add journal manually" autocomplete="off" data-testid="manual-journal-name">
+                    <input id="manual_journal_name" type="text" placeholder="Add journal manually" aria-label="Journal name to add manually" autocomplete="off" data-testid="manual-journal-name">
                     <button class="button" type="button" id="add_manual_journal" data-testid="add-manual-journal">Add</button>
                   </div>
                 </div>
@@ -181,7 +177,7 @@ __SETTINGS_CSS__
         </section>
 
         <div class="actions">
-          <div class="status" id="status">Loading settings...</div>
+          <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true">Loading settings...</div>
           <button class="button" type="button" id="defaults-button">Restore Defaults</button>
           <button class="button primary" type="submit" id="save-button" data-testid="save-settings">Save Settings</button>
         </div>

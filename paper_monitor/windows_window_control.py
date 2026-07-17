@@ -9,7 +9,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
-from urllib import error, request
 
 CONTROL_FILE_NAME = "window-control.json"
 CONTROL_TIMEOUT_SECONDS = 1.5
@@ -90,6 +89,8 @@ def send_window_control(
     route: Optional[str] = None,
     timeout: float = CONTROL_TIMEOUT_SECONDS,
 ) -> Dict[str, object]:
+    from urllib import error, request
+
     state = read_window_control(config_path)
     if state is None:
         raise WindowControlError("No running Paper Monitor window control endpoint was found.")

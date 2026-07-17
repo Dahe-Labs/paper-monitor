@@ -1,89 +1,82 @@
-import threading
+"""Compatibility bridge for desktop shells that execute the shared refresh CLI."""
+
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .article_lifecycle import ArticleLifecycle, RefreshRunStatus
 from .config import load_app_config
-from .dashboard import write_dashboard
-from .filtering import MatchResult
-from .journal_metrics import load_journal_metrics
-from .keyword_analysis import AnalysisScope
+from .lifecycle_dashboard import write_lifecycle_dashboard
 from .models import Article
-from .monitor import run_once
-from .sources import fetch_all_sources
-from .storage import ArticleStore
-from .windows_mutex import REFRESH_MUTEX_NAME, acquire_mutex, close_handle
-
-_APP_REFRESH_LOCK = threading.Lock()
-
-
-class RefreshAlreadyRunning(RuntimeError):
-    """Raised when another process already owns the application refresh."""
+from .refresh_errors import RefreshSourcesFailed
+from .refresh_execution import RefreshExecution, RefreshIntent, RefreshOutcome
 
 
 def run_app_refresh(
     config_path: Path,
     fetch_articles: Optional[Callable[[], List[Article]]] = None,
 ) -> Dict[str, object]:
-    if not _APP_REFRESH_LOCK.acquire(blocking=False):
-        raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
+    """Refresh once and emit the stable JSON contract consumed by macOS."""
 
-    refresh_mutex = None
-    try:
-        refresh_mutex = acquire_mutex(REFRESH_MUTEX_NAME)
-        if refresh_mutex is None:
-            raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
-        return _run_app_refresh(config_path, fetch_articles=fetch_articles)
-    finally:
-        close_handle(refresh_mutex)
-        _APP_REFRESH_LOCK.release()
-
-
-def _run_app_refresh(
-    config_path: Path,
-    fetch_articles: Optional[Callable[[], List[Article]]] = None,
-) -> Dict[str, object]:
-    app_config = load_app_config(config_path)
-    store = ArticleStore(app_config.database_path)
-    captured: List[Dict[str, object]] = []
-
-    def capture_notification(article: Article, match: MatchResult) -> None:
-        captured.append(
-            {
-                "title": article.title,
-                "journal": article.journal,
-                "url": article.url,
-                "doi": article.doi,
-                "published": article.published,
-                "detected": article.detected or article.published,
-                "source": article.source,
-                "matched_terms": list(match.matched_terms),
-                "journal_match": match.journal_match,
-            }
+    if fetch_articles is None:
+        source_fetcher = None
+    else:
+        def source_fetcher(_source_config):
+            return fetch_articles()
+    outcome = RefreshExecution(
+        config_path,
+        fetch_sources=source_fetcher,
+    ).execute(RefreshIntent.VISIBLE)
+    result = _result_payload(config_path, outcome)
+    if outcome.status is RefreshRunStatus.FAILED:
+        raise RefreshSourcesFailed(
+            outcome.error or "Every configured article source failed.",
+            result=result,
         )
+    return result
 
-    summary = run_once(
-        config=app_config.monitor_config,
-        store=store,
-        fetch_articles=fetch_articles or (lambda: fetch_all_sources(app_config.source_config)),
-        notify=capture_notification,
-    )
-    metrics = load_journal_metrics(app_config.journal_metrics_path)
-    write_dashboard(
-        app_config.dashboard_path,
-        store.latest_run(),
-        store.candidates_for_run(summary.run_id),
-        metrics,
-        AnalysisScope(
-            selected_journals=tuple(app_config.monitor_config.filter_config.journals),
-            top_n=app_config.journal_scope_top_n,
-        ),
-    )
-    return {
-        "run_id": summary.run_id,
-        "fetched": summary.fetched,
-        "matched": summary.matched,
-        "new_matches": summary.new_matches,
-        "skipped": summary.skipped,
-        "dashboard_path": str(app_config.dashboard_path),
-        "articles": captured,
+
+def _result_payload(config_path: Path, outcome: RefreshOutcome) -> Dict[str, object]:
+    config = load_app_config(config_path)
+    source_statuses = [dict(status) for status in outcome.source_statuses]
+    result: Dict[str, object] = {
+        "run_id": outcome.run_id,
+        "fetched": outcome.fetched,
+        "matched": outcome.matched,
+        "new_matches": outcome.new_matches,
+        "skipped": outcome.skipped,
+        "dashboard_path": str(config.dashboard_path),
+        "articles": [],
+        "source_statuses": source_statuses,
+        "partial": outcome.status is RefreshRunStatus.PARTIAL,
+        "status": outcome.status.value,
+        "dashboard_updated": False,
     }
+    if outcome.status is RefreshRunStatus.FAILED or outcome.snapshot is None:
+        return result
+
+    write_lifecycle_dashboard(config, outcome.snapshot, outcome)
+    lifecycle = ArticleLifecycle(config.database_path)
+    handoff = lifecycle.accept_notification_handoff(
+        outcome.run_id,
+        limit=config.monitor_config.max_notifications,
+    )
+    result["articles"] = [
+        {
+            "identity": article.article_id,
+            "title": article.title,
+            "journal": article.journal,
+            "url": article.url,
+            "doi": article.doi,
+            "published": article.published,
+            "detected": article.published,
+            "source": article.source,
+            "matched_terms": [],
+            "journal_match": article.journal,
+        }
+        for article in handoff.articles
+    ]
+    result["notification_article_count"] = handoff.article_count
+    result["dashboard_updated"] = True
+    return result

@@ -26,6 +26,10 @@ if ([string]::IsNullOrWhiteSpace($OutputDir)) {
 
 $ReleaseName = "Paper-Monitor-Windows-$Version"
 $DistExe = Join-Path $Root "dist\windows\PaperMonitor.exe"
+$DistNativeTray = Join-Path $Root "dist\windows\PaperMonitorTray.exe"
+$DistAppDir = Join-Path $Root "dist\windows\PaperMonitor"
+$DistAppExe = Join-Path $DistAppDir "PaperMonitor.exe"
+$DistAppNativeTray = Join-Path $DistAppDir "PaperMonitorTray.exe"
 $InnoScript = Join-Path $Root "windows\PaperMonitor.iss"
 $InstallerIcon = Join-Path $Root "windows\assets\PaperMonitor.ico"
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
@@ -47,6 +51,19 @@ function Copy-ReleaseFile {
     throw "Missing release input: $Source"
   }
   Copy-Item -LiteralPath $Source -Destination $Destination -Force
+}
+
+function Write-Utf8NoBomLines {
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][AllowEmptyCollection()][string[]]$Lines
+  )
+
+  [System.IO.File]::WriteAllLines(
+    $Path,
+    $Lines,
+    [System.Text.UTF8Encoding]::new($false)
+  )
 }
 
 function Find-InnoSetupCompiler {
@@ -162,31 +179,87 @@ function Invoke-CodeSign {
   Invoke-Native -FilePath $SignTool -Arguments @("verify", "/pa", $Path)
 }
 
+function Invoke-CodeVerify {
+  param(
+    [Parameter(Mandatory=$true)][string]$SignTool,
+    [Parameter(Mandatory=$true)][string]$Path
+  )
+
+  Invoke-Native -FilePath $SignTool -Arguments @("verify", "/pa", $Path)
+}
+
 $SigningEnabled = -not [string]::IsNullOrWhiteSpace($CodeSigningCertificateThumbprint)
 if ($RequireSignature -and -not $SigningEnabled) {
   throw "-RequireSignature requires -CodeSigningCertificateThumbprint."
 }
+$ResolvedSignTool = $null
+if ($SigningEnabled) {
+  $ResolvedSignTool = Find-SignTool -Requested $SignToolPath
+}
 
 if (-not $SkipBuild) {
-  & (Join-Path $Root "scripts\build_windows_app.ps1") -Version $Version
+  if ($SigningEnabled) {
+    & (Join-Path $Root "scripts\build_windows_native_tray.ps1") -OutputPath $DistNativeTray
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistNativeTray `
+      -Timestamp $TimestampUrl
+    & (Join-Path $Root "scripts\build_windows_app.ps1") `
+      -Version $Version `
+      -PrebuiltNativeTrayPath $DistNativeTray
+  } else {
+    & (Join-Path $Root "scripts\build_windows_app.ps1") -Version $Version
+  }
 }
 
 if (-not (Test-Path -LiteralPath $DistExe -PathType Leaf)) {
   throw "Missing built executable: $DistExe"
+}
+if (-not (Test-Path -LiteralPath $DistAppExe -PathType Leaf)) {
+  throw "Missing built application: $DistAppExe"
+}
+if (-not (Test-Path -LiteralPath $DistNativeTray -PathType Leaf)) {
+  throw "Missing native tray executable: $DistNativeTray"
+}
+if (-not (Test-Path -LiteralPath $DistAppNativeTray -PathType Leaf)) {
+  throw "Missing onedir native tray executable: $DistAppNativeTray"
 }
 
 $BuiltProductVersion = (Get-Item -LiteralPath $DistExe).VersionInfo.ProductVersion
 if ([string]::IsNullOrWhiteSpace($BuiltProductVersion) -or $BuiltProductVersion.Trim() -ne $Version) {
   throw "Built executable ProductVersion '$BuiltProductVersion' does not match release version '$Version'. Rebuild without -SkipBuild."
 }
-$ResolvedSignTool = $null
+$BuiltAppProductVersion = (Get-Item -LiteralPath $DistAppExe).VersionInfo.ProductVersion
+if ([string]::IsNullOrWhiteSpace($BuiltAppProductVersion) -or $BuiltAppProductVersion.Trim() -ne $Version) {
+  throw "Built application ProductVersion '$BuiltAppProductVersion' does not match release version '$Version'. Rebuild without -SkipBuild."
+}
 if ($SigningEnabled) {
-  $ResolvedSignTool = Find-SignTool -Requested $SignToolPath
   Invoke-CodeSign `
     -SignTool $ResolvedSignTool `
     -CertificateThumbprint $CodeSigningCertificateThumbprint `
     -Path $DistExe `
     -Timestamp $TimestampUrl
+  Invoke-CodeSign `
+    -SignTool $ResolvedSignTool `
+    -CertificateThumbprint $CodeSigningCertificateThumbprint `
+    -Path $DistAppExe `
+    -Timestamp $TimestampUrl
+  if ($SkipBuild) {
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistNativeTray `
+      -Timestamp $TimestampUrl
+    Invoke-CodeSign `
+      -SignTool $ResolvedSignTool `
+      -CertificateThumbprint $CodeSigningCertificateThumbprint `
+      -Path $DistAppNativeTray `
+      -Timestamp $TimestampUrl
+  } else {
+    Invoke-CodeVerify -SignTool $ResolvedSignTool -Path $DistNativeTray
+    Invoke-CodeVerify -SignTool $ResolvedSignTool -Path $DistAppNativeTray
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -195,18 +268,19 @@ if (Test-Path -LiteralPath $StagingDir) {
 }
 New-Item -ItemType Directory -Path $StagingDir | Out-Null
 
-Copy-ReleaseFile -Source $DistExe -Destination (Join-Path $StagingDir "PaperMonitor.exe")
+Copy-Item -Path (Join-Path $DistAppDir "*") -Destination $StagingDir -Recurse -Force
 Copy-ReleaseFile -Source (Join-Path $Root "README_WINDOWS.md") -Destination (Join-Path $StagingDir "README_WINDOWS.md")
 Copy-ReleaseFile -Source (Join-Path $Root "config.example.json") -Destination (Join-Path $StagingDir "config.example.json")
 Copy-ReleaseFile -Source (Join-Path $Root "journal_metrics.json") -Destination (Join-Path $StagingDir "journal_metrics.json")
 
-$PackageHashes = Get-ChildItem -LiteralPath $StagingDir -File |
-  Sort-Object Name |
+$PackageHashes = Get-ChildItem -LiteralPath $StagingDir -File -Recurse |
+  Sort-Object FullName |
   ForEach-Object {
     $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName
-    "$($Hash.Hash.ToLowerInvariant())  $($_.Name)"
+    $RelativePath = $_.FullName.Substring($StagingDir.Length).TrimStart('\').Replace('\', '/')
+    "$($Hash.Hash.ToLowerInvariant())  $RelativePath"
   }
-$PackageHashes | Set-Content -LiteralPath (Join-Path $StagingDir "SHA256SUMS.txt") -Encoding UTF8
+Write-Utf8NoBomLines -Path (Join-Path $StagingDir "SHA256SUMS.txt") -Lines @($PackageHashes)
 
 if (Test-Path -LiteralPath $ZipPath) {
   throw "Release zip already exists: $ZipPath"
@@ -267,7 +341,7 @@ $AssetHashes = $AssetPaths |
     $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
     "$($Hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($_))"
   }
-$AssetHashes | Set-Content -LiteralPath $HashPath -Encoding UTF8
+Write-Utf8NoBomLines -Path $HashPath -Lines @($AssetHashes)
 
 $CurrentReleaseTemp = Join-Path $OutputDir ".CURRENT_WINDOWS_RELEASE.$([Guid]::NewGuid().ToString('N')).tmp"
 try {

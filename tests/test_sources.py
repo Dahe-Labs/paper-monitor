@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 import urllib.error
@@ -44,9 +45,11 @@ class SourceParsingTests(unittest.TestCase):
             <item>
               <title>Fast lithium transport in halide solid electrolytes</title>
               <link>https://www.nature.com/articles/example</link>
+              <guid isPermaLink="false">nature-energy-example-42</guid>
               <description>Solid electrolyte discovery for batteries.</description>
               <pubDate>Sat, 20 Jun 2026 09:00:00 GMT</pubDate>
               <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/">doi:10.1038/example</dc:identifier>
+              <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">Ada Lovelace</dc:creator>
             </item>
           </channel>
         </rss>
@@ -60,6 +63,8 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(articles[0].published, "2026-06-20")
         self.assertEqual(articles[0].detected, "2026-06-20")
         self.assertEqual(articles[0].source, "Nature Energy RSS")
+        self.assertEqual(articles[0].authors, ("Ada Lovelace",))
+        self.assertEqual(articles[0].source_id, "nature-energy-example-42")
 
     def test_parses_namespaced_rdf_feed_items(self):
         xml = """<?xml version="1.0"?>
@@ -86,6 +91,27 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(articles[0].doi, "10.1038/s41560-026-example")
         self.assertEqual(articles[0].published, "2026-06-20")
         self.assertEqual(articles[0].detected, "2026-06-20")
+        self.assertEqual(articles[0].source_id, "https://www.nature.com/articles/example")
+
+    def test_parses_atom_feed_identity_and_authors(self):
+        xml = """<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <id>tag:publisher.example,2026:article-42</id>
+            <title>Atom solid electrolyte discovery</title>
+            <link href="https://publisher.example/article-42" />
+            <summary>Solid electrolyte abstract.</summary>
+            <published>2026-06-20T09:00:00Z</published>
+            <author><name>Grace Hopper</name></author>
+          </entry>
+        </feed>
+        """
+
+        articles = parse_rss_feed(xml.encode("utf-8"), source_name="Publisher Atom")
+
+        self.assertEqual(len(articles), 1)
+        self.assertEqual(articles[0].source_id, "tag:publisher.example,2026:article-42")
+        self.assertEqual(articles[0].authors, ("Grace Hopper",))
 
     def test_prefers_clean_configured_rss_name_when_channel_title_contains_it(self):
         xml = """<?xml version="1.0"?>
@@ -135,6 +161,7 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(articles[0].published, "2026-06-20")
         self.assertEqual(articles[0].detected, "2026-06-20")
         self.assertEqual(articles[0].authors, ("Ada Lovelace", "Battery Research Group"))
+        self.assertEqual(articles[0].source_id, "10.1002/example")
 
     def test_parses_crossref_future_issue_date_with_created_detected_date(self):
         payload = {
@@ -205,6 +232,7 @@ class SourceParsingTests(unittest.TestCase):
         payload = {
             "results": [
                 {
+                    "id": "https://openalex.org/W1234567890",
                     "display_name": "Lithium metal compatibility in garnet electrolytes",
                     "doi": "https://doi.org/10.1234/openalex",
                     "publication_date": "2026-06-20",
@@ -217,6 +245,9 @@ class SourceParsingTests(unittest.TestCase):
                         "solid": [1],
                         "electrolytes": [2],
                     },
+                    "authorships": [
+                        {"author": {"display_name": "Grace Hopper"}},
+                    ],
                 }
             ]
         }
@@ -227,6 +258,8 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(articles[0].doi, "10.1234/openalex")
         self.assertEqual(articles[0].journal, "Nature Materials")
         self.assertEqual(articles[0].abstract, "Garnet solid electrolytes")
+        self.assertEqual(articles[0].authors, ("Grace Hopper",))
+        self.assertEqual(articles[0].source_id, "W1234567890")
 
     def test_builds_arxiv_url_with_title_query_and_submitted_sort(self):
         url = build_arxiv_url(
@@ -345,6 +378,12 @@ class SourceParsingTests(unittest.TestCase):
         self.assertIn("/usr/bin/curl", command)
         self.assertIn("--proto", command)
         self.assertIn("--proto-redir", command)
+        self.assertEqual(curl.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(curl.call_args.kwargs["stderr"], subprocess.PIPE)
+        self.assertEqual(
+            curl.call_args.kwargs["creationflags"],
+            int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
 
     def test_fetch_url_rejects_non_http_schemes_before_opening(self):
         with patch("paper_monitor.sources.urllib.request.urlopen") as opener:

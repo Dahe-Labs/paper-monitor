@@ -6,7 +6,6 @@ from typing import Dict
 
 from .filtering import FilterConfig
 from .journal_metrics import load_journal_metrics
-from .monitor import MonitorConfig
 from .search_presets import DEFAULT_SEARCH_DIRECTION
 
 SOURCE_ONLY_JOURNAL_KEYS = {"arxiv"}
@@ -22,6 +21,7 @@ DEFAULT_CONFIG = {
     "max_notifications": 5,
     "app_settings": {
         "startup_enabled": False,
+        "launch_at_login": False,
         "show_tray_icon": True,
         "notifications_enabled": True,
         "silent_startup_notifications": True,
@@ -165,10 +165,19 @@ DEFAULT_CONFIG = {
 @dataclass(frozen=True)
 class RuntimeAppSettings:
     startup_enabled: bool
+    launch_at_login: bool
     show_tray_icon: bool
     notifications_enabled: bool
     silent_startup_notifications: bool
     refresh_on_launch: bool
+
+
+@dataclass(frozen=True)
+class MonitorConfig:
+    """Matching and notification limits loaded from the shared config file."""
+
+    filter_config: FilterConfig
+    max_notifications: int
 
 
 @dataclass(frozen=True)
@@ -329,6 +338,7 @@ def _app_settings(raw) -> RuntimeAppSettings:
     values = raw.get("app_settings") if isinstance(raw.get("app_settings"), dict) else {}
     return RuntimeAppSettings(
         startup_enabled=_bool_value(values.get("startup_enabled"), bool(defaults["startup_enabled"])),
+        launch_at_login=_bool_value(values.get("launch_at_login"), bool(defaults["launch_at_login"])),
         show_tray_icon=_bool_value(values.get("show_tray_icon"), bool(defaults["show_tray_icon"])),
         notifications_enabled=_bool_value(values.get("notifications_enabled"), bool(defaults["notifications_enabled"])),
         silent_startup_notifications=_bool_value(

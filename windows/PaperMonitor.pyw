@@ -1,10 +1,19 @@
-import sys
+import ctypes
 import os
+import sys
 from pathlib import Path
-
 
 os.environ.setdefault("PYTHONUTF8", "1")
 os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+
+def _set_windows_app_identity(app_id: str) -> None:
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except (AttributeError, OSError):
+        return
 
 
 def _configure_text_streams() -> None:
@@ -24,8 +33,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from paper_monitor import windows_tray
+from paper_monitor.app_identity import WINDOWS_APP_USER_MODEL_ID
+
+
+_set_windows_app_identity(WINDOWS_APP_USER_MODEL_ID)
+
+
+def _main() -> int:
+    if sys.argv[1:2] == ["scheduled-refresh"]:
+        from paper_monitor.windows_background import main as background_main
+
+        return background_main(sys.argv[2:])
+    from paper_monitor import windows_app
+
+    return windows_app.main()
 
 
 if __name__ == "__main__":
-    raise SystemExit(windows_tray.main())
+    raise SystemExit(_main())

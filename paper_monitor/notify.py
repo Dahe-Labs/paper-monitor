@@ -83,6 +83,8 @@ def run_notification_command(command: List[str]) -> bool:
             capture_output=True,
             text=True,
             timeout=NOTIFICATION_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
@@ -102,11 +104,11 @@ def notify_article(article: Article, match: MatchResult, dashboard_path: Path = 
 
 
 def _notify_windows_article(article: Article, dashboard_path: Path = None) -> bool:
-    from .windows_tray import WindowsToastNotifier, windows_icon_path
+    from .windows_notification import WindowsArticleNotificationAdapter
 
-    notifier = WindowsToastNotifier(icon_path=windows_icon_path())
+    notifier = WindowsArticleNotificationAdapter()
     dashboard_path = dashboard_path or Path.cwd()
-    return notifier.notify_article(
+    return notifier.deliver(
         {
             "title": article.title,
             "journal": article.journal,
@@ -122,7 +124,7 @@ def _truncate(value: str, limit: int) -> str:
     compact = " ".join((value or "").split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1].rstrip() + "..."
+    return compact[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
 def _open_command(target: str) -> str:

@@ -8,6 +8,7 @@
   "max_notifications": 5,
   "app_settings": {
     "startup_enabled": false,
+    "launch_at_login": false,
     "show_tray_icon": true,
     "notifications_enabled": true,
     "silent_startup_notifications": true,

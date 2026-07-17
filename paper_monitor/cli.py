@@ -7,18 +7,13 @@ from pathlib import Path
 from .analysis_refresh import run_crossref_keyword_analysis
 from .app_identity import DISPLAY_NAME
 from .app_refresh import run_app_refresh
+from .article_lifecycle import ArticleLifecycle
 from .config import load_app_config, write_default_config
-from .dashboard import write_dashboard
 from .dashboard_writer import write_latest_dashboard
 from .filtering import MatchResult
-from .journal_metrics import load_journal_metrics
-from .keyword_analysis import AnalysisScope
 from .launchd import build_launch_agent_plist
 from .models import Article
-from .monitor import run_once
 from .notify import notify_article
-from .sources import fetch_all_sources
-from .storage import ArticleStore
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -128,33 +123,35 @@ def main(argv=None) -> int:
 
 def _run(config_path: Path, dry_run: bool) -> int:
     app_config = load_app_config(config_path)
-    store = ArticleStore(app_config.database_path)
     notifier = _print_notification if dry_run else (
         lambda article, match: notify_article(article, match, dashboard_path=app_config.dashboard_path)
     )
-    summary = run_once(
-        config=app_config.monitor_config,
-        store=store,
-        fetch_articles=lambda: fetch_all_sources(app_config.source_config),
-        notify=notifier,
-    )
-    metrics = load_journal_metrics(app_config.journal_metrics_path)
-    write_dashboard(
-        app_config.dashboard_path,
-        store.latest_run(),
-        store.candidates_for_run(summary.run_id),
-        metrics,
-        AnalysisScope(
-            selected_journals=tuple(app_config.monitor_config.filter_config.journals),
-            top_n=app_config.journal_scope_top_n,
-        ),
-    )
+    result = run_app_refresh(config_path)
+    for payload in result["articles"]:
+        article = Article(
+            title=str(payload.get("title") or ""),
+            journal=str(payload.get("journal") or ""),
+            url=str(payload.get("url") or ""),
+            doi=str(payload.get("doi") or ""),
+            published=str(payload.get("published") or ""),
+            abstract="",
+            source=str(payload.get("source") or ""),
+        )
+        notifier(
+            article,
+            MatchResult(
+                True,
+                "matched",
+                list(payload.get("matched_terms") or ()),
+                str(payload.get("journal_match") or article.journal),
+            ),
+        )
     print(
         "Fetched {fetched}, matched {matched}, new {new}, skipped {skipped}".format(
-            fetched=summary.fetched,
-            matched=summary.matched,
-            new=summary.new_matches,
-            skipped=summary.skipped,
+            fetched=result["fetched"],
+            matched=result["matched"],
+            new=result["new_matches"],
+            skipped=result["skipped"],
         )
     )
     return 0
@@ -162,10 +159,10 @@ def _run(config_path: Path, dry_run: bool) -> int:
 
 def _recent(config_path: Path, limit: int) -> int:
     app_config = load_app_config(config_path)
-    store = ArticleStore(app_config.database_path)
-    for article in store.recent_articles(limit):
-        print("%s | %s | %s" % (article.published, article.journal, article.title))
-        print("  %s" % (article.doi or article.url))
+    lifecycle = ArticleLifecycle(app_config.database_path)
+    for article in lifecycle.list_articles(limit):
+        print("%s | %s | %s" % (article.first_detected_at, article.journal, article.title))
+        print("  %s" % article.url)
     return 0
 
 
@@ -192,7 +189,7 @@ def _write_launch_agent(config_path: Path, output: Path, label: str) -> int:
 
 def _open_dashboard(config_path: Path) -> int:
     app_config = load_app_config(config_path)
-    write_latest_dashboard(app_config)
+    write_latest_dashboard(app_config, confirm_presentation=True)
     webbrowser.open(app_config.dashboard_path.resolve().as_uri())
     print("Opened dashboard: %s" % app_config.dashboard_path)
     return 0
@@ -200,7 +197,7 @@ def _open_dashboard(config_path: Path) -> int:
 
 def _render_dashboard(config_path: Path) -> int:
     app_config = load_app_config(config_path)
-    dashboard_path = write_latest_dashboard(app_config)
+    dashboard_path = write_latest_dashboard(app_config, confirm_presentation=True)
     print(json.dumps({"dashboard_path": str(dashboard_path)}, ensure_ascii=False))
     return 0
 

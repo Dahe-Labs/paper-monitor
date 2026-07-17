@@ -1,8 +1,8 @@
 # Paper Monitor 当前功能逻辑与实现原理总结
 
-生成日期：2026-07-09
+生成日期：2026-07-14
 
-本文档覆盖并替换旧版总结，按当前仓库状态说明 Paper Monitor 每个主要功能的实现逻辑、模块边界和平台差异。当前架构不是 Electron，也不是纯网页应用；它是共享 Python core 加 Windows pywebview/pystray 壳，加 macOS Swift/AppKit 壳。
+本文档覆盖并替换旧版总结，按当前仓库状态说明 Paper Monitor 每个主要功能的实现逻辑、模块边界和平台差异。当前架构不是 Electron，也不是纯网页应用；它是共享 Python core 加 Windows pywebview 窗口与原生 C 托盘，再加 macOS Swift/AppKit 壳。
 
 ## 1. 总体架构
 
@@ -11,7 +11,7 @@ Paper Monitor 的业务核心集中在 `paper_monitor/` Python 包中。Windows 
 整体分层如下：
 
 - Python core：读取配置，抓取论文源，过滤匹配，写 SQLite，生成 Dashboard HTML，执行关键词分析。
-- Windows 壳：`PaperMonitor.exe` 由 PyInstaller 打包，入口是 `windows/PaperMonitor.pyw`，再进入 `paper_monitor.windows_tray.main()`。主界面和设置页通过 pywebview 内置窗口打开，托盘通过 pystray 常驻。
+- Windows 壳：`PaperMonitor.exe` 由 PyInstaller 打包，入口是 `windows/PaperMonitor.pyw`，再进入 `paper_monitor.windows_app.main()`。主界面和设置页通过 pywebview 内置窗口打开；独立的 `PaperMonitorTray.exe` 只负责原生菜单和启动短时 worker，不加载 Python、WebView、网络检索或数据库。
 - macOS 壳：Swift/AppKit 应用位于 `macos/PaperMonitorApp`。原生窗口、菜单、状态栏、通知和设置界面由 Swift 实现，业务刷新通过 `PythonBridge` 调用同一套 Python CLI。
 - 发布包：Windows 生成 onefile exe 和 release zip；macOS 生成 `.app`，把 Python runtime 和数据文件复制进 app resources，再安装到 Application Support。
 
@@ -22,10 +22,10 @@ flowchart LR
     Config["config.json"] --> Load["load_app_config"]
     Load --> Sources["fetch_all_sources"]
     Sources --> Match["match_article"]
-    Match --> Store["ArticleStore SQLite"]
-    Store --> Dashboard["write_dashboard / latest.html"]
+    Match --> Lifecycle["ArticleLifecycle SQLite"]
+    Lifecycle --> Dashboard["lifecycle snapshot / latest.html"]
     Dashboard --> Desktop["Windows pywebview / macOS WKWebView"]
-    Match --> Notify["Windows toast / macOS notification"]
+    Lifecycle --> Notify["Windows toast / macOS notification handoff"]
 ```
 
 ## 2. 配置系统
@@ -203,18 +203,20 @@ arXiv 默认关闭。
 
 身份规则：
 
-- 如果有 DOI，identity 为 `doi:<normalized-doi>`。
-- 如果没有 DOI，identity 为 `title-url:<normalized-title>|<normalized-url>`。
+- DOI 是最强身份，先移除 resolver、fragment、出版商 query 和大小写差异。
+- 同时记录可用的 source id、规范 URL，以及严格的 title + authors + published year 别名。
+- 任一精确别名命中同一论文；多个旧记录命中时在同一事务中合并。
 
 一轮刷新中的去重：
 
-- `run_once()` 维护 `seen_identities`。
-- 同一轮里重复 identity 会被计为 skipped。
+- `RefreshExecution` 把匹配结果作为 `ArticleDetection` 一次提交。
+- `lifecycle_refresh_articles` 的 `(run_id, article_id)` 唯一键保证同轮重复检测只关联一次。
 
 跨轮去重：
 
-- SQLite `articles.identity` 是主键。
-- 新匹配论文插入失败时说明已存在，此时更新元数据但不计入新通知。
+- `lifecycle_article_aliases.alias_hash` 唯一指向一个 `lifecycle_articles.article_id`。
+- 已存在论文会更新紧凑元数据和最后检测时间，但不会再次计为新增或重复通知。
+- 别名只随 30 天内的有效论文存在；论文过期时由外键级联一并硬删除，不保存退役指纹或其它身份痕迹。
 
 匹配规则在 `paper_monitor/filtering.py`：
 
@@ -229,46 +231,48 @@ arXiv 默认关闭。
 
 ## 6. 刷新主流程
 
-应用级刷新入口是 `paper_monitor.app_refresh.run_app_refresh(config_path)`。
+统一刷新 Module 是 `paper_monitor.refresh_execution.RefreshExecution`；`paper_monitor.app_refresh.run_app_refresh(config_path)` 只是 macOS/CLI 的 JSON Adapter。
 
 流程：
 
-1. `load_app_config()` 读取并规范化配置。
-2. 创建 `ArticleStore`。
-3. 调用 `run_once()`。
-4. `run_once()` 创建一条 `runs` 记录，状态为 `running`。
-5. 调用 `fetch_all_sources()` 获取文章。
-6. 对每篇文章去重、匹配，并写入 `candidates`。
-7. 对匹配论文调用 `add_new_articles()` 写入 `articles`。
-8. 只对新增文章触发通知 capture，数量受 `max_notifications` 限制。
-9. 成功时 `finish_run(status="finished")`。
-10. 异常时 `fail_run(status="failed")`，避免残留 `running`。
-11. 加载期刊指标，生成 Dashboard HTML。
-12. 返回 JSON：run id、抓取数量、匹配数量、新增数量、跳过数量、Dashboard 路径、待通知文章列表。
+1. `RefreshExecution` 取得进程锁和 Windows 跨进程 mutex，保证同一时间只有一轮刷新。
+2. `load_app_config()` 读取并规范化配置，`fetch_all_sources()` 拉取临时 source 结果。
+3. `match_article()` 使用 title、临时 abstract 和 journal 进行匹配；abstract 不进入长期存储。
+4. 匹配结果转换为紧凑 `ArticleDetection`，只包含标题、作者、期刊、影响因子、URL、DOI、source 和时间。
+5. `ArticleLifecycle.commit_refresh()` 在一个事务中完成身份去重、30 天清理、run 统计和通知资格更新。
+6. Background intent 直接交给平台通知 Adapter；Visible intent 返回 `DashboardSnapshot`。
+7. macOS/CLI JSON Adapter 把通知条目一次性交给壳层并标为已消费，避免后续重复通知。
+8. Dashboard 从同一份 lifecycle snapshot 渲染，不再读取候选历史表。
 
-普通 CLI `paper-monitor run` 和桌面 app `app-refresh` 共用同一套 `run_once()`，区别只是通知方式和输出格式。
+Windows 定时任务、Windows 主窗口、macOS PythonBridge 和 CLI 最终都跨越同一个 RefreshExecution/ArticleLifecycle seam。
 
 ## 7. SQLite 存储
 
-存储由 `paper_monitor.storage.ArticleStore` 实现。
+存储由 `paper_monitor.article_lifecycle.ArticleLifecycle` 实现。
 
 数据库表：
 
-- `articles`：已匹配并保存过的论文，identity 为主键。
-- `runs`：每次刷新记录，包含 started/finished/status/fetched/matched/new/skipped/error_message。
-- `candidates`：每轮抓取到的候选论文，包括 matched、reason、matched_terms、journal_match。
+- `lifecycle_articles`：30 天内有效的紧凑论文记录，不保存 abstract。
+- `lifecycle_article_aliases`：DOI、source id、URL 或严格 title/author/year 身份别名。
+- `lifecycle_refresh_runs` / `lifecycle_refresh_articles`：最近 30 天的刷新结果和论文关系。
+- `lifecycle_notification_attempts`：通知接受、拒绝、歧义和无需通知状态。
+- `lifecycle_presentation_tokens` / `lifecycle_presentation_articles`：主页实际展示确认。
+- `lifecycle_migrations`：一次性升级记录。
 
 设计意图：
 
-- `articles` 用于跨轮去重和 recent 列表。
-- `runs` 用于 Dashboard 总览和失败状态追踪。
-- `candidates` 用于 Dashboard 展示匹配/拒绝原因，也用于关键词分析。
+- 所有运行模式读取同一套 lifecycle 表，避免前台、任务计划和菜单栏错配。
+- 每轮抓取的未匹配候选和 abstract 只存在于内存中，刷新结束后释放。
+- 关键词分析按需重新查询 Crossref，不依赖长期候选历史。
+- `first_detected_at` 超过 30 天的论文直接删除；其别名、刷新关系和展示关系通过外键级联删除，不保留隐藏记录。
+- 超过 30 天的刷新和通知记录也直接删除，使数据库大小长期有界。
 
 兼容迁移：
 
-- 初始化时会创建缺失表。
-- 会补充旧数据库缺失的 `detected` 和 `error_message` 列。
-- 旧记录 `detected` 为空时会回填为 `published`。
+- 首次打开旧数据库时，先把仍有效的旧 `articles` 和通知状态迁移到 lifecycle 表。
+- 完成迁移后删除旧 `articles`、`runs`、`candidates`、`notification_outbox` 表并执行一次 `VACUUM`。
+- 升级时删除旧版 `retired_article_fingerprints` 表并执行一次 `VACUUM`，不把过期身份带入新架构。
+- 旧存储实现不再参与正常运行，仅保留 ArticleLifecycle 内部的一次性升级逻辑。
 
 错误处理：
 
@@ -342,18 +346,18 @@ Crossref 分析模式：
 Windows 入口：
 
 - 打包入口：`windows/PaperMonitor.pyw`。
-- 命令入口：`paper_monitor.windows_tray.main()`。
+- 命令入口：`paper_monitor.windows_app.main()`。
 - 图形窗口：`paper_monitor.windows_app_window.open_dashboard_window()`。
-- 托盘常驻：`paper_monitor.windows_tray.WindowsTrayApp`。
+- 托盘 Adapter：`windows/native_tray/paper_monitor_tray.c` 编译为独立的 `PaperMonitorTray.exe`。
 
 命令行为：
 
 - `PaperMonitor.exe` 或 `PaperMonitor.exe window`：打开主应用窗口。
 - `PaperMonitor.exe settings`：打开设置窗口。
-- `PaperMonitor.exe tray`：启动托盘后台。
-- `PaperMonitor.exe tray --quiet`：静默启动托盘后台。
-- `PaperMonitor.exe install-startup`：写入当前用户 Run 注册表。
-- `PaperMonitor.exe uninstall-startup`：移除 Run 注册表。
+- `PaperMonitor.exe scheduled-refresh`：执行一次无窗口的后台刷新并退出。
+- `PaperMonitor.exe sync-runtime`：按配置同步 Windows 任务计划并清理旧 Run 注册表项。
+- `PaperMonitor.exe install-startup`：兼容命令，用于启用非驻留任务计划。
+- `PaperMonitor.exe uninstall-startup`：兼容命令，用于禁用非驻留任务计划。
 - `PaperMonitor.exe test-notification`：发送测试通知。
 - 如果主窗口已经存在，`window`/`settings` 命令通过本地控制通道切换现有窗口并聚焦，不再静默退出或创建第二个窗口。
 
@@ -367,30 +371,33 @@ Windows 入口：
 
 托盘行为：
 
-- `WindowsTrayApp.run()` 先获取 Windows mutex `Local\PaperMonitorTray`，防止多个托盘实例。
-- 根据 `app_settings.refresh_on_launch` 决定是否启动后刷新。
-- 根据 `app_settings.show_tray_icon` 决定是否显示托盘图标；运行期间修改该值会立即显示或隐藏图标，后台协调进程继续运行。
+- 原生 C 托盘启动时获取 Windows mutex `Local\PaperMonitorTray`，防止多个托盘实例。
+- 托盘不读取数据库、不执行网络检索，也不创建 Python 或 WebView 运行时。
+- `app_settings.show_tray_icon` 控制托盘是否运行；设置保存后会立即启动或退出托盘。
 - 菜单项包括：
   - `Open Paper Monitor`
   - `Settings...`
   - `Refresh Now`
   - `Test Notification`
-  - `Quit`
-- Windows 专用 pystray handler 只在收到 `WM_LBUTTONDBLCLK` 时触发 `Open Paper Monitor`，单击不会误触发默认菜单动作。
-- `Open Paper Monitor` 和 `Settings...` 不调用系统浏览器；没有窗口时启动 pywebview，有窗口时通过带重试的本地控制通道复用同一个窗口并切换 `/` 或 `/settings`。
+  - `Quit Tray`
+- 原生窗口过程只在收到 `WM_LBUTTONDBLCLK` 时触发 `Open Paper Monitor`，单击不会误触发菜单动作。
+- 每个菜单动作只启动一个有界的 `PaperMonitor.exe` worker；`Refresh Now` 使用与任务计划相同的后台 Refresh Execution。
+- `Open Paper Monitor` 和 `Settings...` 不调用系统浏览器；没有窗口时启动 pywebview，有窗口时通过本地控制通道复用同一个窗口并切换 `/` 或 `/settings`。
 
-启动项：
+后台计划：
 
-- 注册表值格式为 `"PaperMonitor.exe" tray --quiet`。
-- 设置保存后 `sync_windows_runtime_settings()` 会同步 `startup_enabled`。
-- 安装脚本也会调用 `install-startup`。
+- 新版本不写入登录 Run 注册表；同步设置时只清理旧版本残留的 Run 值。
+- 设置保存后 `sync_windows_runtime_settings()` 按 `startup_enabled` 同步当前用户的 Windows 任务计划。
+- 任务到期时启动一次 `scheduled-refresh`，刷新、存储和通知完成后退出。
+- 免安装版只要路径保持有效，同样可以注册任务计划；移动或删除程序后需要重新同步任务。
+- 同步时按稳定指纹和任务语义比较现有定义；Windows 导出 XML 省略系统默认节点时按默认语义解释，避免无变化时重建任务并推迟下一次运行。
 
 通知：
 
 - Windows 通知使用 `win11toast`。
 - 通知标题为论文标题，副标题/正文包含 journal 和 DOI/URL。
 - 点击通知优先打开 article URL，其次 DOI URL，再 fallback 到 Dashboard 文件。
-- `silent_startup_notifications` 可抑制静默启动后的第一轮通知。
+- Windows 后台通知只由 `notifications_enabled` 和 Article Lifecycle 的通知状态控制，不再存在托盘启动刷新。
 
 ## 11. Windows 本地 HTTP Bridge
 
@@ -637,7 +644,7 @@ macOS 状态栏：
 - macOS 主窗口是 WKWebView 加本地文件。
 - Windows 通知用 win11toast。
 - macOS 通知用 UserNotifications。
-- Windows 登录启动用 HKCU Run 注册表。
+- Windows 后台刷新使用非驻留的 Task Scheduler 任务；旧 HKCU Run 项会被清理。
 - macOS 登录启动用 SMAppService。
 
 一致性原则：
@@ -655,7 +662,7 @@ macOS 状态栏：
 - `init`：写默认 config。
 - `run`：抓取、过滤、通知、生成 Dashboard。
 - `app-refresh`：桌面 app 用刷新入口，输出 JSON。
-- `render-dashboard`：根据数据库最新 run 重新生成 Dashboard，输出 JSON。
+- `render-dashboard`：根据 ArticleLifecycle 当前快照重新生成 Dashboard，输出 JSON。
 - `analyze-keywords`：执行 Crossref 关键词分析，输出 JSON。
 - `recent`：打印最近存储的匹配论文。
 - `open-dashboard`：生成并用系统默认浏览器打开最新 Dashboard；这是 CLI 调试入口，不是 Windows 托盘主界面入口。
@@ -682,7 +689,7 @@ macOS 状态栏：
   - `paper_monitor/templates`
   - `paper_monitor/static`
   - `paper_monitor/resources`
-- hidden imports 包括 pystray、Pillow、win11toast、webview 和 Windows webview backends。
+- hidden imports 只保留运行期需要的 SQLite、Unicode、win11toast、webview 和 Windows webview backends；Pillow 仅供构建图标使用，不再强制打入运行包。
 - 排除非 Windows webview backend。
 
 发布脚本：
@@ -714,9 +721,9 @@ macOS 状态栏：
 - 复制 `config.example.json` 和 `journal_metrics.json` 到 `%APPDATA%\PaperMonitor`。
 - 如果用户没有 `config.json`，从 example 初始化。
 - 安装前会只停止已安装路径对应的旧 `PaperMonitor.exe`，避免旧进程占用或继续显示旧 UI。
-- 调用 `install-startup` 注册启动项。
-- 启动 `tray --quiet`。
-- 等待短暂时间后打开主窗口。
+- 只有用户选择启用后台监控时才调用 `install-startup` 注册非驻留任务计划。
+- 不再创建或启动 Python 托盘进程。
+- 只有用户选择安装后启动时才打开主窗口；主窗口再按设置启动原生 C 托盘。
 
 当前 Windows release 由 `public_release/CURRENT_WINDOWS_RELEASE.txt` 指向；对应 SHA256 以同目录的 `SHA256SUMS-<version>.txt` 为准，避免文档保留过期构建号。
 
@@ -805,5 +812,8 @@ API/source：
 - 配置保存尽量原子化，并保留未知字段。
 - source 失败尽量降级为 warning，不让单个源拖垮整个刷新。
 - 论文去重以 DOI 优先，没有 DOI 时用 title + URL。
+- DOI identity 会移除 resolver 前缀、fragment 和出版商链接附带的查询参数；`ArticleLifecycle` 在同一事务中合并旧的精确别名记录，并保留展示、通知和刷新状态。
+- `RefreshExecution` 是刷新 Module 的唯一生产 Interface；平台差异只留在通知、窗口和调度 Adapter。
+- 旧 ArticleStore 只在升级事务中作为输入格式被识别，迁移完成后旧表和旧实现都会删除。
 - Dashboard 可以是 HTML，但桌面入口应表现为本地应用窗口；Windows 托盘不再打开系统浏览器作为主界面。
 - 发布包需要可重复构建、可哈希校验、可在干净用户目录安装验证。

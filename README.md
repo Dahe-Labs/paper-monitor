@@ -2,26 +2,37 @@
 
 [中文说明](README.zh-CN.md)
 
-Paper Monitor is a local desktop monitor for newly published research papers. Its default query focuses on solid-state battery literature, while its 300-journal interdisciplinary catalog covers AI, computing, engineering, health, life science, physical science, and social science fields.
+Paper Monitor is a local-first desktop app for tracking newly published research. It periodically searches Crossref, RSS, and optional arXiv sources, filters papers against your journals and research terms, stores the results in a shared local SQLite lifecycle, and notifies you only when genuinely new content has not already been presented in the app.
 
-The app runs locally. It does not require an LLM service, and OpenAlex is disabled by default. arXiv is available as an optional preprint source, but it is not selected by default.
+The default configuration focuses on solid-state batteries, while the bundled 300-journal catalog spans AI, computing, engineering, health, life science, physical science, and social science. Search terms, journal scope, and research directions are fully configurable. Paper Monitor needs no cloud backend or LLM service, and it does not upload your reading history.
+
+## Architecture
+
+1. A scheduled or manual refresh starts a bounded worker that retrieves and filters papers, commits the result to the local lifecycle database, sends any eligible notification, and exits.
+2. Scheduled refreshes, tray actions, and visible refreshes all use the same SQLite-backed article state instead of maintaining separate caches.
+3. The Dashboard reads that local state directly, so opening the app immediately shows the latest stored results without starting another network scan.
+4. Publication dates drive the visible timeline; first-detected timestamps remain internal to retention and notification decisions.
+5. Papers older than 30 days are hard-deleted from the active store. The home timeline uses compact metadata and does not display abstracts.
+
+On Windows, Task Scheduler wakes the refresh worker only when a scan is due. The main Python/WebView UI exits when its window closes. An optional small native C tray can remain available, and a separate sign-in task can start only that tray silently without opening the app or running a scan.
 
 ## Features
 
-- Native macOS Dock app with an application menu for manual refresh, settings, dashboard access, and notification testing.
-- Native Windows app with a single reusable Dashboard/Settings window, system tray controls, scheduled refresh, and toast notifications.
-- Local notifications for newly matched papers.
-- Background monitoring continues while windows are closed, until the app is quit.
-- Crossref, RSS, and optional arXiv retrieval with journal scope controls.
-- Local SQLite deduplication so repeated papers are not notified again.
+- Native macOS Dock app and a native Windows Dashboard/Settings window.
+- Non-resident Windows background monitoring through account-scoped Task Scheduler tasks.
+- Independent silent sign-in startup for the lightweight native tray, with no window or immediate network scan.
+- Crossref, RSS, and optional arXiv retrieval with configurable journal and keyword scope.
+- One local SQLite lifecycle for scheduled, tray, and visible refreshes.
+- Deduplicated notifications that are suppressed once a paper has already been presented.
+- A 30-day active result window with permanent deletion after expiry.
 - Settings Apply workflow with visible unsaved/saved state.
 - Custom search directions with editable names and keyword-derived queries.
 - Refresh schedules with 1 day / 2 days intervals and an optional daily start time.
-- HTML dashboard grouped by detected date, with sorting by time, two-year impact, and relevance.
-- Keyword analysis with date range, journal scope, candidate term filtering, block terms, taxonomy editing, and compact analysis paper list.
+- Local Dashboard grouped by source publication date, showing title, authors, journal, local impact reference, and URL without displaying abstracts.
+- Keyword analysis with date range, journal scope, full journal names, candidate-term filtering, block terms, taxonomy editing, and a compact paper list.
 - Configurable search terms, excluded terms, journal scope, refresh interval, and Top N journal selection.
 - Searchable and category-filtered metadata for 300 formal journals from `journal_metrics.json`.
-- A frozen OpenAlex two-year mean citedness snapshot labeled `2Y Impact`; it is not Clarivate JIF.
+- A frozen local OpenAlex two-year mean citedness snapshot used as a reference, not as a hard filtering rule or Clarivate JIF.
 - Latest Releases list macOS and Windows assets under the same version number when both builds are available.
 
 ## Download
@@ -57,9 +68,11 @@ python -m unittest discover -s tests
 
 Build the complete Windows release:
 
+`requirements-windows.txt` contains the human-maintained top-level dependency ranges. CI, releases, and reproducible local Windows packaging install from `requirements-windows.lock.txt`.
+
 ```powershell
-python -m pip install -r requirements-windows.txt
-.\scripts\package_windows_release.ps1 -Version 0.1.7
+python -m pip install -r requirements-windows.lock.txt
+.\scripts\package_windows_release.ps1 -Version 0.1.13
 ```
 
 Run the native macOS tests:
@@ -92,7 +105,7 @@ $HOME/Library/Application Support/PaperMonitor
 
 Useful settings include:
 
-- `interval_seconds`: refresh interval while the app is running.
+- `interval_seconds`: background refresh interval; on Windows, saving Settings updates the non-resident scheduled task.
 - `max_notifications`: maximum notifications sent per refresh.
 - `journal_scope.top_n`: default Top N journal scope.
 - `journal_scope.selected_journals`: manually selected journals, including `arXiv` when the optional preprint source is enabled.

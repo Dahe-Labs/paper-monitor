@@ -147,6 +147,11 @@ class NotificationAndLaunchdTests(unittest.TestCase):
         self.assertFalse(delivered)
         self.assertEqual(run.call_args.kwargs["timeout"], 5)
         self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+        )
 
     def test_notification_command_timeout_returns_false_without_raising(self):
         with patch(
