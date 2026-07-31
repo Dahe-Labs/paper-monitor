@@ -51,7 +51,7 @@ class WindowsTaskbarTests(unittest.TestCase):
         window = SimpleNamespace(native=SimpleNamespace(Handle=_Handle(1234)))
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch.object(windows_taskbar.os, "name", "nt"),
+            patch.object(windows_taskbar, "_is_windows", return_value=True),
             patch.object(
                 windows_taskbar,
                 "_set_window_string_properties",
@@ -92,7 +92,7 @@ class WindowsTaskbarTests(unittest.TestCase):
         self.assertEqual(resource, f"{executable.resolve()},0")
 
     def test_non_windows_and_missing_native_handle_are_noops(self):
-        with patch.object(windows_taskbar.os, "name", "posix"):
+        with patch.object(windows_taskbar, "_is_windows", return_value=False):
             self.assertFalse(
                 windows_taskbar.configure_window_taskbar(
                     SimpleNamespace(),
@@ -100,7 +100,7 @@ class WindowsTaskbarTests(unittest.TestCase):
                 )
             )
 
-        with patch.object(windows_taskbar.os, "name", "nt"):
+        with patch.object(windows_taskbar, "_is_windows", return_value=True):
             self.assertFalse(
                 windows_taskbar.configure_window_taskbar(
                     SimpleNamespace(native=SimpleNamespace()),

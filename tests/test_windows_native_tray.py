@@ -26,7 +26,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
             tray_path.write_bytes(b"tray")
 
             with (
-                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "_is_windows", return_value=True),
                 patch.object(windows_native_tray, "is_mutex_running", return_value=False),
                 patch.object(windows_native_tray.subprocess, "Popen") as popen,
             ):
@@ -56,7 +56,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
             (Path(directory) / "PaperMonitorTray.exe").write_bytes(b"tray")
 
             with (
-                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "_is_windows", return_value=True),
                 patch.object(windows_native_tray, "is_mutex_running", return_value=False),
                 patch.object(windows_native_tray.subprocess, "Popen") as popen,
             ):
@@ -67,7 +67,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
 
             config_path = self._config_path(directory, visible=True)
             with (
-                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "_is_windows", return_value=True),
                 patch.object(windows_native_tray, "is_mutex_running", return_value=True),
                 patch.object(windows_native_tray.subprocess, "Popen") as popen,
             ):
@@ -80,7 +80,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             visible_config = self._config_path(directory, visible=True)
             with (
-                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "_is_windows", return_value=True),
                 patch.object(windows_native_tray, "ensure_native_tray", return_value=True) as ensure,
             ):
                 self.assertTrue(
@@ -96,7 +96,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
 
             hidden_config = self._config_path(directory, visible=False)
             with (
-                patch.object(windows_native_tray.os, "name", "nt"),
+                patch.object(windows_native_tray, "_is_windows", return_value=True),
                 patch.object(windows_native_tray, "stop_native_tray", return_value=True) as stop,
             ):
                 self.assertTrue(windows_native_tray.reconcile_native_tray(hidden_config))
@@ -104,7 +104,7 @@ class WindowsNativeTrayTests(unittest.TestCase):
 
     def test_stop_native_tray_posts_close_only_when_the_mutex_exists(self):
         with (
-            patch.object(windows_native_tray.os, "name", "nt"),
+            patch.object(windows_native_tray, "_is_windows", return_value=True),
             patch.object(windows_native_tray, "is_mutex_running", return_value=True),
             patch.object(windows_native_tray, "_post_native_tray_close", return_value=True) as post,
         ):

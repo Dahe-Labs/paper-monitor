@@ -119,6 +119,10 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("SHA256SUMS-${{ steps.version.outputs.version }}.txt", workflow)
         self.assertIn("WINDOWS_SIGNING_CERTIFICATE_BASE64", workflow)
         self.assertIn("RequireSignature", workflow)
+        self.assertIn("$onedirTest = Start-Process", workflow)
+        self.assertIn("$onefileTest = Start-Process", workflow)
+        self.assertNotIn("& .\\dist\\windows\\PaperMonitor\\PaperMonitor.exe self-test", workflow)
+        self.assertNotIn("& .\\dist\\windows\\PaperMonitor.exe self-test", workflow)
 
     def test_windows_dependency_lock_is_used_for_reproducible_builds(self):
         ci_workflow = read_text(".github/workflows/ci.yml")
@@ -126,7 +130,8 @@ class ProductContractAuditTests(unittest.TestCase):
         prepare_script = read_text("scripts/prepare_windows_project.py")
 
         for workflow in (ci_workflow, release_workflow):
-            self.assertIn("cache-dependency-path: requirements-windows.lock.txt", workflow)
+            self.assertIn("cache-dependency-path:", workflow)
+            self.assertIn("requirements-windows.lock.txt", workflow)
             self.assertIn("python -m pip install -r requirements-windows.lock.txt", workflow)
         self.assertIn("python -m pip_audit -r requirements-windows.lock.txt", ci_workflow)
         self.assertIn('"requirements-windows.lock.txt"', prepare_script)

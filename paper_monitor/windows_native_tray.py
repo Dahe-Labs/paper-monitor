@@ -21,13 +21,17 @@ NATIVE_TRAY_WINDOW_CLASS = "PaperMonitorNativeTrayWindow"
 WM_CLOSE = 0x0010
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def reconcile_native_tray(
     config_path: Path,
     executable_path: Optional[Path] = None,
 ) -> bool:
     """Apply the configured native tray visibility to the current session."""
 
-    if os.name != "nt":
+    if not _is_windows():
         return False
     resolved_config = Path(config_path).expanduser().resolve()
     try:
@@ -43,7 +47,7 @@ def reconcile_native_tray(
 def stop_native_tray() -> bool:
     """Request a running native tray to exit without touching refresh workers."""
 
-    if os.name != "nt" or not is_mutex_running(TRAY_MUTEX_NAME):
+    if not _is_windows() or not is_mutex_running(TRAY_MUTEX_NAME):
         return False
     try:
         return _post_native_tray_close()
@@ -58,7 +62,7 @@ def ensure_native_tray(
 ) -> bool:
     """Start one native tray instance when the configured Windows UI wants it."""
 
-    if os.name != "nt" or is_mutex_running(TRAY_MUTEX_NAME):
+    if not _is_windows() or is_mutex_running(TRAY_MUTEX_NAME):
         return False
 
     resolved_config = Path(config_path).expanduser().resolve()

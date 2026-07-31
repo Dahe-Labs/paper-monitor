@@ -73,6 +73,10 @@ _PKEY_RELAUNCH_ICON_RESOURCE = _PropertyKey(
 _IID_I_PROPERTY_STORE = _Guid.from_text(_I_PROPERTY_STORE_ID)
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def configure_window_taskbar(
     window: object,
     icon_path: Path,
@@ -81,7 +85,7 @@ def configure_window_taskbar(
 ) -> bool:
     """Give one native window an explicit AUMID and taskbar icon resource."""
 
-    if os.name != "nt":
+    if not _is_windows():
         return False
     handle = _native_window_handle(window)
     if not handle:
