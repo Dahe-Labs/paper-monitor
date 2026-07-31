@@ -1,5 +1,6 @@
 import copy
 import json
+import struct
 import subprocess
 import sys
 import tempfile
@@ -66,6 +67,7 @@ class WindowsAppTests(unittest.TestCase):
         self.assertIn("$env:APPDATA", install_script)
 
     def test_prepare_windows_project_creates_copyable_windows_only_folder(self):
+        from scripts.generate_windows_icon import ICON_SIZES
         from scripts.prepare_windows_project import prepare_windows_project
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -112,10 +114,24 @@ class WindowsAppTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(generated.returncode, 0, generated.stderr)
+            icon = (target / "windows/assets/PaperMonitor.ico").read_bytes()
+            reserved, image_type, image_count = struct.unpack("<HHH", icon[:6])
             self.assertEqual(
-                (target / "windows/assets/PaperMonitor.ico").read_bytes(),
-                Path("windows/assets/PaperMonitor.ico").read_bytes(),
+                (reserved, image_type, image_count),
+                (0, 1, len(ICON_SIZES)),
             )
+            actual_sizes = []
+            for index in range(image_count):
+                entry_offset = 6 + (index * 16)
+                width_byte, height_byte, _, _, planes, bit_count, size, offset = (
+                    struct.unpack("<BBBBHHII", icon[entry_offset : entry_offset + 16])
+                )
+                width = width_byte or 256
+                height = height_byte or 256
+                actual_sizes.append(width)
+                self.assertEqual((width, height, planes, bit_count), (width, width, 1, 32))
+                self.assertEqual(icon[offset : offset + min(size, 8)], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(tuple(actual_sizes), ICON_SIZES)
 
     def test_prepare_windows_project_rejects_repository_target(self):
         from scripts.prepare_windows_project import ROOT, prepare_windows_project

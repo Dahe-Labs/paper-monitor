@@ -22,8 +22,10 @@ class ReleaseHardeningTests(unittest.TestCase):
         self.assertIn("coverage run -m unittest discover -s tests", workflow)
         self.assertIn("coverage report --fail-under=70", workflow)
         self.assertIn("pip_audit -r requirements-windows.lock.txt", workflow)
-        self.assertIn(r"& .\dist\windows\PaperMonitor\PaperMonitor.exe self-test", workflow)
-        self.assertIn(r"& .\dist\windows\PaperMonitor.exe self-test", workflow)
+        self.assertIn("$onedirTest = Start-Process", workflow)
+        self.assertIn("$onefileTest = Start-Process", workflow)
+        self.assertIn("-Wait", workflow)
+        self.assertIn("-PassThru", workflow)
 
     def test_release_hash_manifests_are_written_without_utf8_bom(self):
         script = (ROOT / "scripts" / "package_windows_release.ps1").read_text(encoding="utf-8")
