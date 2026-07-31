@@ -69,6 +69,28 @@ class FilteringTests(unittest.TestCase):
         self.assertFalse(result.matched)
         self.assertEqual(result.reason, "journal-not-allowed")
 
+    def test_explicit_empty_journal_allowlist_rejects_every_journal(self):
+        article = Article(
+            title="Solid electrolyte interface engineering",
+            journal="Nature Energy",
+            url="https://example.org/article",
+            doi="10.1000/empty-scope",
+            published="2026-06-20",
+            abstract="A solid electrolyte paper.",
+            source="fixture",
+        )
+        config = FilterConfig(
+            include_terms=["solid electrolyte"],
+            exclude_terms=[],
+            journals=[],
+            journal_allowlist_enabled=True,
+        )
+
+        result = match_article(article, config)
+
+        self.assertFalse(result.matched)
+        self.assertEqual(result.reason, "journal-not-allowed")
+
     def test_matches_terms_across_hyphen_variants(self):
         article = Article(
             title="Interfaces in all solid state batteries",

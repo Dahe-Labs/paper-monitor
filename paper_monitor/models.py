@@ -1,5 +1,14 @@
+import re
 from dataclasses import dataclass
 from typing import Tuple
+
+_DOI_RESOLVER_PREFIXES = (
+    "https://doi.org/",
+    "http://doi.org/",
+    "https://dx.doi.org/",
+    "http://dx.doi.org/",
+)
+_DOI_QUERY_SUFFIX = re.compile(r"\?[A-Za-z][A-Za-z0-9._~-]*=")
 
 
 @dataclass(frozen=True)
@@ -13,6 +22,7 @@ class Article:
     source: str
     detected: str = ""
     authors: Tuple[str, ...] = ()
+    source_id: str = ""
 
     @property
     def identity(self) -> str:
@@ -26,10 +36,16 @@ class Article:
 
 def normalize_doi(value: str) -> str:
     doi = (value or "").strip()
-    if doi.lower().startswith("doi:"):
-        doi = doi[4:]
-    if doi.lower().startswith("https://doi.org/"):
-        doi = doi[16:]
-    if doi.lower().startswith("http://doi.org/"):
-        doi = doi[15:]
-    return doi.strip().lower()
+    folded = doi.casefold()
+    if folded.startswith("doi:"):
+        doi = doi[4:].strip()
+        folded = doi.casefold()
+    for prefix in _DOI_RESOLVER_PREFIXES:
+        if folded.startswith(prefix):
+            doi = doi[len(prefix) :]
+            break
+    doi = doi.split("#", 1)[0]
+    query = _DOI_QUERY_SUFFIX.search(doi)
+    if query is not None:
+        doi = doi[: query.start()]
+    return doi.strip().rstrip(".,;)").casefold()

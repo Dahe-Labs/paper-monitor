@@ -1,6 +1,6 @@
 # Paper Monitor Architecture Hardening Plan
 
-This plan keeps the current product direction: shared Python core, Windows pywebview/pystray shell, and Mac Swift/AppKit shell.
+This plan keeps the current product direction: a Windows-only Python core, a short-lived pywebview window, and a native C tray.
 
 ## Phase 1: Contract And Safety (Completed)
 
@@ -12,17 +12,16 @@ This plan keeps the current product direction: shared Python core, Windows pyweb
 
 ## Phase 2: Repository And Release (Completed)
 
-- Keep the project in one repository with `paper_monitor/`, `windows/`, `macos/`, `scripts/`, `tests/`, `docs/`, and `.github/`.
+- Keep the project in one repository with `paper_monitor/`, `windows/`, `scripts/`, `tests/`, `docs/`, and `.github/`.
 - Keep `.repo-compare` ignored and use it only for temporary local comparisons.
-- Use GitHub Actions for Python tests, Windows packaging, macOS Swift tests, and release artifacts.
+- Use GitHub Actions for Python tests, Windows packaging, and release artifacts.
 - Keep generated build output out of source control except explicit release artifacts.
-- Align Mac `SearchPreset` IDs and queries with `paper_monitor/search_presets.py`; current Swift presets should be treated as legacy until they consume the shared contract.
 
 ## Phase 3: UI Maintainability (In Progress)
 
 - Keep Windows Settings JavaScript/CSS in static assets; move the remaining Dashboard script and styles out of the Python template in a future focused change.
 - Add browser-based smoke tests for Dashboard, Settings, Refresh Now, and bridge authorization.
-- Keep Mac Settings and Windows Settings aligned through the config schema, not through duplicated assumptions.
+- Keep Windows Settings aligned with the Python config schema rather than duplicating assumptions.
 
 ## Phase 4: Source Adapter Layer
 

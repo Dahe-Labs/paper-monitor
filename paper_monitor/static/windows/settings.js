@@ -6,6 +6,8 @@
     let selectedJournals = [];
     let extraJournalCandidates = [];
     let journalDualList = null;
+    let settingsLoaded = false;
+    let settingsDirty = false;
     const DUAL_LIST_MIME = "application/x-paper-monitor-dual-list";
 
     function field(id) {
@@ -16,6 +18,128 @@
       const element = field("status");
       element.textContent = message;
       element.className = "status" + (type ? " " + type : "");
+      element.setAttribute("role", type === "error" ? "alert" : "status");
+    }
+
+    function markSettingsDirty() {
+      if (settingsLoaded) settingsDirty = true;
+    }
+
+    function setDisabled(ids, disabled) {
+      ids.forEach(function (id) {
+        const element = field(id);
+        if (element) element.disabled = Boolean(disabled);
+      });
+    }
+
+    function syncBackgroundMonitoringState() {
+      const enabled = field("startup_enabled").checked;
+      setDisabled(["interval_seconds", "refresh_start_time"], !enabled);
+      const status = field("background_schedule_status");
+      status.dataset.enabled = enabled ? "true" : "false";
+      status.textContent = enabled
+        ? "Background monitoring is on. Start Time is an exact local time; later runs repeat at the selected frequency."
+        : "Background monitoring is off. Refresh Frequency and Start Time are saved but will not run.";
+      syncNotificationState();
+    }
+
+    function syncNotificationState() {
+      const monitoringEnabled = field("startup_enabled").checked;
+      const notifications = field("notifications_enabled");
+      notifications.disabled = !monitoringEnabled;
+      field("max_notifications").disabled = !monitoringEnabled || !notifications.checked;
+    }
+
+    function syncTrayStartupState() {
+      const trayEnabled = field("show_tray_icon").checked;
+      const launchAtLogin = field("launch_at_login");
+      if (!trayEnabled) launchAtLogin.checked = false;
+      launchAtLogin.disabled = !trayEnabled;
+    }
+
+    function syncOpenAlexRequirement() {
+      const enabled = field("openalex_enabled").checked && !field("openalex_enabled").disabled;
+      const apiKey = field("openalex_api_key");
+      apiKey.required = enabled;
+      apiKey.setAttribute("aria-required", enabled ? "true" : "false");
+    }
+
+    function syncCrossrefPoolStatus() {
+      const mailtoField = field("crossref_mailto");
+      const status = field("crossref_pool_status");
+      if (!field("crossref_enabled").checked || field("crossref_enabled").disabled) {
+        status.dataset.pool = "off";
+        status.textContent = "Crossref is off. Its saved source limits will apply when it is enabled.";
+        return;
+      }
+      const mailto = mailtoField.value.trim();
+      const requestedWorkers = Math.max(1, Number(field("crossref_max_workers").value) || 1);
+      const mailtoIsValid = !mailto || mailtoField.validity.valid;
+      if (!mailtoIsValid) {
+        status.dataset.pool = "invalid";
+        status.textContent = "Enter a valid contact email. Until then Crossref uses the public pool: 1 effective worker, 1 request/second.";
+        return;
+      }
+      if (!mailto) {
+        status.dataset.pool = "public";
+        status.textContent = "Public pool: 1 effective worker, 1 request/second. Add a contact email to use up to 3 polite-pool workers; the email is sent to Crossref with requests.";
+        return;
+      }
+      const effectiveWorkers = Math.min(requestedWorkers, 3);
+      status.dataset.pool = "polite";
+      status.textContent = "Polite pool: " + effectiveWorkers + " effective worker" +
+        (effectiveWorkers === 1 ? "" : "s") +
+        " (up to 3), 3 request starts/second. The contact email is sent to Crossref with requests.";
+    }
+
+    function syncSourceOptionState() {
+      const sourceFields = {
+        crossref_enabled: [
+          "crossref_days_back",
+          "crossref_rows_per_journal",
+          "crossref_timeout_seconds",
+          "crossref_max_workers",
+          "crossref_mailto"
+        ],
+        openalex_enabled: [
+          "openalex_days_back",
+          "openalex_per_page",
+          "openalex_max_pages",
+          "openalex_api_key"
+        ],
+        arxiv_enabled: [
+          "arxiv_days_back",
+          "arxiv_max_results",
+          "arxiv_search_field",
+          "arxiv_timeout_seconds",
+          "arxiv_query"
+        ]
+      };
+      Object.keys(sourceFields).forEach(function (checkboxId) {
+        const checkbox = field(checkboxId);
+        const active = checkbox.checked && !checkbox.disabled;
+        setDisabled(sourceFields[checkboxId], !active);
+      });
+      syncOpenAlexRequirement();
+      syncCrossrefPoolStatus();
+    }
+
+    function syncJournalSourceAvailability() {
+      const formalJournalCount = selectedJournals.filter(function (journal) {
+        return journalKey(journal) !== "arxiv";
+      }).length;
+      const unavailable = formalJournalCount === 0;
+      ["crossref_enabled", "openalex_enabled"].forEach(function (id) {
+        const checkbox = field(id);
+        checkbox.disabled = unavailable;
+        if (unavailable) checkbox.checked = false;
+      });
+      const status = field("source_scope_status");
+      status.hidden = !unavailable;
+      status.textContent = unavailable
+        ? "Crossref and OpenAlex require at least one formal journal in Journal Filter."
+        : "";
+      syncSourceOptionState();
     }
 
     function setValue(id, value) {
@@ -432,6 +556,7 @@
       field("selected_journal_count").textContent = String(selectedJournals.length) + " selected";
       field("candidate_journal_count").textContent = String(candidates.length) + " available";
       setLines("selected_journals", selectedJournals);
+      syncJournalSourceAvailability();
     }
 
     function setJournalPicker(catalog, selected) {
@@ -504,6 +629,7 @@
         field("arxiv_enabled").checked = true;
       }
       renderJournalPicker();
+      markSettingsDirty();
     }
 
     function removeSelectedJournal(journal) {
@@ -514,6 +640,7 @@
         field("arxiv_enabled").checked = false;
       }
       renderJournalPicker();
+      markSettingsDirty();
     }
 
     function addManualJournal() {
@@ -536,7 +663,7 @@
         return "1 day";
       }
       if (value % 86400 === 0) {
-        return String(value / 86400) + " day";
+        return String(value / 86400) + " days";
       }
       if (value % 3600 === 0) {
         return String(value / 3600) + "h";
@@ -608,6 +735,12 @@
         setValue("custom_direction_name", preset.label);
         setValue("crossref_query", preset.crossref_query);
         setValue("openalex_query", preset.openalex_query);
+        if (Array.isArray(preset.include_terms)) {
+          setLines("include_terms", preset.include_terms);
+        }
+        if (Array.isArray(preset.exclude_terms)) {
+          setLines("exclude_terms", preset.exclude_terms);
+        }
       } else if (!field("custom_direction_name").value.trim()) {
         setValue("custom_direction_name", "Custom");
       }
@@ -655,13 +788,11 @@
       fillFrequencyOptions(payload.refresh_frequency_options, payload.interval_seconds);
       setValue("refresh_start_time", payload.refresh_start_time || "");
       setValue("max_notifications", payload.max_notifications);
-      setValue("journal_scope_top_n", journalScope.top_n);
       fillSearchDirection(direction);
       setChecked("startup_enabled", appSettings.startup_enabled);
+      setChecked("launch_at_login", appSettings.launch_at_login);
       setChecked("show_tray_icon", appSettings.show_tray_icon);
       setChecked("notifications_enabled", appSettings.notifications_enabled);
-      setChecked("silent_startup_notifications", appSettings.silent_startup_notifications);
-      setChecked("refresh_on_launch", appSettings.refresh_on_launch);
 
       setLines("include_terms", payload.include_terms);
       setLines("exclude_terms", payload.exclude_terms);
@@ -669,17 +800,18 @@
 
       setChecked("crossref_enabled", crossref.enabled);
       setValue("crossref_days_back", crossref.days_back);
-      setValue("crossref_rows", crossref.rows);
       setValue("crossref_rows_per_journal", crossref.rows_per_journal);
       setValue("crossref_timeout_seconds", crossref.timeout_seconds);
       setValue("crossref_max_workers", crossref.max_workers);
       setValue("crossref_mailto", crossref.mailto);
+      syncCrossrefPoolStatus();
 
       setChecked("openalex_enabled", openalex.enabled);
       setValue("openalex_days_back", openalex.days_back);
       setValue("openalex_per_page", openalex.per_page);
       setValue("openalex_max_pages", openalex.max_pages);
       setValue("openalex_api_key", openalex.api_key);
+      syncOpenAlexRequirement();
 
       setChecked("arxiv_enabled", arxiv.enabled);
       setValue("arxiv_days_back", arxiv.days_back);
@@ -687,6 +819,9 @@
       setValue("arxiv_search_field", arxiv.search_field || "title");
       setValue("arxiv_timeout_seconds", arxiv.timeout_seconds);
       setValue("arxiv_query", arxiv.query);
+      syncBackgroundMonitoringState();
+      syncTrayStartupState();
+      syncJournalSourceAvailability();
     }
 
     function selectedDirectionLabel() {
@@ -707,10 +842,9 @@
         max_notifications: numberValue("max_notifications"),
         app_settings: {
           startup_enabled: field("startup_enabled").checked,
+          launch_at_login: field("launch_at_login").checked,
           show_tray_icon: field("show_tray_icon").checked,
-          notifications_enabled: field("notifications_enabled").checked,
-          silent_startup_notifications: field("silent_startup_notifications").checked,
-          refresh_on_launch: field("refresh_on_launch").checked
+          notifications_enabled: field("notifications_enabled").checked
         },
         search_direction: {
           preset: preset,
@@ -722,14 +856,12 @@
         include_terms: lines("include_terms"),
         exclude_terms: lines("exclude_terms"),
         journal_scope: {
-          top_n: numberValue("journal_scope_top_n"),
           selected_journals: selectedJournals.slice()
         },
         sources: {
           crossref: {
             enabled: field("crossref_enabled").checked,
             days_back: numberValue("crossref_days_back"),
-            rows: numberValue("crossref_rows"),
             rows_per_journal: numberValue("crossref_rows_per_journal"),
             timeout_seconds: numberValue("crossref_timeout_seconds"),
             max_workers: numberValue("crossref_max_workers"),
@@ -760,6 +892,8 @@
       setStatus("Loading settings...", "");
       const payload = await request("/api/settings");
       fillForm(payload);
+      settingsLoaded = true;
+      settingsDirty = false;
       setStatus("Settings loaded.", "ok");
     }
 
@@ -770,6 +904,7 @@
       try {
         const payload = await request("/api/settings/defaults");
         fillForm(payload);
+        settingsDirty = true;
         setStatus("Defaults loaded. Save to apply.", "ok");
       } catch (error) {
         setStatus(error.message || "Default settings could not be loaded.", "error");
@@ -797,14 +932,36 @@
       }
     }
 
+    function activateSettingsTab(tab, shouldFocus) {
+      if (!tab) return;
+      document.querySelectorAll(".tab").forEach(function (button) {
+        const selected = button === tab;
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+        button.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll(".panel").forEach(function (panel) {
+        const active = panel.id === tab.dataset.panel;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (shouldFocus) tab.focus();
+    }
+
     document.querySelectorAll(".tab").forEach(function (tab) {
       tab.addEventListener("click", function () {
-        document.querySelectorAll(".tab").forEach(function (button) {
-          button.setAttribute("aria-selected", button === tab ? "true" : "false");
-        });
-        document.querySelectorAll(".panel").forEach(function (panel) {
-          panel.classList.toggle("active", panel.id === tab.dataset.panel);
-        });
+        activateSettingsTab(tab, false);
+      });
+      tab.addEventListener("keydown", function (event) {
+        const tabs = Array.from(document.querySelectorAll(".tab"));
+        const current = tabs.indexOf(tab);
+        let next = current;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (current + 1) % tabs.length;
+        else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (current - 1 + tabs.length) % tabs.length;
+        else if (event.key === "Home") next = 0;
+        else if (event.key === "End") next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        activateSettingsTab(tabs[next], true);
       });
     });
 
@@ -812,9 +969,16 @@
     field("defaults-button").addEventListener("click", function () {
       restoreDefaults();
     });
+    field("startup_enabled").addEventListener("change", syncBackgroundMonitoringState);
+    field("notifications_enabled").addEventListener("change", syncNotificationState);
+    field("show_tray_icon").addEventListener("change", syncTrayStartupState);
     field("search_direction").addEventListener("change", applyPreset);
     field("crossref_query").addEventListener("input", promoteToCustom);
+    field("crossref_enabled").addEventListener("change", syncSourceOptionState);
+    field("crossref_max_workers").addEventListener("input", syncCrossrefPoolStatus);
+    field("crossref_mailto").addEventListener("input", syncCrossrefPoolStatus);
     field("openalex_query").addEventListener("input", promoteToCustom);
+    field("openalex_enabled").addEventListener("change", syncSourceOptionState);
     field("custom_direction_name").addEventListener("input", function () {
       if (field("search_direction").value !== "custom") {
         promoteToCustom();
@@ -828,6 +992,7 @@
       } else {
         removeSelectedJournal("arXiv");
       }
+      syncSourceOptionState();
     });
     field("journal_sort_mode").addEventListener("change", renderJournalPicker);
     field("add_manual_journal").addEventListener("click", addManualJournal);
@@ -838,6 +1003,23 @@
       }
     });
     field("settings-form").addEventListener("submit", saveSettings);
+    field("settings-form").addEventListener("input", markSettingsDirty);
+    field("settings-form").addEventListener("change", markSettingsDirty);
+    field("settings-form").addEventListener("invalid", function (event) {
+      const panel = event.target.closest(".panel");
+      if (panel) {
+        const tab = document.querySelector('.tab[data-panel="' + panel.id + '"]');
+        activateSettingsTab(tab, false);
+      }
+      const advanced = event.target.closest("details");
+      if (advanced) advanced.open = true;
+      setStatus("Check the highlighted setting before saving.", "error");
+    }, true);
+    window.addEventListener("beforeunload", function (event) {
+      if (!settingsDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
     loadSettings().catch(function (error) {
       setStatus(error.message || "Settings could not be loaded.", "error");
     });

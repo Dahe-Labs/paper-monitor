@@ -2,7 +2,7 @@ import copy
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from .config import load_app_config
+from .config import formal_journal_names, load_app_config
 from .filtering import match_article
 from .journal_metrics import load_journal_metrics
 from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
@@ -18,19 +18,26 @@ def run_crossref_keyword_analysis(
     date_to: str,
     sort_mode: str = "time",
     analysis_depth: str = "fast",
-    top_n: int = 30,
     selected_journals: Optional[Sequence[str]] = None,
     fetch_articles: Optional[FetchArticles] = None,
 ) -> Dict[str, object]:
     app_config = load_app_config(config_path)
     clean_analysis_depth = _analysis_depth(analysis_depth)
-    if selected_journals is not None and not selected_journals:
+    available_journals = tuple(
+        formal_journal_names(app_config.monitor_config.filter_config.journals)
+    )
+    journals = _validated_analysis_journals(
+        selected_journals,
+        available_journals,
+        app_config.monitor_config.filter_config.journal_aliases,
+    )
+    if not journals:
         scope = AnalysisScope(
             date_from=date_from,
             date_to=date_to,
+            available_journals=available_journals,
             selected_journals=(),
             sort_mode=sort_mode,
-            top_n=top_n,
         )
         payload = build_keyword_analysis_payload(
             [],
@@ -48,7 +55,7 @@ def run_crossref_keyword_analysis(
         app_config.source_config,
         date_from,
         date_to,
-        selected_journals,
+        journals,
         clean_analysis_depth,
         cache_dir=app_config.database_path.parent / "crossref-cache",
     )
@@ -85,13 +92,12 @@ def run_crossref_keyword_analysis(
             }
         )
 
-    journals = tuple(selected_journals or app_config.monitor_config.filter_config.journals)
     scope = AnalysisScope(
         date_from=date_from,
         date_to=date_to,
+        available_journals=available_journals,
         selected_journals=journals,
         sort_mode=sort_mode,
-        top_n=top_n,
     )
     payload = build_keyword_analysis_payload(
         candidates,
@@ -163,11 +169,52 @@ def _crossref_only_source_config(
 
 
 def _formal_crossref_journal_titles(values: Sequence[str]) -> List[str]:
-    return [
-        str(journal).strip()
-        for journal in values
-        if str(journal).strip() and _normalized_key(journal) != "arxiv"
-    ]
+    return formal_journal_names(values)
+
+
+def _validated_analysis_journals(
+    requested: Optional[Sequence[str]],
+    available: Sequence[str],
+    aliases: Dict[str, List[str]],
+) -> tuple[str, ...]:
+    if requested is None:
+        return tuple(available)
+    if isinstance(requested, (str, bytes)):
+        raise ValueError("Keyword Analysis journals must be a sequence of journal names")
+
+    allowed_keys = set()
+    for journal in available:
+        allowed_keys.add(_normalized_key(journal))
+        allowed_keys.update(
+            _normalized_key(alias)
+            for alias in aliases.get(journal, [])
+            if _normalized_key(alias)
+        )
+
+    journals = []
+    seen = set()
+    outside_scope = []
+    for value in requested:
+        if not isinstance(value, str):
+            raise ValueError("Keyword Analysis journals must be strings")
+        journal = " ".join(value.strip().split())
+        key = _normalized_key(journal)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if key == "arxiv":
+            continue
+        if key not in allowed_keys:
+            outside_scope.append(journal)
+            continue
+        journals.append(journal)
+
+    if outside_scope:
+        raise ValueError(
+            "Keyword Analysis journals must first be selected in Settings: "
+            + ", ".join(outside_scope)
+        )
+    return tuple(journals)
 
 
 def _normalized_key(value: object) -> str:

@@ -79,7 +79,7 @@ def _paper(
 
 
 class KeywordAnalysisTests(unittest.TestCase):
-    def test_selected_papers_apply_date_journal_sort_and_top_n(self):
+    def test_selected_papers_apply_date_journal_and_sort(self):
         candidates = [
             _paper(
                 "Old included journal",
@@ -105,7 +105,6 @@ class KeywordAnalysisTests(unittest.TestCase):
             date_to="2026-06-24",
             selected_journals=("Nature Energy", "Advanced Energy Materials"),
             sort_mode="time",
-            top_n=1,
         )
 
         selected = selected_papers(candidates, _metrics(), scope)
@@ -129,7 +128,7 @@ class KeywordAnalysisTests(unittest.TestCase):
                 doi="10.1038/older",
             ),
         ]
-        scope = AnalysisScope(date_from="2026-06-21", date_to="2026-06-24", sort_mode="time", top_n=2)
+        scope = AnalysisScope(date_from="2026-06-21", date_to="2026-06-24", sort_mode="time")
 
         selected = selected_papers(candidates, _metrics(), scope)
 
@@ -152,7 +151,7 @@ class KeywordAnalysisTests(unittest.TestCase):
                 doi="10.1000/higher",
             ),
         ]
-        scope = AnalysisScope(sort_mode="impact_factor", top_n=2)
+        scope = AnalysisScope(sort_mode="impact_factor")
 
         selected = selected_papers(candidates, _metrics(), scope)
 
@@ -384,14 +383,14 @@ class KeywordAnalysisTests(unittest.TestCase):
         payload = build_keyword_analysis_payload(candidates, _metrics())
 
         json.dumps(payload)
-        self.assertEqual(payload["scope"]["top_n"], 30)
+        self.assertNotIn("top_n", payload["scope"])
         self.assertEqual(payload["papers"][0]["impact_factor"], 64.8)
         self.assertEqual(payload["papers"][0]["detected"], "2026-06-24")
         self.assertEqual(payload["papers"][0]["authors"], ["Ada Lovelace", "Grace Hopper"])
         self.assertEqual(payload["journal_catalog"][0]["journal"], "Nature Energy")
         self.assertIn("solid electrolyte", [item["name"] for item in payload["taxonomy"]])
 
-    def test_build_keyword_analysis_payload_does_not_cap_articles_by_top_n(self):
+    def test_build_keyword_analysis_payload_includes_all_matching_articles(self):
         candidates = [
             _paper(
                 "Newer solid electrolyte paper",
@@ -416,7 +415,7 @@ class KeywordAnalysisTests(unittest.TestCase):
             ),
         ]
 
-        payload = build_keyword_analysis_payload(candidates, _metrics(), AnalysisScope(top_n=1, sort_mode="time"))
+        payload = build_keyword_analysis_payload(candidates, _metrics(), AnalysisScope(sort_mode="time"))
 
         self.assertEqual(len(payload["papers"]), 3)
         self.assertEqual(
@@ -467,7 +466,7 @@ class KeywordAnalysisTests(unittest.TestCase):
         ]
         candidates[0].pop("matched")
 
-        selected = selected_papers(candidates, _metrics(), AnalysisScope(top_n="invalid"))
+        selected = selected_papers(candidates, _metrics(), AnalysisScope())
 
         self.assertEqual([paper["title"] for paper in selected], ["Missing matched value"])
 

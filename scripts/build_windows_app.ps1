@@ -1,7 +1,9 @@
 param(
   [ValidateSet("OneFile", "OneDir", "Both")]
   [string]$Mode = "Both",
-  [string]$Version = "0.0.0"
+  [string]$Version = "0.0.0",
+  [string]$PrebuiltNativeTrayPath = "",
+  [switch]$GenerateIconOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,17 +20,28 @@ $Launcher = Join-Path $Root "windows\PaperMonitor.pyw"
 $Icon = Join-Path $Root "windows\assets\PaperMonitor.ico"
 $IconScript = Join-Path $Root "scripts\generate_windows_icon.py"
 $VersionInfoScript = Join-Path $Root "scripts\generate_windows_version_info.py"
+$NativeTrayBuildScript = Join-Path $Root "scripts\build_windows_native_tray.ps1"
 $VersionInfo = Join-Path $BuildDir "PaperMonitor.version.txt"
 $OneFileExe = Join-Path $DistDir "PaperMonitor.exe"
 $OneDirRoot = Join-Path $DistDir "PaperMonitor"
 $OneDirExe = Join-Path $OneDirRoot "PaperMonitor.exe"
+$NativeTrayExe = if ([string]::IsNullOrWhiteSpace($PrebuiltNativeTrayPath)) {
+  Join-Path $DistDir "PaperMonitorTray.exe"
+} else {
+  [System.IO.Path]::GetFullPath($PrebuiltNativeTrayPath)
+}
 $BuildMode = $Mode
 $RequiredWebViewRuntimeFiles = @(
   "webview\lib\Microsoft.Web.WebView2.Core.dll",
   "webview\lib\Microsoft.Web.WebView2.WinForms.dll",
-  "webview\lib\runtimes\win-arm64\native\WebView2Loader.dll",
-  "webview\lib\runtimes\win-x64\native\WebView2Loader.dll",
-  "webview\lib\runtimes\win-x86\native\WebView2Loader.dll"
+  "webview\lib\runtimes\win-x64\native\WebView2Loader.dll"
+)
+$UnsupportedWebViewRuntimes = @("win-arm64", "win-x86")
+$UnusedOnedirFiles = @(
+  "pythonnet\runtime\Python.Runtime.xml",
+  "clr_loader\ffi\dlls\x86\ClrLoader.dll",
+  "webview\lib\WebBrowserInterop.x86.dll",
+  "webview\lib\pywebview-android.jar"
 )
 
 function Get-ArrayTail {
@@ -170,24 +183,6 @@ function Invoke-PythonOutput {
   return @($Output)
 }
 
-function Get-PyInstallerArchiveViewer {
-  param([Parameter(Mandatory=$true)]$Python)
-
-  if (-not [string]::IsNullOrWhiteSpace($Python.Executable)) {
-    $Candidate = Join-Path (Split-Path -Parent $Python.Executable) "pyi-archive_viewer.exe"
-    if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
-      return $Candidate
-    }
-  }
-
-  $Command = Get-Command -Name "pyi-archive_viewer.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($null -ne $Command) {
-    return $Command.Source
-  }
-
-  throw "Could not find pyi-archive_viewer.exe for onefile validation."
-}
-
 function Get-WebViewLibPath {
   param([Parameter(Mandatory=$true)]$Python)
 
@@ -240,18 +235,50 @@ function Test-OnedirWebViewRuntime {
   }
 }
 
+function Remove-UnsupportedOnedirWebViewBinaries {
+  param([Parameter(Mandatory=$true)][string]$AppRoot)
+
+  foreach ($Base in @((Join-Path $AppRoot "_internal"), $AppRoot)) {
+    foreach ($Runtime in $UnsupportedWebViewRuntimes) {
+      # pywebview 6.2 checks all three runtime directories at import time,
+      # even though a 64-bit process only loads the x64 binary. Keep the
+      # directory and remove just the unused loader.
+      $Candidate = Join-Path $Base ("webview\lib\runtimes\" + $Runtime + "\native\WebView2Loader.dll")
+      if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+        Remove-Item -LiteralPath $Candidate -Force
+      }
+    }
+  }
+}
+
+function Remove-UnusedOnedirFiles {
+  param([Parameter(Mandatory=$true)][string]$AppRoot)
+
+  foreach ($Base in @((Join-Path $AppRoot "_internal"), $AppRoot)) {
+    foreach ($RelativePath in $UnusedOnedirFiles) {
+      $Candidate = Join-Path $Base $RelativePath
+      if (Test-Path -LiteralPath $Candidate -PathType Leaf) {
+        Remove-Item -LiteralPath $Candidate -Force
+      }
+    }
+  }
+}
+
 function Test-OnefileWebViewRuntime {
   param(
     [Parameter(Mandatory=$true)][string]$ExePath,
     [Parameter(Mandatory=$true)]$Python
   )
 
-  $ArchiveViewer = Get-PyInstallerArchiveViewer -Python $Python
-  $global:LASTEXITCODE = 0
-  $ArchiveListing = & $ArchiveViewer --list --brief $ExePath
-  if ($LASTEXITCODE -ne 0) {
-    throw "pyi-archive_viewer failed with exit code ${LASTEXITCODE}: $ExePath"
-  }
+  # Invoke the module through the selected Python. Console-script launchers
+  # embed their original venv path and stop working when a checkout is moved.
+  $ArchiveListing = Invoke-PythonOutput -Python $Python -Arguments @(
+    "-m",
+    "PyInstaller.utils.cliutils.archive_viewer",
+    "--list",
+    "--brief",
+    $ExePath
+  )
   $NormalizedListing = (($ArchiveListing -join "`n") -replace "\\", "/")
   foreach ($RelativePath in $RequiredWebViewRuntimeFiles) {
     $Needle = $RelativePath -replace "\\", "/"
@@ -273,6 +300,23 @@ Write-Host "Using Python: $($Python.DisplayName) ($($Python.Executable))"
 Invoke-Python -Python $Python -Arguments @($IconScript)
 if (-not (Test-Path -LiteralPath $Icon -PathType Leaf)) {
   throw "Icon generation completed but expected icon was not found: $Icon"
+}
+if ($GenerateIconOnly) {
+  Write-Host "Generated $Icon"
+  return
+}
+
+if ([string]::IsNullOrWhiteSpace($PrebuiltNativeTrayPath)) {
+  if (-not (Test-Path -LiteralPath $NativeTrayBuildScript -PathType Leaf)) {
+    throw "Missing native tray build script: $NativeTrayBuildScript"
+  }
+  & $NativeTrayBuildScript -OutputPath $NativeTrayExe
+  if ($LASTEXITCODE -ne 0) {
+    throw "Native tray build failed with exit code $LASTEXITCODE."
+  }
+}
+if (-not (Test-Path -LiteralPath $NativeTrayExe -PathType Leaf)) {
+  throw "Native tray executable was not found: $NativeTrayExe"
 }
 
 Invoke-Python -Python $Python -Arguments @(
@@ -316,6 +360,8 @@ $CommonPyInstallerArguments = @(
   ((Join-Path $Root "paper_monitor\resources") + ";paper_monitor\resources"),
   "--add-data",
   ($WebViewLib + ";webview\lib"),
+  "--add-binary",
+  ($NativeTrayExe + ";."),
   "--collect-data",
   "webview",
   "--collect-binaries",
@@ -323,17 +369,13 @@ $CommonPyInstallerArguments = @(
   "--collect-submodules",
   "webview",
   "--hidden-import",
-  "pystray",
-  "--hidden-import",
   "_sqlite3",
   "--hidden-import",
   "unicodedata",
   "--hidden-import",
-  "PIL.Image",
+  "winrt.windows.data.xml.dom",
   "--hidden-import",
-  "PIL.ImageDraw",
-  "--hidden-import",
-  "win11toast",
+  "winrt.windows.ui.notifications",
   "--hidden-import",
   "webview",
   "--hidden-import",
@@ -352,6 +394,28 @@ $CommonPyInstallerArguments = @(
   "webview.platforms.gtk",
   "--exclude-module",
   "webview.platforms.qt",
+  "--exclude-module",
+  "win11toast",
+  "--exclude-module",
+  "winrt.windows.foundation",
+  "--exclude-module",
+  "winrt.windows.foundation.collections",
+  "--exclude-module",
+  "winrt.windows.storage",
+  "--exclude-module",
+  "winrt.windows.storage.streams",
+  "--exclude-module",
+  "winrt.windows.globalization",
+  "--exclude-module",
+  "winrt.windows.graphics.imaging",
+  "--exclude-module",
+  "winrt.windows.media.core",
+  "--exclude-module",
+  "winrt.windows.media.ocr",
+  "--exclude-module",
+  "winrt.windows.media.playback",
+  "--exclude-module",
+  "winrt.windows.media.speechsynthesis",
   "--distpath",
   $DistDir,
   "--workpath",
@@ -363,13 +427,25 @@ $CommonPyInstallerArguments = @(
 $BuildOneDir = $BuildMode -in @("OneDir", "Both")
 $BuildOneFile = $BuildMode -in @("OneFile", "Both")
 
-# PyInstaller is provided by requirements-windows.txt.
+# PyInstaller is installed from requirements-windows.lock.txt, compiled from requirements-windows.txt.
 if ($BuildOneDir) {
   Invoke-Python -Python $Python -Arguments @($CommonPyInstallerArguments + @("--onedir", $Launcher))
   if (-not (Test-Path -LiteralPath $OneDirExe -PathType Leaf)) {
     throw "PyInstaller completed but expected onedir exe was not found: $OneDirExe"
   }
+  Remove-UnsupportedOnedirWebViewBinaries -AppRoot $OneDirRoot
+  Remove-UnusedOnedirFiles -AppRoot $OneDirRoot
   Test-OnedirWebViewRuntime -AppRoot $OneDirRoot
+  Copy-Item -LiteralPath $NativeTrayExe -Destination (Join-Path $OneDirRoot "PaperMonitorTray.exe") -Force
+  $EmbeddedOnedirTray = Join-Path $OneDirRoot "_internal\PaperMonitorTray.exe"
+  if (Test-Path -LiteralPath $EmbeddedOnedirTray -PathType Leaf) {
+    Remove-Item -LiteralPath $EmbeddedOnedirTray -Force
+  }
+  Copy-Item -LiteralPath $Icon -Destination (Join-Path $OneDirRoot "PaperMonitor.ico") -Force
+  $EmbeddedOnedirIcon = Join-Path $OneDirRoot "_internal\windows\assets\PaperMonitor.ico"
+  if (Test-Path -LiteralPath $EmbeddedOnedirIcon -PathType Leaf) {
+    Remove-Item -LiteralPath $EmbeddedOnedirIcon -Force
+  }
   Write-Host "Built $OneDirExe"
 }
 

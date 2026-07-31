@@ -6,10 +6,11 @@ from typing import Dict
 
 from .filtering import FilterConfig
 from .journal_metrics import load_journal_metrics
-from .monitor import MonitorConfig
 from .search_presets import DEFAULT_SEARCH_DIRECTION
 
 SOURCE_ONLY_JOURNAL_KEYS = {"arxiv"}
+MIN_NOTIFICATIONS = 1
+MAX_NOTIFICATIONS = 20
 
 
 DEFAULT_CONFIG = {
@@ -17,11 +18,12 @@ DEFAULT_CONFIG = {
     "dashboard_path": "work/paper-monitor/dashboard/latest.html",
     "journal_metrics_path": "journal_metrics.json",
     "settings_schema_version": 2,
-    "interval_seconds": 43200,
-    "refresh_start_time": "",
+    "interval_seconds": 86400,
+    "refresh_start_time": "09:00",
     "max_notifications": 5,
     "app_settings": {
         "startup_enabled": False,
+        "launch_at_login": False,
         "show_tray_icon": True,
         "notifications_enabled": True,
         "silent_startup_notifications": True,
@@ -57,40 +59,7 @@ DEFAULT_CONFIG = {
         "solid-state lighting",
         "solid-state drive",
     ],
-    "journals": [
-        "Nature",
-        "Science",
-        "Nature Energy",
-        "Nature Materials",
-        "Nature Nanotechnology",
-        "Nature Chemistry",
-        "Nature Communications",
-        "Science Advances",
-        "Advanced Materials",
-        "Advanced Functional Materials",
-        "Advanced Energy Materials",
-        "Advanced Science",
-        "Energy & Environmental Science",
-        "ACS Energy Letters",
-        "Joule",
-        "Matter",
-        "Energy Storage Materials",
-        "Nano Energy",
-        "Chem",
-        "Angewandte Chemie International Edition",
-        "Journal of the American Chemical Society",
-        "ACS Nano",
-        "Nano Letters",
-        "Chemistry of Materials",
-        "Journal of Materials Chemistry A",
-        "Materials Horizons",
-        "Energy & Environmental Materials",
-        "Small",
-        "ACS Applied Materials & Interfaces",
-        "Journal of Power Sources",
-    ],
     "journal_scope": {
-        "top_n": 15,
         "selected_journals": [
             "Nature",
             "Science",
@@ -138,7 +107,6 @@ DEFAULT_CONFIG = {
             "max_workers": 3,
             "retry_count": 2,
             "min_request_interval_seconds": None,
-            "journal_titles": [],
             "query": DEFAULT_SEARCH_DIRECTION["crossref_query"],
             "mailto": "",
         },
@@ -165,10 +133,19 @@ DEFAULT_CONFIG = {
 @dataclass(frozen=True)
 class RuntimeAppSettings:
     startup_enabled: bool
+    launch_at_login: bool
     show_tray_icon: bool
     notifications_enabled: bool
     silent_startup_notifications: bool
     refresh_on_launch: bool
+
+
+@dataclass(frozen=True)
+class MonitorConfig:
+    """Matching and notification limits loaded from the shared config file."""
+
+    filter_config: FilterConfig
+    max_notifications: int
 
 
 @dataclass(frozen=True)
@@ -180,7 +157,6 @@ class AppConfig:
     refresh_start_time: str
     monitor_config: MonitorConfig
     source_config: Dict[str, object]
-    journal_scope_top_n: int
     app_settings: RuntimeAppSettings
 
 
@@ -206,21 +182,38 @@ def load_app_config(path: Path) -> AppConfig:
             exclude_terms=_dedupe_nonempty(raw.get("exclude_terms", DEFAULT_CONFIG["exclude_terms"])),
             journals=selected_journals,
             journal_aliases=_journal_aliases(journal_metrics_path, selected_journals),
+            journal_allowlist_enabled=True,
         ),
-        max_notifications=int(raw.get("max_notifications", DEFAULT_CONFIG["max_notifications"])),
+        max_notifications=normalize_max_notifications(raw.get("max_notifications")),
     )
     journals = monitor_config.filter_config.journals
     source_config = copy.deepcopy(raw.get("sources", DEFAULT_CONFIG["sources"]))
     crossref_query, openalex_query = _search_direction_queries(raw)
+    formal_journals = formal_journal_names(journals)
     crossref_config = source_config.get("crossref")
     if isinstance(crossref_config, dict):
-        journal_titles = crossref_config.get("journal_titles") or journals
-        crossref_config["journal_titles"] = _formal_journals(journal_titles)
+        # The selected journal list is the only runtime authority. A stale
+        # source-level journal_titles value must never override Settings.
+        crossref_config["journal_titles"] = formal_journals
+        if not formal_journals:
+            crossref_config["enabled"] = False
         if crossref_query:
             crossref_config["query"] = crossref_query
     openalex_config = source_config.get("openalex")
-    if isinstance(openalex_config, dict) and openalex_query:
-        openalex_config["query"] = openalex_query
+    if isinstance(openalex_config, dict):
+        if not formal_journals:
+            openalex_config["enabled"] = False
+        if openalex_query:
+            openalex_config["query"] = openalex_query
+    rss_config = source_config.get("rss")
+    if isinstance(rss_config, list):
+        selected_keys = {_normalize_key(journal) for journal in formal_journals}
+        source_config["rss"] = [
+            feed
+            for feed in rss_config
+            if isinstance(feed, dict)
+            and _normalize_key(feed.get("name")) in selected_keys
+        ]
     arxiv_config = source_config.setdefault("arxiv", copy.deepcopy(DEFAULT_CONFIG["sources"]["arxiv"]))
     if isinstance(arxiv_config, dict):
         arxiv_config["enabled"] = _contains_source_candidate(journals, "arxiv")
@@ -233,9 +226,21 @@ def load_app_config(path: Path) -> AppConfig:
         refresh_start_time=_refresh_start_time(raw),
         monitor_config=monitor_config,
         source_config=source_config,
-        journal_scope_top_n=_journal_scope_top_n(raw, len(journals)),
         app_settings=_app_settings(raw),
     )
+
+
+def normalize_max_notifications(value: object) -> int:
+    """Normalize legacy/manual values to the single supported 1..20 range."""
+
+    if isinstance(value, bool):
+        parsed = int(DEFAULT_CONFIG["max_notifications"])
+    else:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(DEFAULT_CONFIG["max_notifications"])
+    return min(MAX_NOTIFICATIONS, max(MIN_NOTIFICATIONS, parsed))
 
 
 def _dedupe_nonempty(values):
@@ -254,10 +259,15 @@ def _selected_journals(raw):
     scope = raw.get("journal_scope")
     if isinstance(scope, dict) and "selected_journals" in scope:
         return _dedupe_nonempty(scope.get("selected_journals", []))
-    return _dedupe_nonempty(raw.get("journals", DEFAULT_CONFIG["journals"]))
+    return _dedupe_nonempty(
+        raw.get(
+            "journals",
+            DEFAULT_CONFIG["journal_scope"]["selected_journals"],
+        )
+    )
 
 
-def _formal_journals(values):
+def formal_journal_names(values):
     return [
         journal
         for journal in _dedupe_nonempty(values)
@@ -288,16 +298,6 @@ def _normalize_key(value) -> str:
     return " ".join(str(value or "").casefold().split())
 
 
-def _journal_scope_top_n(raw, fallback: int) -> int:
-    scope = raw.get("journal_scope")
-    value = scope.get("top_n") if isinstance(scope, dict) else fallback
-    try:
-        top_n = int(value)
-    except (TypeError, ValueError):
-        top_n = fallback
-    return min(300, max(1, top_n))
-
-
 def _search_direction_queries(raw):
     direction = raw.get("search_direction")
     if not isinstance(direction, dict):
@@ -308,7 +308,7 @@ def _search_direction_queries(raw):
 
 
 def _refresh_start_time(raw) -> str:
-    value = str(raw.get("refresh_start_time") or "").strip()
+    value = str(raw.get("refresh_start_time", DEFAULT_CONFIG["refresh_start_time"]) or "").strip()
     if not value:
         return ""
     parts = value.split(":")
@@ -329,6 +329,7 @@ def _app_settings(raw) -> RuntimeAppSettings:
     values = raw.get("app_settings") if isinstance(raw.get("app_settings"), dict) else {}
     return RuntimeAppSettings(
         startup_enabled=_bool_value(values.get("startup_enabled"), bool(defaults["startup_enabled"])),
+        launch_at_login=_bool_value(values.get("launch_at_login"), bool(defaults["launch_at_login"])),
         show_tray_icon=_bool_value(values.get("show_tray_icon"), bool(defaults["show_tray_icon"])),
         notifications_enabled=_bool_value(values.get("notifications_enabled"), bool(defaults["notifications_enabled"])),
         silent_startup_notifications=_bool_value(

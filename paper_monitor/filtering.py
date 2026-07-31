@@ -11,6 +11,7 @@ class FilterConfig:
     exclude_terms: List[str]
     journals: List[str]
     journal_aliases: Dict[str, List[str]] = field(default_factory=dict)
+    journal_allowlist_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,7 @@ def match_article(article: Article, config: FilterConfig) -> MatchResult:
         return MatchResult(False, "excluded-term", [], None)
 
     journal_match = _match_journal(article.journal, config.journals, config.journal_aliases)
-    if config.journals and journal_match is None:
+    if journal_match is None and (config.journals or config.journal_allowlist_enabled):
         return MatchResult(False, "journal-not-allowed", [], None)
 
     matched_terms = [term for term in config.include_terms if _contains_term(text, term)]

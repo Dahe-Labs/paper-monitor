@@ -1,12 +1,16 @@
 import copy
 import json
-import shutil
 from collections.abc import Mapping
 from importlib import resources
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .config import DEFAULT_CONFIG
+from .config import (
+    DEFAULT_CONFIG,
+    MAX_NOTIFICATIONS,
+    MIN_NOTIFICATIONS,
+    normalize_max_notifications,
+)
 from .config_store import update_config_atomic
 from .journal_metrics import load_journal_metrics
 from .search_presets import SEARCH_DIRECTION_PRESETS, find_preset
@@ -17,9 +21,8 @@ class SettingsError(ValueError):
 
 
 INT_RANGES = {
-    "interval_seconds": (60, 60 * 60 * 24 * 30),
-    "max_notifications": (1, 100),
-    "journal_scope.top_n": (1, 300),
+    "interval_seconds": (60 * 60, 60 * 60 * 24 * 30),
+    "max_notifications": (MIN_NOTIFICATIONS, MAX_NOTIFICATIONS),
     "sources.crossref.days_back": (1, 3650),
     "sources.crossref.rows": (1, 1000),
     "sources.crossref.rows_per_journal": (1, 1000),
@@ -36,7 +39,7 @@ INT_RANGES = {
 LIST_LIMITS = {
     "include_terms": (500, 160),
     "exclude_terms": (500, 160),
-    "journal_scope.selected_journals": (500, 200),
+    "journal_scope.selected_journals": (301, 200),
 }
 
 REFRESH_FREQUENCY_OPTIONS = [
@@ -44,12 +47,12 @@ REFRESH_FREQUENCY_OPTIONS = [
     {"label": "6h", "seconds": 6 * 60 * 60},
     {"label": "12h", "seconds": 12 * 60 * 60},
     {"label": "1 day", "seconds": 24 * 60 * 60},
-    {"label": "2 day", "seconds": 2 * 24 * 60 * 60},
-    {"label": "3 day", "seconds": 3 * 24 * 60 * 60},
-    {"label": "7 day", "seconds": 7 * 24 * 60 * 60},
+    {"label": "2 days", "seconds": 2 * 24 * 60 * 60},
+    {"label": "3 days", "seconds": 3 * 24 * 60 * 60},
+    {"label": "7 days", "seconds": 7 * 24 * 60 * 60},
 ]
 
-def render_settings_page(config_path: Path, base_url: str, token: str) -> str:
+def render_settings_page(base_url: str, token: str) -> str:
     context = {
         "baseUrl": str(base_url).rstrip("/"),
         "token": str(token),
@@ -166,21 +169,14 @@ def _settings_payload_from_raw(raw: Mapping[str, object], config_path: Optional[
             fallback=str(DEFAULT_CONFIG.get("refresh_start_time", "")),
         ),
         "refresh_frequency_options": copy.deepcopy(REFRESH_FREQUENCY_OPTIONS),
-        "max_notifications": _int_value(
-            raw.get("max_notifications", DEFAULT_CONFIG["max_notifications"]),
-            "max_notifications",
-            fallback=int(DEFAULT_CONFIG["max_notifications"]),
+        "max_notifications": normalize_max_notifications(
+            raw.get("max_notifications")
         ),
         "app_settings": _app_settings_payload(raw.get("app_settings")),
         "search_direction": search_direction_payload,
         "include_terms": _dedupe_list(raw.get("include_terms", DEFAULT_CONFIG["include_terms"]), "include_terms"),
         "exclude_terms": _dedupe_list(raw.get("exclude_terms", DEFAULT_CONFIG["exclude_terms"]), "exclude_terms"),
         "journal_scope": {
-            "top_n": _int_value(
-                scope.get("top_n", default_scope.get("top_n", 15)),
-                "journal_scope.top_n",
-                fallback=int(default_scope.get("top_n", 15)),
-            ),
             "selected_journals": selected_journals,
         },
         "journal_catalog": _journal_catalog_payload(raw, config_path),
@@ -287,16 +283,24 @@ def _validated_settings(payload: Mapping[str, object]) -> Dict[str, object]:
     crossref_enabled = _required_bool(crossref.get("enabled"), "sources.crossref.enabled")
     openalex_enabled = _required_bool(openalex.get("enabled"), "sources.openalex.enabled")
     arxiv_enabled = _required_bool(arxiv.get("enabled"), "sources.arxiv.enabled")
+    app_settings = _validated_app_settings(payload.get("app_settings"))
+    refresh_start_time = _time_value(
+        payload.get("refresh_start_time", ""),
+        "refresh_start_time",
+    )
+    if app_settings["startup_enabled"] and not refresh_start_time:
+        raise SettingsError(
+            "Start Time is required when Background Monitoring is enabled."
+        )
 
     result = {
         "interval_seconds": _bounded_int(payload.get("interval_seconds"), "interval_seconds"),
-        "refresh_start_time": _time_value(payload.get("refresh_start_time", ""), "refresh_start_time"),
+        "refresh_start_time": refresh_start_time,
         "max_notifications": _bounded_int(payload.get("max_notifications"), "max_notifications"),
-        "app_settings": _validated_app_settings(payload.get("app_settings")),
+        "app_settings": app_settings,
         "include_terms": _dedupe_list(payload.get("include_terms", []), "include_terms"),
         "exclude_terms": _dedupe_list(payload.get("exclude_terms", []), "exclude_terms"),
         "journal_scope": {
-            "top_n": _bounded_int(journal_scope.get("top_n"), "journal_scope.top_n"),
             "selected_journals": _dedupe_list(
                 journal_scope.get("selected_journals", []),
                 "journal_scope.selected_journals",
@@ -343,6 +347,14 @@ def _validated_settings(payload: Mapping[str, object]) -> Dict[str, object]:
         result["journal_scope"]["selected_journals"],
         result["sources"]["arxiv"]["enabled"],
     )
+    formal_journals = [
+        journal
+        for journal in result["journal_scope"]["selected_journals"]
+        if _normalized_key(journal) != "arxiv"
+    ]
+    if not formal_journals:
+        result["sources"]["crossref"]["enabled"] = False
+        result["sources"]["openalex"]["enabled"] = False
     return result
 
 
@@ -363,11 +375,10 @@ def _apply_settings(raw: Mapping[str, object], settings: Mapping[str, object]) -
     updated["exclude_terms"] = settings["exclude_terms"]
 
     journal_scope = updated.get("journal_scope") if isinstance(updated.get("journal_scope"), dict) else {}
-    journal_scope["top_n"] = settings["journal_scope"]["top_n"]
+    journal_scope.pop("top_n", None)
     journal_scope["selected_journals"] = settings["journal_scope"]["selected_journals"]
     updated["journal_scope"] = journal_scope
-    selected_journals = settings["journal_scope"]["selected_journals"]
-    updated["journals"] = selected_journals
+    updated.pop("journals", None)
 
     sources = updated.get("sources") if isinstance(updated.get("sources"), dict) else {}
     updated["sources"] = sources
@@ -376,7 +387,7 @@ def _apply_settings(raw: Mapping[str, object], settings: Mapping[str, object]) -
         source_config = sources.get(source_name) if isinstance(sources.get(source_name), dict) else {}
         source_config.update(source_settings)
         sources[source_name] = source_config
-    sources["crossref"]["journal_titles"] = _formal_journal_titles(selected_journals)
+    sources["crossref"].pop("journal_titles", None)
 
     updated["search_direction"] = dict(settings["search_direction"])
 
@@ -487,27 +498,26 @@ def _app_settings_payload(value: object) -> Dict[str, bool]:
     mapping = value if isinstance(value, Mapping) else {}
     return {
         "startup_enabled": _bool_value(mapping.get("startup_enabled", defaults["startup_enabled"])),
+        "launch_at_login": _bool_value(mapping.get("launch_at_login", defaults["launch_at_login"])),
         "show_tray_icon": _bool_value(mapping.get("show_tray_icon", defaults["show_tray_icon"])),
         "notifications_enabled": _bool_value(mapping.get("notifications_enabled", defaults["notifications_enabled"])),
-        "silent_startup_notifications": _bool_value(
-            mapping.get("silent_startup_notifications", defaults["silent_startup_notifications"]),
-        ),
-        "refresh_on_launch": _bool_value(mapping.get("refresh_on_launch", defaults["refresh_on_launch"])),
     }
 
 
 def _validated_app_settings(value: object) -> Dict[str, bool]:
     mapping = _mapping(value, "app_settings")
-    return {
+    result = {
         "startup_enabled": _required_bool(mapping.get("startup_enabled"), "app_settings.startup_enabled"),
+        "launch_at_login": _required_bool(
+            mapping.get("launch_at_login", DEFAULT_CONFIG["app_settings"]["launch_at_login"]),
+            "app_settings.launch_at_login",
+        ),
         "show_tray_icon": _required_bool(mapping.get("show_tray_icon"), "app_settings.show_tray_icon"),
         "notifications_enabled": _required_bool(mapping.get("notifications_enabled"), "app_settings.notifications_enabled"),
-        "silent_startup_notifications": _required_bool(
-            mapping.get("silent_startup_notifications"),
-            "app_settings.silent_startup_notifications",
-        ),
-        "refresh_on_launch": _required_bool(mapping.get("refresh_on_launch"), "app_settings.refresh_on_launch"),
     }
+    if result["launch_at_login"] and not result["show_tray_icon"]:
+        raise SettingsError("Start at Windows Sign-in requires Tray Icon.")
+    return result
 
 
 def _matching_search_preset(crossref_query: str, openalex_query: str):
@@ -548,16 +558,6 @@ def _time_value(value: object, name: str, fallback: object = None) -> str:
     if fallback is not None:
         return str(fallback or "").strip()
     raise SettingsError("%s must be empty or in HH:MM format." % name)
-
-
-def _write_config_with_backup(config_path: Path, payload: Mapping[str, object]) -> None:
-    path = Path(config_path)
-    backup_path = path.with_name(path.name + ".bak")
-    temp_path = path.with_name(".%s.windows-settings.tmp" % path.name)
-    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-    temp_path.write_text(text, encoding="utf-8")
-    shutil.copy2(str(path), str(backup_path))
-    temp_path.replace(path)
 
 
 def _merge_known_settings(base: Mapping[str, object], incoming: Mapping[str, object]) -> Dict[str, object]:
@@ -695,10 +695,6 @@ def _sync_arxiv_selection(selected_journals: List[str], enabled: bool) -> List[s
     if enabled:
         without_arxiv.append("arxiv")
     return without_arxiv
-
-
-def _formal_journal_titles(selected_journals: List[str]) -> List[str]:
-    return [journal for journal in selected_journals if _normalized_key(journal) != "arxiv"]
 
 
 def _contains_normalized(values: List[str], needle: str) -> bool:

@@ -1,5 +1,8 @@
-pystray>=0.19,<1
+# Human-maintained top-level dependency ranges.
+# CI and release builds install requirements-windows.lock.txt.
 Pillow>=10,<13
-win11toast>=0.35,<1
 pyinstaller>=6,<7
 pywebview>=6.2,<7
+winrt-runtime>=3.2,<4
+winrt-Windows-Data-Xml-Dom>=3.2,<4
+winrt-Windows-UI-Notifications>=3.2,<4

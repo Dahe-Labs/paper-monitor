@@ -1,13 +1,30 @@
 import json
-from datetime import date
+import os
+import tempfile
+import threading
+from datetime import date, datetime
 from html import escape
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import urlsplit
 
 from .app_identity import DISPLAY_NAME
-from .date_utils import display_article_date, first_iso_date, format_display_date
+from .date_utils import (
+    display_article_date,
+    first_iso_date,
+    first_iso_date_key,
+    format_display_date,
+    iso_date_sort_key,
+)
 from .journal_metrics import JournalMetrics
-from .keyword_analysis import AnalysisScope, build_keyword_analysis_payload
+from .keyword_analysis import (
+    AnalysisScope,
+    build_keyword_analysis_payload,
+    build_keyword_analysis_seed_payload,
+)
+
+_DASHBOARD_WRITE_LOCK = threading.Lock()
+_MATCHED_PAPERS_INITIAL_LIMIT = 50
 
 
 def render_dashboard(
@@ -15,11 +32,79 @@ def render_dashboard(
     candidates: List[Dict[str, object]],
     metrics: JournalMetrics,
     analysis_scope: Optional[AnalysisScope] = None,
+    *,
+    lifecycle_listing: bool = False,
+    defer_keyword_analysis: bool = False,
 ) -> str:
     run = run or {}
     matched = [candidate for candidate in candidates if candidate.get("matched")]
     rejected = [candidate for candidate in candidates if not candidate.get("matched")]
     selected_journal_count = len(analysis_scope.selected_journals) if analysis_scope else 0
+    if lifecycle_listing:
+        refresh_id = str(run.get("id") or "").strip()
+        header_meta = "Local results retained for 30 days"
+        finished_at = str(run.get("finished_at") or "").strip()
+        refresh_status = str(run.get("status") or "").strip()
+        if finished_at:
+            header_meta += " &middot; Last refresh: " + escape(
+                _format_refresh_datetime(finished_at)
+            )
+        if refresh_status:
+            header_meta += " &middot; " + escape(
+                refresh_status.replace("_", " ").title()
+            )
+        summary_parts = [
+            '<div class="pill">Saved papers (30 days): %s</div>'
+            % escape(str(len(matched))),
+        ]
+        if refresh_id:
+            summary_parts.extend(
+                [
+                    '<div class="pill">Last run fetched: %s</div>'
+                    % escape(str(run.get("fetched", 0))),
+                    '<div class="pill">Matched: %s</div>'
+                    % escape(str(run.get("matched", 0))),
+                    '<div class="pill">New: %s</div>'
+                    % escape(str(run.get("new_matches", 0))),
+                ]
+            )
+        summary_parts.append(
+            '<div class="pill">Selected journals: %s</div>'
+            % escape(str(selected_journal_count))
+        )
+        summary_html = '<section class="summary">%s</section>' % "".join(summary_parts)
+        matched_heading = "Detected Papers"
+        matched_empty_text = "No detected papers in the last 30 days."
+        rejected_section = ""
+    else:
+        header_meta = "Last run: %s &middot; Run ID: %s" % (
+            escape(format_display_date(run.get("finished_at") or run.get("started_at") or "")),
+            escape(str(run.get("id") or "")),
+        )
+        summary_html = """<section class="summary">
+      <div class="pill">Fetched: %s</div>
+      <div class="pill">Matched: %s</div>
+      <div class="pill">New matches: %s</div>
+      <div class="pill">Skipped: %s</div>
+      <div class="pill">Selected journals: %s</div>
+    </section>""" % (
+            escape(str(run.get("fetched", 0))),
+            escape(str(run.get("matched", 0))),
+            escape(str(run.get("new_matches", 0))),
+            escape(str(run.get("skipped", 0))),
+            escape(str(selected_journal_count)),
+        )
+        matched_heading = "Matched Papers"
+        matched_empty_text = "No matched papers in this run."
+        rejected_section = """<h2>Rejected Candidates</h2>
+    <details class="rejected-candidates">
+      <summary>Show rejected candidates (up to 100)</summary>
+      %s
+    </details>""" % _render_candidates(
+            rejected[:100],
+            metrics,
+            empty_text="No rejected candidates in this run.",
+        )
     return """<!doctype html>
 <html lang="en">
 <head>
@@ -100,11 +185,10 @@ def render_dashboard(
     .analysis-dual-pane h4 { margin: 0; font-size: 12px; }
     .analysis-dual-listbox { display: grid; align-content: start; gap: 0; min-height: 120px; max-height: 280px; overflow: auto; padding: 0; }
     .analysis-dual-listbox.drag-over { outline: 2px solid #0969da; outline-offset: -3px; background: #eff6ff; }
-    .analysis-dual-item { border: 0; border-bottom: 1px solid #e4e4e8; border-radius: 0; background: #ffffff; color: #1f2933; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 29px; padding: 4px 7px; text-align: left; font: inherit; font-size: 12px; font-weight: 700; }
+    .analysis-dual-item { border: 0; border-bottom: 1px solid #e4e4e8; border-radius: 0; background: #ffffff; color: #1f2933; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; min-height: 29px; padding: 5px 7px; text-align: left; font: inherit; font-size: 12px; font-weight: 700; }
     .analysis-dual-item:hover { background: #f6f8fa; border-color: #afb8c1; }
     .analysis-dual-item:focus-visible { position: relative; z-index: 1; outline: 2px solid #0969da; outline-offset: -2px; }
-    .analysis-journal-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .analysis-journal-impact { color: #57606a; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .analysis-journal-name { min-width: 0; line-height: 1.3; overflow-wrap: anywhere; white-space: normal; }
     .checkbox-option { display: flex; gap: 7px; align-items: flex-start; font-size: 13px; line-height: 1.35; }
     .checkbox-option input { flex: 0 0 auto; margin-top: 2px; }
     .secondary-button, .mini-button { border: 1px solid #d8dee4; border-radius: 6px; background: #ffffff; color: #1f2933; cursor: pointer; font-weight: 700; }
@@ -140,6 +224,8 @@ def render_dashboard(
     .paper { border: 1px solid #d8dee4; border-radius: 6px; padding: 8px 10px; margin: 5px 0; }
     .paper h3 { font-size: 13.5px; line-height: 1.28; margin: 0 0 4px; }
     .meta { color: #57606a; font-size: 11.5px; line-height: 1.32; }
+    .matched-papers-more { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 18px 0 6px; }
+    .matched-papers-more .meta { margin: 0; }
     .journal-name { color: #1f2933; font-weight: 700; }
     .terms { margin-top: 4px; font-size: 11.5px; line-height: 1.32; }
     .rejected-candidates { margin-top: 8px; }
@@ -157,18 +243,12 @@ def render_dashboard(
         <button type="button" id="keyword-analysis-nav" class="primary-button" aria-controls="keyword-analysis" aria-expanded="false">Keyword Analysis</button>
       </div>
     </div>
-    <div class="meta">Last run: %s · Run ID: %s</div>
+    <div class="meta">%s</div>
   </header>
   <div id="dashboard-view">
-    <section class="summary">
-      <div class="pill">Fetched: %s</div>
-      <div class="pill">Matched: %s</div>
-      <div class="pill">New notifications: %s</div>
-      <div class="pill">Skipped: %s</div>
-      <div class="pill">Selected journals: %s</div>
-    </section>
+    %s
     <div class="section-title-row">
-      <h2>Matched Papers</h2>
+      <h2>%s</h2>
       <label class="sort-control" for="matched-papers-sort">Sort
         <select id="matched-papers-sort">
           <option value="time">Time</option>
@@ -178,11 +258,7 @@ def render_dashboard(
     </div>
     <div id="matched-papers-list">%s</div>
     <script type="application/json" id="matched-papers-data">%s</script>
-    <h2>Rejected Candidates</h2>
-    <details class="rejected-candidates">
-      <summary>Show rejected candidates (up to 100)</summary>
-      %s
-    </details>
+    %s
   </div>
   <section id="keyword-analysis" class="analysis-shell" data-chart-view="bars" hidden>
     <div class="analysis-header">
@@ -216,24 +292,65 @@ def render_dashboard(
 """ % (
         escape(DISPLAY_NAME),
         escape(DISPLAY_NAME),
-        escape(format_display_date(run.get("finished_at") or run.get("started_at") or "")),
-        escape(str(run.get("id") or "")),
-        escape(str(run.get("fetched", 0))),
-        escape(str(run.get("matched", 0))),
-        escape(str(run.get("new_matches", 0))),
-        escape(str(run.get("skipped", 0))),
-        escape(str(selected_journal_count)),
-        _render_candidate_groups(matched, metrics, empty_text="No matched papers in this run."),
-        _matched_papers_payload_json(matched, metrics, empty_text="No matched papers in this run."),
-        _render_candidates(rejected[:100], metrics, empty_text="No rejected candidates in this run."),
-        _keyword_analysis_payload_json(matched, metrics, analysis_scope),
+        header_meta,
+        summary_html,
+        escape(matched_heading),
+        _render_initial_candidate_groups(
+            matched,
+            metrics,
+            empty_text=matched_empty_text,
+        ),
+        _matched_papers_payload_json(matched, metrics, empty_text=matched_empty_text),
+        rejected_section,
+        (
+            '{"deferred":true}'
+            if defer_keyword_analysis
+            else _keyword_analysis_payload_json(matched, metrics, analysis_scope)
+        ),
         _keyword_analysis_script() + _matched_papers_script(),
     )
 
 
-def write_dashboard(path, run, candidates, metrics, analysis_scope: Optional[AnalysisScope] = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_dashboard(run, candidates, metrics, analysis_scope), encoding="utf-8")
+def _format_refresh_datetime(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return format_display_date(text)
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    hour = parsed.hour % 12 or 12
+    suffix = "AM" if parsed.hour < 12 else "PM"
+    return (
+        f"{format_display_date(parsed.date().isoformat())}, "
+        f"{hour}:{parsed.minute:02d} {suffix}"
+    )
+
+
+def write_dashboard_html(path, html: str) -> None:
+    path = Path(path)
+    with _DASHBOARD_WRITE_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                descriptor = -1
+                stream.write(html)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, path)
+        except Exception:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+            raise
 
 
 def _keyword_analysis_script() -> str:
@@ -244,9 +361,10 @@ const keywordAnalysisState = {
   chartView: "bars",
   sortMode: "time",
   analysisDepth: "fast",
-  topN: 30,
   dateFrom: "",
   dateTo: "",
+  availableJournals: [],
+  hasAvailableJournalScope: false,
   selectedJournals: [],
   journalSearch: "",
   journalCategory: "",
@@ -274,7 +392,18 @@ const ANALYSIS_SORT_MODES = [
   ["impact_factor", "2Y Impact"],
   ["relevance", "Relevance"]
 ];
+const DASHBOARD_REFRESH_MAX_STATUS_RETRIES = 3;
+const DASHBOARD_REFRESH_RETRY_BASE_DELAY_MS = 1000;
+const DASHBOARD_REFRESH_RETRY_MAX_DELAY_MS = 4000;
+const DASHBOARD_REFRESH_ERROR_DISPLAY_MS = 6000;
+const DASHBOARD_VIEW_STORAGE_KEY = "paperMonitor.refreshView.v1";
 let keywordAnalysisProgressTimer = null;
+let dashboardRefreshPollTimer = null;
+let keywordAnalysisInitialized = false;
+let keywordAnalysisSeedLoading = false;
+let activeDashboardRefreshRequestId = "";
+let dashboardRefreshGeneration = 0;
+let dashboardRefreshStatusFailureCount = 0;
 let analysisJournalCatalogCachePayload = null;
 let analysisJournalCatalogCache = [];
 let analysisJournalCatalogIndex = new Map();
@@ -312,12 +441,64 @@ if (typeof window !== "undefined") {
 }
 
 document.addEventListener("DOMContentLoaded", function () {
-  loadSavedAnalysisState();
-  initializeAnalysisDefaults();
   wireDashboardRefreshEvents();
   wireAnalysisEvents();
-  renderKeywordAnalysis();
+  restoreDashboardView();
 });
+
+function initializeKeywordAnalysis() {
+  if (keywordAnalysisInitialized || keywordAnalysisSeedLoading) return;
+  if (keywordAnalysisState.payload && keywordAnalysisState.payload.deferred) {
+    loadDeferredKeywordAnalysisPayload();
+    return;
+  }
+  finishKeywordAnalysisInitialization();
+}
+
+function finishKeywordAnalysisInitialization() {
+  if (keywordAnalysisInitialized) return;
+  loadSavedAnalysisState();
+  initializeAnalysisDefaults();
+  keywordAnalysisInitialized = true;
+}
+
+function loadDeferredKeywordAnalysisPayload() {
+  const base = String(window.paperMonitorBridgeBaseURL || "").replace(/\/+$/, "");
+  if (!base || typeof fetch !== "function") {
+    keywordAnalysisState.analysisStatus = "error";
+    keywordAnalysisState.analysisError = "Local keyword-analysis data is unavailable.";
+    renderKeywordAnalysis();
+    return;
+  }
+  keywordAnalysisSeedLoading = true;
+  keywordAnalysisState.analysisStatus = "loading";
+  keywordAnalysisState.analysisError = "";
+  fetch(base + "/api/keyword-analysis-data", {
+    method: "GET",
+    headers: {
+      "X-Paper-Monitor-Token": String(window.paperMonitorBridgeToken || "")
+    }
+  }).then(function (response) {
+    return response.json().catch(function () { return {}; }).then(function (payload) {
+      if (!response.ok || !payload || typeof payload !== "object" || !Array.isArray(payload.papers)) {
+        throw new Error(String(payload && payload.error || "Keyword-analysis data could not be loaded."));
+      }
+      return payload;
+    });
+  }).then(function (payload) {
+    keywordAnalysisState.payload = payload;
+    keywordAnalysisState.analysisStatus = "idle";
+    keywordAnalysisState.analysisError = "";
+    finishKeywordAnalysisInitialization();
+    renderKeywordAnalysis();
+  }).catch(function (error) {
+    keywordAnalysisState.analysisStatus = "error";
+    keywordAnalysisState.analysisError = String(error && error.message || "Keyword-analysis data could not be loaded.");
+    renderKeywordAnalysis();
+  }).finally(function () {
+    keywordAnalysisSeedLoading = false;
+  });
+}
 
 function loadSavedAnalysisState() {
   try {
@@ -332,7 +513,6 @@ function loadSavedAnalysisState() {
     if (typeof saved.analysisDepth === "string") keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(saved.analysisDepth);
     if (typeof saved.dateFrom === "string") keywordAnalysisState.dateFrom = saved.dateFrom;
     if (typeof saved.dateTo === "string") keywordAnalysisState.dateTo = saved.dateTo;
-    keywordAnalysisState.topN = coercePositiveInt(saved.topN, keywordAnalysisState.topN);
     if (Array.isArray(saved.selectedJournals)) {
       keywordAnalysisState.selectedJournals = saved.selectedJournals.map(normalizeDisplayTerm).filter(Boolean);
       keywordAnalysisState.hasJournalSelection = saved.hasJournalSelection !== false;
@@ -344,6 +524,9 @@ function loadSavedAnalysisState() {
     if (Array.isArray(saved.customTaxonomy)) keywordAnalysisState.customTaxonomy = sanitizeTaxonomy(saved.customTaxonomy);
     if (Array.isArray(saved.acceptedCandidateTerms)) keywordAnalysisState.acceptedCandidateTerms = saved.acceptedCandidateTerms.map(normalizeDisplayTerm).filter(Boolean);
     if (Array.isArray(saved.ignoredTerms)) keywordAnalysisState.ignoredTerms = saved.ignoredTerms.map(normalizeDisplayTerm).filter(Boolean);
+    if (typeof saved.candidateTermsOpen === "boolean") keywordAnalysisState.candidateTermsOpen = saved.candidateTermsOpen;
+    if (typeof saved.blockTermsOpen === "boolean") keywordAnalysisState.blockTermsOpen = saved.blockTermsOpen;
+    if (typeof saved.taxonomyEditorOpen === "boolean") keywordAnalysisState.taxonomyEditorOpen = saved.taxonomyEditorOpen;
     if (typeof saved.paperListOpen === "boolean") keywordAnalysisState.paperListOpen = saved.paperListOpen;
     if (typeof saved.journalScopeSignature === "string") keywordAnalysisState.savedJournalScopeSignature = saved.journalScopeSignature;
     keywordAnalysisState.hasSavedState = true;
@@ -358,7 +541,6 @@ function saveAnalysisState() {
       chartView: keywordAnalysisState.chartView,
       sortMode: keywordAnalysisState.sortMode,
       analysisDepth: normalizeAnalysisDepth(keywordAnalysisState.analysisDepth),
-      topN: clampTopJournalCount(keywordAnalysisState.topN),
       dateFrom: keywordAnalysisState.dateFrom,
       dateTo: keywordAnalysisState.dateTo,
       hasJournalSelection: Boolean(keywordAnalysisState.hasJournalSelection),
@@ -370,6 +552,9 @@ function saveAnalysisState() {
       customTaxonomy: keywordAnalysisState.customTaxonomy,
       acceptedCandidateTerms: keywordAnalysisState.acceptedCandidateTerms,
       ignoredTerms: keywordAnalysisState.ignoredTerms,
+      candidateTermsOpen: Boolean(keywordAnalysisState.candidateTermsOpen),
+      blockTermsOpen: Boolean(keywordAnalysisState.blockTermsOpen),
+      taxonomyEditorOpen: Boolean(keywordAnalysisState.taxonomyEditorOpen),
       paperListOpen: Boolean(keywordAnalysisState.paperListOpen),
       journalScopeSignature: currentJournalScopeSignature()
     }));
@@ -382,18 +567,15 @@ function initializeAnalysisDefaults() {
   const payload = keywordAnalysisState.payload || {};
   const scope = payload.scope || {};
   const papers = Array.isArray(payload.papers) ? payload.papers : [];
-  const scopeJournals = scopedAnalysisJournals();
+  const scopeJournals = selectedAnalysisScopeJournals();
+  const availableScope = availableAnalysisScopeJournals(scope);
+  keywordAnalysisState.availableJournals = availableScope.journals;
+  keywordAnalysisState.hasAvailableJournalScope = availableScope.defined;
   const allJournals = allAnalysisJournals();
-  const scopeSignature = journalScopeSignature(scopeJournals);
+  const scopeSignature = journalScopeSignature(allJournals);
   const savedJournalScopeIsCurrent = keywordAnalysisState.hasSavedState && (
-    !scopeJournals.length || keywordAnalysisState.savedJournalScopeSignature === scopeSignature
+    keywordAnalysisState.savedJournalScopeSignature === scopeSignature
   );
-  const defaultTopN = coercePositiveInt(scope.default_top_n || scope.top_n, 30);
-  if (!keywordAnalysisState.hasSavedState) {
-    keywordAnalysisState.topN = clampTopJournalCount(defaultTopN);
-  } else {
-    keywordAnalysisState.topN = clampTopJournalCount(keywordAnalysisState.topN);
-  }
   ensureAnalysisDateDefaults(scope, papers);
   keywordAnalysisState.journalScopeSignature = scopeSignature;
 
@@ -407,7 +589,7 @@ function initializeAnalysisDefaults() {
     keywordAnalysisState.selectedJournals = scopeJournals;
     keywordAnalysisState.hasJournalSelection = true;
   } else if ((!keywordAnalysisState.hasSavedState || !savedJournalScopeIsCurrent) && allJournals.length) {
-    keywordAnalysisState.selectedJournals = topNAnalysisJournals();
+    keywordAnalysisState.selectedJournals = allJournals;
     keywordAnalysisState.hasJournalSelection = true;
   }
   if (!["bars", "donut", "trend", "table"].includes(keywordAnalysisState.chartView)) {
@@ -420,7 +602,7 @@ function initializeAnalysisDefaults() {
     keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(scope.analysis_depth);
   }
   keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(keywordAnalysisState.analysisDepth);
-  keywordAnalysisState.selectedJournals = createDualListSelection(allAnalysisJournals(), keywordAnalysisState.selectedJournals).selected;
+  keywordAnalysisState.selectedJournals = journalsWithinAvailableScope(keywordAnalysisState.selectedJournals);
   keywordAnalysisState.selectedPhraseLengths = normalizePhraseLengths(keywordAnalysisState.selectedPhraseLengths);
   keywordAnalysisState.blockedTerms = uniqueSelectionValues(keywordAnalysisState.blockedTerms);
   keywordAnalysisState.acceptedCandidateTerms = uniqueSelectionValues(keywordAnalysisState.acceptedCandidateTerms);
@@ -544,15 +726,18 @@ function setDualListDragPayload(event, listId, value, source) {
 
 function wireDashboardRefreshEvents() {
   const button = document.getElementById("paper-monitor-refresh-button");
-  if (!button || button.dataset.paperMonitorRefreshWired === "1") return;
-  button.dataset.paperMonitorRefreshWired = "1";
-  button.addEventListener("click", function () {
-    requestDashboardRefresh(button);
-  });
+  if (!button) return;
+  if (button.dataset.paperMonitorRefreshWired !== "1") {
+    button.dataset.paperMonitorRefreshWired = "1";
+    button.addEventListener("click", function () {
+      requestDashboardRefresh(button);
+    });
+  }
+  syncDashboardRefreshState(button);
 }
 
 function requestDashboardRefresh(button) {
-  const original = button.textContent || "Refresh Now";
+  const generation = beginDashboardRefreshGeneration();
   button.disabled = true;
   button.textContent = "Refreshing...";
 
@@ -565,21 +750,17 @@ function requestDashboardRefresh(button) {
   if (postToPaperMonitorBridge(
     "/api/refresh-now",
     {},
-    function () {
-      const base = getPaperMonitorBridgeBaseURL();
-      if (base) {
-        window.location.href = base + "/?t=" + Date.now();
-      } else {
-        window.location.reload();
-      }
+    function (state) {
+      if (!isCurrentDashboardRefreshGeneration(generation)) return;
+      dashboardRefreshStatusFailureCount = 0;
+      activeDashboardRefreshRequestId = String(state && state.request_id || "");
+      applyDashboardRefreshState(button, state, true, generation);
     },
     function (message) {
-      const cleanMessage = message === "refresh_already_running" ? "Already Refreshing" : "Refresh Failed";
-      button.textContent = cleanMessage;
-      window.setTimeout(function () {
-        button.textContent = original;
-        button.disabled = false;
-      }, 1800);
+      if (!isCurrentDashboardRefreshGeneration(generation)) return;
+      activeDashboardRefreshRequestId = "";
+      const cleanMessage = message === "refresh_already_running" ? "Already Refreshing" : message;
+      showDashboardRefreshError(button, cleanMessage, generation);
     }
   )) {
     return;
@@ -587,9 +768,156 @@ function requestDashboardRefresh(button) {
 
   button.textContent = "Open App to Refresh";
   window.setTimeout(function () {
-    button.textContent = original;
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    button.textContent = "Refresh Now";
     button.disabled = false;
   }, 1800);
+}
+
+function syncDashboardRefreshState(button) {
+  const generation = beginDashboardRefreshGeneration();
+  fetchDashboardRefreshState(button, false, generation);
+}
+
+function beginDashboardRefreshGeneration() {
+  dashboardRefreshGeneration += 1;
+  dashboardRefreshStatusFailureCount = 0;
+  activeDashboardRefreshRequestId = "";
+  clearDashboardRefreshPollTimer();
+  return dashboardRefreshGeneration;
+}
+
+function isCurrentDashboardRefreshGeneration(generation) {
+  return generation === dashboardRefreshGeneration;
+}
+
+function clearDashboardRefreshPollTimer() {
+  if (dashboardRefreshPollTimer !== null) window.clearTimeout(dashboardRefreshPollTimer);
+  dashboardRefreshPollTimer = null;
+}
+
+function scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, delay) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return;
+  clearDashboardRefreshPollTimer();
+  dashboardRefreshPollTimer = window.setTimeout(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshPollTimer = null;
+    fetchDashboardRefreshState(button, reloadOnSuccess, generation);
+  }, delay);
+}
+
+function fetchDashboardRefreshState(button, reloadOnSuccess, generation) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return false;
+  const baseURL = getPaperMonitorBridgeBaseURL();
+  if (!baseURL || typeof fetch !== "function") return false;
+  const headers = {};
+  const token = getPaperMonitorBridgeToken();
+  if (token) headers["X-Paper-Monitor-Token"] = token;
+  fetch(baseURL + "/api/refresh-status", { method: "GET", headers: headers }).then(function (response) {
+    return response.json().then(function (state) {
+      if (!response.ok) throw new Error(state.error || "Refresh status failed.");
+      return state;
+    });
+  }).then(function (state) {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshStatusFailureCount = 0;
+    if (!activeDashboardRefreshRequestId && state && state.status === "running") {
+      activeDashboardRefreshRequestId = String(state.request_id || "");
+      reloadOnSuccess = true;
+    }
+    applyDashboardRefreshState(button, state, reloadOnSuccess, generation);
+  }).catch(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    dashboardRefreshStatusFailureCount += 1;
+    if (dashboardRefreshStatusFailureCount > DASHBOARD_REFRESH_MAX_STATUS_RETRIES) {
+      clearDashboardRefreshPollTimer();
+      activeDashboardRefreshRequestId = "";
+      button.textContent = "Status Unavailable";
+      button.disabled = false;
+      return;
+    }
+    const retryDelay = Math.min(
+      DASHBOARD_REFRESH_RETRY_BASE_DELAY_MS * Math.pow(2, dashboardRefreshStatusFailureCount - 1),
+      DASHBOARD_REFRESH_RETRY_MAX_DELAY_MS
+    );
+    if (!activeDashboardRefreshRequestId) {
+      button.textContent = "Refresh Now";
+      button.disabled = false;
+    } else {
+      button.disabled = true;
+      button.textContent = "Refreshing...";
+    }
+    scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, retryDelay);
+  });
+  return true;
+}
+
+function applyDashboardRefreshState(button, state, reloadOnSuccess, generation) {
+  if (!isCurrentDashboardRefreshGeneration(generation)) return;
+  const status = String(state && state.status || "idle");
+  if (status === "running") {
+    const requestId = String(state && state.request_id || "");
+    if (requestId) activeDashboardRefreshRequestId = requestId;
+    button.disabled = true;
+    button.textContent = "Refreshing...";
+    scheduleDashboardRefreshStatusPoll(button, reloadOnSuccess, generation, 750);
+    return;
+  }
+  clearDashboardRefreshPollTimer();
+  dashboardRefreshStatusFailureCount = 0;
+  if ((status === "succeeded" || status === "completed") && reloadOnSuccess) {
+    activeDashboardRefreshRequestId = "";
+    reloadDashboardAfterRefresh();
+    return;
+  }
+  if (status === "partial") {
+    activeDashboardRefreshRequestId = "";
+    showDashboardRefreshError(
+      button,
+      String(state && state.error || "Refresh completed with partial results."),
+      generation,
+      reloadOnSuccess ? reloadDashboardAfterRefresh : null
+    );
+    return;
+  }
+  if (status === "failed") {
+    activeDashboardRefreshRequestId = "";
+    showDashboardRefreshError(button, String(state && state.error || "Refresh failed."), generation);
+    return;
+  }
+  activeDashboardRefreshRequestId = "";
+  button.title = "";
+  button.textContent = "Refresh Now";
+  button.disabled = false;
+}
+
+function showDashboardRefreshError(button, message, generation, onComplete) {
+  const fullMessage = normalizeDisplayTerm(message) || "Refresh failed.";
+  const visibleMessage = fullMessage.length > 96 ? fullMessage.slice(0, 93) + "..." : fullMessage;
+  button.disabled = true;
+  button.textContent = visibleMessage;
+  button.title = fullMessage;
+  window.setTimeout(function () {
+    if (!isCurrentDashboardRefreshGeneration(generation)) return;
+    if (typeof onComplete === "function") {
+      onComplete();
+      return;
+    }
+    button.title = "";
+    button.textContent = "Refresh Now";
+    button.disabled = false;
+  }, DASHBOARD_REFRESH_ERROR_DISPLAY_MS);
+}
+
+function reloadDashboardAfterRefresh() {
+  saveAnalysisState();
+  rememberDashboardView();
+  const base = getPaperMonitorBridgeBaseURL();
+  if (base) {
+    window.location.href = base + "/?t=" + Date.now();
+  } else {
+    window.location.reload();
+  }
 }
 
 if (typeof window !== "undefined") {
@@ -597,14 +925,11 @@ if (typeof window !== "undefined") {
     const button = document.getElementById("paper-monitor-refresh-button");
     if (!button) return;
     if (ok) {
-      window.location.reload();
+      reloadDashboardAfterRefresh();
       return;
     }
-    button.textContent = message || "Refresh Failed";
-    window.setTimeout(function () {
-      button.textContent = "Refresh Now";
-      button.disabled = false;
-    }, 1800);
+    const generation = beginDashboardRefreshGeneration();
+    showDashboardRefreshError(button, message || "Refresh failed.", generation);
   };
 }
 
@@ -826,6 +1151,7 @@ function toggleKeywordAnalysisView() {
 function showKeywordAnalysisView() {
   const dashboard = document.getElementById("dashboard-view");
   const analysis = document.getElementById("keyword-analysis");
+  initializeKeywordAnalysis();
   if (dashboard) dashboard.hidden = true;
   if (analysis) analysis.hidden = false;
   setKeywordAnalysisNavState(true);
@@ -840,6 +1166,40 @@ function showDashboardView() {
   if (dashboard) dashboard.hidden = false;
   setKeywordAnalysisNavState(false);
   scrollToPageTop();
+}
+
+function rememberDashboardView() {
+  if (typeof window === "undefined") return;
+  const analysis = document.getElementById("keyword-analysis");
+  try {
+    if (!window.sessionStorage) return;
+    window.sessionStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, JSON.stringify({
+      view: analysis && !analysis.hidden ? "analysis" : "dashboard",
+      scrollY: Number(window.scrollY || 0)
+    }));
+  } catch (error) {
+    return;
+  }
+}
+
+function restoreDashboardView() {
+  if (typeof window === "undefined") return;
+  let savedState = null;
+  try {
+    if (!window.sessionStorage) return;
+    const raw = String(window.sessionStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY) || "");
+    if (!raw) return;
+    savedState = JSON.parse(raw);
+  } catch (error) {
+    return;
+  }
+  if (!savedState || typeof savedState !== "object") return;
+  if (savedState.view === "analysis") showKeywordAnalysisView();
+  else if (savedState.view === "dashboard") showDashboardView();
+  const scrollY = Number(savedState.scrollY || 0);
+  if (Number.isFinite(scrollY) && typeof window.scrollTo === "function") {
+    window.scrollTo(0, scrollY);
+  }
 }
 
 function setKeywordAnalysisNavState(isAnalysisOpen) {
@@ -916,16 +1276,6 @@ function applyAnalysisJournalAction(action, journal) {
 }
 
 function applyAnalysisStepperAction(action) {
-  if (action === "analysis-top-n-increment") {
-    keywordAnalysisState.topN = clampTopJournalCount(coercePositiveInt(keywordAnalysisState.topN, 30) + 1);
-    keywordAnalysisState.selectedJournals = topNAnalysisJournals();
-    keywordAnalysisState.hasJournalSelection = true;
-  }
-  if (action === "analysis-top-n-decrement") {
-    keywordAnalysisState.topN = clampTopJournalCount(coercePositiveInt(keywordAnalysisState.topN, 30) - 1);
-    keywordAnalysisState.selectedJournals = topNAnalysisJournals();
-    keywordAnalysisState.hasJournalSelection = true;
-  }
   if (action === "analysis-sort-next") {
     keywordAnalysisState.sortMode = adjacentSortMode(1);
   }
@@ -987,6 +1337,9 @@ function allAnalysisPapers() {
 }
 
 function allAnalysisJournals() {
+  if (keywordAnalysisState.hasAvailableJournalScope) {
+    return uniqueSelectionValues(keywordAnalysisState.availableJournals);
+  }
   const catalogJournals = analysisJournalCatalog().map(function (entry) {
     return normalizeDisplayTerm(entry.journal);
   }).filter(Boolean);
@@ -995,7 +1348,7 @@ function allAnalysisJournals() {
 }
 
 function fallbackAnalysisJournals() {
-  const scopedJournals = scopedAnalysisJournals();
+  const scopedJournals = selectedAnalysisScopeJournals();
   const paperJournals = allAnalysisPapers().map(function (paper) {
     return normalizeDisplayTerm(paper.journal);
   }).filter(Boolean);
@@ -1037,24 +1390,44 @@ function analysisJournalEntry(journal) {
   return analysisJournalCatalogIndex.get(key) || { journal: normalizeDisplayTerm(journal), aliases: [], impact_factor: null, impact_label: "", category: "Manual" };
 }
 
-function topNAnalysisJournals() {
-  const journals = allAnalysisJournals();
-  return journals.slice(0, clampTopJournalCount(keywordAnalysisState.topN));
-}
-
-function clampTopJournalCount(value) {
-  const parsed = coercePositiveInt(value, 30);
-  return Math.max(1, Math.min(300, parsed));
-}
-
-function scopedAnalysisJournals() {
+function selectedAnalysisScopeJournals() {
   const payload = keywordAnalysisState.payload || {};
   const scope = payload.scope || {};
   return uniqueSelectionValues(Array.isArray(scope.selected_journals) ? scope.selected_journals : []);
 }
 
+function availableAnalysisScopeJournals(scope) {
+  const value = scope && typeof scope === "object" ? scope : {};
+  if (Object.prototype.hasOwnProperty.call(value, "available_journals")) {
+    return {
+      defined: true,
+      journals: uniqueSelectionValues(Array.isArray(value.available_journals) ? value.available_journals : [])
+    };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "selected_journals")) {
+    return {
+      defined: true,
+      journals: uniqueSelectionValues(Array.isArray(value.selected_journals) ? value.selected_journals : [])
+    };
+  }
+  return { defined: false, journals: [] };
+}
+
+function journalsWithinAvailableScope(values) {
+  if (!keywordAnalysisState.hasAvailableJournalScope) {
+    return createDualListSelection(allAnalysisJournals(), values).selected;
+  }
+  const available = allAnalysisJournals();
+  const availableByKey = new Map(available.map(function (journal) {
+    return [normalizePhrase(journal), journal];
+  }));
+  return uniqueSelectionValues(values).map(function (journal) {
+    return availableByKey.get(normalizePhrase(journal)) || "";
+  }).filter(Boolean);
+}
+
 function currentJournalScopeSignature() {
-  return journalScopeSignature(scopedAnalysisJournals());
+  return journalScopeSignature(allAnalysisJournals());
 }
 
 function journalScopeSignature(journals) {
@@ -1292,7 +1665,6 @@ function requestKeywordAnalysis() {
     date_to: keywordAnalysisState.dateTo || "",
     sort_mode: keywordAnalysisState.sortMode || "time",
     analysis_depth: normalizeAnalysisDepth(keywordAnalysisState.analysisDepth),
-    top_n: clampTopJournalCount(keywordAnalysisState.topN),
     journals: keywordAnalysisState.hasJournalSelection ? keywordAnalysisState.selectedJournals.slice() : allAnalysisJournals()
   };
 
@@ -1419,6 +1791,11 @@ function receiveKeywordAnalysisPayload(message) {
 
 function syncAnalysisStateFromPayloadScope(scope) {
   if (!scope || typeof scope !== "object") return;
+  const availableScope = availableAnalysisScopeJournals(scope);
+  if (availableScope.defined) {
+    keywordAnalysisState.availableJournals = availableScope.journals;
+    keywordAnalysisState.hasAvailableJournalScope = true;
+  }
   if (typeof scope.date_from === "string") keywordAnalysisState.dateFrom = scope.date_from;
   if (typeof scope.date_to === "string") keywordAnalysisState.dateTo = scope.date_to;
   if (typeof scope.sort_mode === "string" && ["time", "impact_factor", "relevance"].includes(scope.sort_mode)) {
@@ -1427,9 +1804,8 @@ function syncAnalysisStateFromPayloadScope(scope) {
   if (typeof scope.analysis_depth === "string") {
     keywordAnalysisState.analysisDepth = normalizeAnalysisDepth(scope.analysis_depth);
   }
-  keywordAnalysisState.topN = clampTopJournalCount(scope.top_n || keywordAnalysisState.topN);
   if (Array.isArray(scope.selected_journals)) {
-    keywordAnalysisState.selectedJournals = createDualListSelection(allAnalysisJournals(), scope.selected_journals).selected;
+    keywordAnalysisState.selectedJournals = journalsWithinAvailableScope(scope.selected_journals);
     keywordAnalysisState.hasJournalSelection = true;
   }
 }
@@ -1500,7 +1876,6 @@ function renderAnalysisControls() {
     renderDateRangeControl("to", "Date to", keywordAnalysisState.dateTo),
     '<div class="control-row"><label for="analysis-depth">Analysis Depth</label>' + renderAnalysisDepthControl() + '</div>',
     '<div class="control-row"><label>Sort</label>' + renderSortStepper() + '</div>',
-    '<div class="control-row"><label>Top Journals</label>' + renderTopNStepper() + '</div>',
     renderAnalysisStatus(),
     '</div>',
     '<div class="control-group">',
@@ -1558,17 +1933,13 @@ function renderAnalysisJournalDualList(selection) {
 
 function renderAnalysisJournalItem(journal, action) {
   const entry = analysisJournalEntry(journal);
-  const impact = entry.impact_factor == null
-    ? (entry.impact_label || "-")
-    : (entry.impact_label || "Impact") + " " + Number(entry.impact_factor).toFixed(1);
   const actionLabel = action === "remove" ? "Remove " : "Add ";
   const actionAttribute = action === "remove"
     ? 'data-analysis-journal-action="remove"'
     : 'data-analysis-journal-action="add"';
-  const tooltip = [actionLabel + entry.journal, entry.category, entry.impact_metric].filter(Boolean).join(" · ");
+  const tooltip = [actionLabel + entry.journal, entry.category].filter(Boolean).join(" · ");
   return '<button type="button" class="analysis-dual-item" draggable="true" title="' + escapeHtml(tooltip) + '" aria-label="' + escapeHtml(actionLabel + entry.journal) + '" ' + actionAttribute + ' data-journal="' + escapeHtml(entry.journal) + '">' +
     '<span class="analysis-journal-name">' + escapeHtml(entry.journal) + '</span>' +
-    '<span class="analysis-journal-impact">' + escapeHtml(impact) + '</span>' +
     '</button>';
 }
 
@@ -1879,14 +2250,6 @@ function renderSortStepper() {
     '</div>';
 }
 
-function renderTopNStepper() {
-  return '<div class="stepper-control" role="group" aria-label="Top Journals">' +
-    '<button type="button" class="stepper-button" data-stepper-action="analysis-top-n-decrement" aria-label="Decrease top journals">-</button>' +
-    '<div id="analysis-top-n" class="stepper-value" role="status">' + escapeHtml(clampTopJournalCount(keywordAnalysisState.topN)) + '</div>' +
-    '<button type="button" class="stepper-button" data-stepper-action="analysis-top-n-increment" aria-label="Increase top journals">+</button>' +
-    '</div>';
-}
-
 function currentSortLabel() {
   const match = ANALYSIS_SORT_MODES.find(function (item) {
     return item[0] === keywordAnalysisState.sortMode;
@@ -2095,14 +2458,14 @@ function renderAnalysisPaperList(papers) {
 
 function renderAnalysisPaperRow(paper) {
   const title = normalizeDisplayTerm(paper && paper.title) || "Untitled";
-  const url = normalizeDisplayTerm(paper && paper.url);
+  const url = safeExternalHttpUrl(paper && paper.url);
   const doi = normalizeDisplayTerm(paper && paper.doi);
-  const doiUrl = doi ? "https://doi.org/" + doi : "";
+  const doiUrl = doi ? safeExternalHttpUrl("https://doi.org/" + doi) : "";
   const titleHtml = url
-    ? '<a href="' + escapeHtml(url) + '">' + escapeHtml(title) + '</a>'
+    ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(title) + '</a>'
     : escapeHtml(title);
-  const doiHtml = doi
-    ? '<a href="' + escapeHtml(doiUrl) + '">' + escapeHtml(doi) + '</a>'
+  const doiHtml = doi && doiUrl
+    ? '<a href="' + escapeHtml(doiUrl) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(doi) + '</a>'
     : "";
   return [
     '<tr>',
@@ -2140,6 +2503,19 @@ function normalizePhrase(value) {
 
 function normalizeDisplayTerm(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function safeExternalHttpUrl(value) {
+  const clean = normalizeDisplayTerm(value);
+  if (!/^https?:\/\/[^/?#\s]+(?:[/?#][^\s]*)?$/i.test(clean)) return "";
+  if (typeof URL !== "function") return clean;
+  try {
+    const parsed = new URL(clean);
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) return "";
+    return parsed.href;
+  } catch (error) {
+    return "";
+  }
 }
 
 function parseEditableTerms(value) {
@@ -2267,8 +2643,43 @@ def _keyword_analysis_payload_json(
     metrics: JournalMetrics,
     analysis_scope: Optional[AnalysisScope] = None,
 ) -> str:
-    payload = build_keyword_analysis_payload(candidates, metrics, analysis_scope)
+    payload = keyword_analysis_payload(candidates, metrics, analysis_scope)
     return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+
+
+def keyword_analysis_payload(
+    candidates: List[Dict[str, object]],
+    metrics: JournalMetrics,
+    analysis_scope: Optional[AnalysisScope] = None,
+    *,
+    include_computed_analysis: bool = True,
+) -> Dict[str, object]:
+    builder = (
+        build_keyword_analysis_payload
+        if include_computed_analysis
+        else build_keyword_analysis_seed_payload
+    )
+    payload = builder(candidates, metrics, analysis_scope)
+    papers = payload.get("papers")
+    if isinstance(papers, list):
+        for paper in papers:
+            if isinstance(paper, dict):
+                paper["url"] = _safe_absolute_http_url(paper.get("url"))
+    return payload
+
+
+def _safe_absolute_http_url(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or any(ord(character) < 32 or ord(character) == 127 for character in text):
+        return ""
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+            return ""
+        parsed.port
+    except ValueError:
+        return ""
+    return text
 
 
 def _matched_papers_payload_json(candidates: List[Dict[str, object]], metrics: JournalMetrics, empty_text: str) -> str:
@@ -2294,6 +2705,8 @@ def _matched_papers_payload_json(candidates: List[Dict[str, object]], metrics: J
 
 def _matched_papers_script() -> str:
     return r"""<script>
+const MATCHED_PAPERS_PAGE_SIZE = 50;
+
 document.addEventListener("DOMContentLoaded", function () {
   wireMatchedPapersSort();
 });
@@ -2312,22 +2725,66 @@ function wireMatchedPapersSort() {
   }
   const items = Array.isArray(payload.items) ? payload.items : [];
   const emptyHtml = typeof payload.empty_html === "string" ? payload.empty_html : '<p class="meta">No matched papers in this run.</p>';
+  let visibleCount = Math.min(MATCHED_PAPERS_PAGE_SIZE, items.length);
 
   function render() {
-    list.innerHTML = renderMatchedPapers(items, sort.value || "time", emptyHtml);
+    list.innerHTML = renderMatchedPapers(
+      items,
+      sort.value || "time",
+      emptyHtml,
+      visibleCount
+    );
   }
 
-  sort.addEventListener("change", render);
-  render();
+  sort.addEventListener("change", function () {
+    visibleCount = Math.min(MATCHED_PAPERS_PAGE_SIZE, items.length);
+    render();
+  });
+  list.addEventListener("click", function (event) {
+    const button = event.target.closest("[data-matched-papers-action]");
+    if (!button) return;
+    if (button.getAttribute("data-matched-papers-action") !== "show-older") return;
+    event.preventDefault();
+    visibleCount = Math.min(items.length, visibleCount + MATCHED_PAPERS_PAGE_SIZE);
+    render();
+  });
 }
 
-function renderMatchedPapers(items, sortMode, emptyHtml) {
+function renderMatchedPapers(items, sortMode, emptyHtml, visibleLimit) {
   const sorted = sortedMatchedPaperItems(Array.isArray(items) ? items : [], sortMode);
   if (!sorted.length) return emptyHtml || "";
+  const parsedLimit = Number(visibleLimit);
+  const limit = Number.isFinite(parsedLimit) && parsedLimit >= 0
+    ? Math.floor(parsedLimit)
+    : sorted.length;
+  const visible = visibleMatchedPaperItems(sorted, sortMode, limit);
+  let rendered = "";
   if (sortMode === "impact_factor") {
-    return sorted.map(matchedPaperHtml).join("\n");
+    rendered = visible.map(matchedPaperHtml).join("\n");
+  } else {
+    rendered = renderMatchedPaperDateGroups(visible);
   }
-  return renderMatchedPaperDateGroups(sorted);
+  return rendered + renderMatchedPapersMore(sorted.length, visible.length);
+}
+
+function visibleMatchedPaperItems(sorted, sortMode, requestedLimit) {
+  const limit = Math.min(sorted.length, Math.max(0, requestedLimit));
+  const visible = sorted.slice(0, limit);
+  if (sortMode !== "time" || !visible.length || limit >= sorted.length) return visible;
+  const boundary = matchedPaperString(visible[visible.length - 1].detected_label);
+  let index = limit;
+  while (index < sorted.length && matchedPaperString(sorted[index].detected_label) === boundary) {
+    visible.push(sorted[index]);
+    index += 1;
+  }
+  return visible;
+}
+
+function renderMatchedPapersMore(total, visible) {
+  const remaining = Math.max(0, total - visible);
+  if (!remaining) return "";
+  return '<div class="matched-papers-more"><button type="button" class="secondary-button" data-matched-papers-action="show-older">' +
+    'Show older papers</button><span class="meta">' + escapeMatchedPaperText(remaining + " remaining") + '</span></div>';
 }
 
 function sortedMatchedPaperItems(items, sortMode) {
@@ -2465,6 +2922,34 @@ def _render_candidate_groups(candidates: List[Dict[str, object]], metrics: Journ
     return "\n".join(sections)
 
 
+def _render_initial_candidate_groups(
+    candidates: List[Dict[str, object]],
+    metrics: JournalMetrics,
+    empty_text: str,
+) -> str:
+    if len(candidates) <= _MATCHED_PAPERS_INITIAL_LIMIT:
+        return _render_candidate_groups(candidates, metrics, empty_text)
+    ordered = _sort_candidates_by_detected_date(candidates)
+    visible = ordered[:_MATCHED_PAPERS_INITIAL_LIMIT]
+    boundary = _date_group_sort_value(visible[-1])
+    while (
+        len(visible) < len(ordered)
+        and _date_group_sort_value(ordered[len(visible)]) == boundary
+    ):
+        visible.append(ordered[len(visible)])
+    remaining = len(ordered) - len(visible)
+    rendered = _render_candidate_groups(visible, metrics, empty_text)
+    if remaining <= 0:
+        return rendered
+    return (
+        rendered
+        + '<div class="matched-papers-more">'
+        + '<button type="button" class="secondary-button" '
+        + 'data-matched-papers-action="show-older">Show older papers</button>'
+        + f'<span class="meta">{escape(str(remaining))} remaining</span></div>'
+    )
+
+
 def _render_date_group(group_value: str, candidates: List[Dict[str, object]], metrics: JournalMetrics) -> str:
     label = _date_group_display_label(group_value)
     return """<section class="date-group">
@@ -2484,16 +2969,19 @@ def _render_date_group(group_value: str, candidates: List[Dict[str, object]], me
 
 
 def _date_group_display_label(value: object) -> str:
-    group_date = first_iso_date(value)
-    if group_date is None:
+    group_key = first_iso_date_key(value)
+    if not group_key:
         return "Unknown date"
-    return format_display_date(group_date, style="long")
+    return format_display_date(group_key, style="long")
 
 
 def _date_group_short_label(value: object) -> str:
+    group_key = first_iso_date_key(value)
+    if not group_key:
+        return "Unknown date"
     group_date = first_iso_date(value)
     if group_date is None:
-        return "Unknown date"
+        return format_display_date(group_key, style="short")
 
     today = date.today()
     if group_date == today:
@@ -2508,6 +2996,9 @@ def _paper_count_label(count: int) -> str:
 
 
 def _render_candidate(candidate: Dict[str, object], metrics: JournalMetrics) -> str:
+    if candidate.get("_lifecycle_listing"):
+        return _render_lifecycle_candidate(candidate)
+
     journal_name, metric = _display_journal(candidate, metrics)
     metric_text = _metric_text(metric)
     terms = ", ".join(str(term) for term in candidate.get("matched_terms", []))
@@ -2529,6 +3020,37 @@ def _render_candidate(candidate: Dict[str, object], metrics: JournalMetrics) -> 
         metric_text,
         escape(str(candidate.get("reason") or "")),
         " · Terms: " + escape(terms) if terms else "",
+    )
+
+
+def _render_lifecycle_candidate(candidate: Dict[str, object]) -> str:
+    link = _safe_article_link(candidate)
+    date_text = _candidate_date_text(candidate)
+    authors = candidate.get("authors")
+    if isinstance(authors, (list, tuple)):
+        author_text = ", ".join(str(author).strip() for author in authors if str(author).strip())
+    else:
+        author_text = str(authors or "").strip()
+    if not author_text:
+        author_text = "Authors not available"
+
+    impact = candidate.get("impact_factor")
+    try:
+        impact_text = "Impact factor: %.1f" % float(impact)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        impact_text = "Impact factor: not available"
+
+    return """<article class="paper">
+  <h3><a href="%s" target="_blank" rel="noopener noreferrer">%s</a></h3>
+  <div class="meta">%s</div>
+  <div class="meta"><strong class="journal-name">%s</strong> &middot; %s &middot; %s</div>
+</article>""" % (
+        escape(link, quote=True),
+        escape(str(candidate.get("title") or "")),
+        escape(author_text),
+        escape(str(candidate.get("journal") or "")),
+        escape(date_text),
+        escape(impact_text),
     )
 
 
@@ -2568,10 +3090,7 @@ def _sort_candidates_by_detected_date(candidates: List[Dict[str, object]]) -> Li
 
 
 def _detected_sort_key(candidate: Dict[str, object]):
-    detected_date = first_iso_date(_candidate_detected_value(candidate))
-    if detected_date is None:
-        return (0, date.min)
-    return (1, detected_date)
+    return iso_date_sort_key(_candidate_detected_value(candidate))
 
 
 def _date_group_label(candidate: Dict[str, object]) -> str:
@@ -2579,8 +3098,7 @@ def _date_group_label(candidate: Dict[str, object]) -> str:
 
 
 def _date_group_sort_value(candidate: Dict[str, object]) -> str:
-    detected_date = first_iso_date(_candidate_detected_value(candidate))
-    return detected_date.isoformat() if detected_date is not None else ""
+    return first_iso_date_key(_candidate_detected_value(candidate))
 
 
 def _candidate_date_text(candidate: Dict[str, object]) -> str:

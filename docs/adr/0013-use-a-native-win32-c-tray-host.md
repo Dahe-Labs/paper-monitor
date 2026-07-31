@@ -1,0 +1,3 @@
+# Use a native Win32 C Tray Host
+
+The optional Tray Host will be a separate native `PaperMonitorTray.exe` adapter built in C with `Shell_NotifyIconW` and `CreateProcessW`. It owns only the notification-area icon, its menu, and launching finite Paper Monitor commands; it never owns refresh timing, network access, SQLite logic, notification delivery, or WebView/dashboard code. Task Scheduler remains the sole periodic timer, and all durable state remains behind the core application seams. The installed and portable distributions will place the Tray Host beside the main executable. Its acceptance target is no periodic network or disk activity while idle, near-zero idle CPU, and no more than approximately 10 MB of idle private memory.

@@ -17,10 +17,13 @@ def read_text(relative_path: str) -> str:
 
 
 class SelectionUIContractTests(unittest.TestCase):
-    def test_windows_settings_save_syncs_selected_journals_legacy_field_and_crossref_titles(self):
+    def test_windows_settings_save_keeps_only_canonical_selected_journals(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
-            config_path.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False), encoding="utf-8")
+            raw = json.loads(json.dumps(DEFAULT_CONFIG))
+            raw["journal_scope"]["top_n"] = 10
+            raw["sources"]["crossref"]["journal_titles"] = ["Stale Journal"]
+            config_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
             payload = default_settings_payload(config_path)
             payload["journal_scope"]["selected_journals"] = [
                 " Nature Energy ",
@@ -35,9 +38,10 @@ class SelectionUIContractTests(unittest.TestCase):
             saved = json.loads(config_path.read_text(encoding="utf-8"))
 
         self.assertEqual(response, {"ok": True})
+        self.assertNotIn("top_n", saved["journal_scope"])
         self.assertEqual(saved["journal_scope"]["selected_journals"], ["Nature Energy", "Custom Journal", "arxiv"])
-        self.assertEqual(saved["journals"], ["Nature Energy", "Custom Journal", "arxiv"])
-        self.assertEqual(saved["sources"]["crossref"]["journal_titles"], ["Nature Energy", "Custom Journal"])
+        self.assertNotIn("journals", saved)
+        self.assertNotIn("journal_titles", saved["sources"]["crossref"])
         self.assertTrue(saved["sources"]["arxiv"]["enabled"])
 
     def test_windows_settings_save_preserves_an_explicit_empty_journal_selection(self):
@@ -57,9 +61,9 @@ class SelectionUIContractTests(unittest.TestCase):
 
         self.assertEqual(response, {"ok": True})
         self.assertEqual(saved["journal_scope"]["selected_journals"], [])
-        self.assertEqual(saved["journals"], [])
+        self.assertNotIn("journals", saved)
         self.assertEqual(reloaded["journal_scope"]["selected_journals"], [])
-        self.assertEqual(saved["sources"]["crossref"]["journal_titles"], [])
+        self.assertNotIn("journal_titles", saved["sources"]["crossref"])
 
     def test_keyword_analysis_crossref_config_excludes_arxiv_source_selection(self):
         source_config = {"crossref": {"enabled": True, "query": "solid electrolyte"}}
@@ -87,6 +91,8 @@ class SelectionUIContractTests(unittest.TestCase):
         self.assertIn(".journal-list.drag-over", settings_css)
         self.assertIn('id="journal_category"', read_text("paper_monitor/templates/windows/settings.html"))
         self.assertIn("entry.category === category", settings_js)
+        self.assertIn('setLines("include_terms", preset.include_terms)', settings_js)
+        self.assertIn('setLines("exclude_terms", preset.exclude_terms)', settings_js)
         self.assertIn("min-height: 30px", settings_css)
 
     def test_windows_dual_list_remove_survives_candidate_resync(self):
@@ -117,6 +123,48 @@ if (model.availableEntries()[0].journal !== "Nature Energy") throw new Error("re
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_windows_search_direction_applies_preset_queries_and_filter_terms(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+        settings_js = read_text("paper_monitor/static/windows/settings.js")
+        start = settings_js.index("    function applyPreset()")
+        end = settings_js.index("    function promoteToCustom()")
+        apply_preset_script = settings_js[start:end]
+        harness = f"""
+let presetsById = {{
+  sodium_battery: {{
+    id: "sodium_battery",
+    label: "Sodium battery",
+    crossref_query: "sodium-ion battery",
+    openalex_query: "sodium-ion battery",
+    include_terms: ["sodium-ion battery", "Na-ion battery"],
+    exclude_terms: ["solid-state laser"]
+  }}
+}};
+const fields = {{
+  search_direction: {{ value: "sodium_battery" }},
+  custom_direction_name: {{ value: "" }},
+  crossref_query: {{ value: "" }},
+  openalex_query: {{ value: "" }},
+  include_terms: {{ value: "" }},
+  exclude_terms: {{ value: "" }}
+}};
+function field(id) {{ return fields[id]; }}
+function setValue(id, value) {{ fields[id].value = value; }}
+function setLines(id, values) {{ fields[id].value = values.join("\\n"); }}
+function updateCustomState() {{}}
+{apply_preset_script}
+applyPreset();
+if (fields.crossref_query.value !== "sodium-ion battery") throw new Error("Crossref query was not applied");
+if (fields.openalex_query.value !== "sodium-ion battery") throw new Error("OpenAlex query was not applied");
+if (fields.include_terms.value !== "sodium-ion battery\\nNa-ion battery") throw new Error("include terms were not applied");
+if (fields.exclude_terms.value !== "solid-state laser") throw new Error("exclude terms were not applied");
+"""
+        result = subprocess.run([node, "-"], input=harness, text=True, capture_output=True, check=False)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_dashboard_keyword_analysis_uses_dual_list_selection_semantics(self):
         dashboard = read_text("paper_monitor/dashboard.py")
 
@@ -128,26 +176,13 @@ if (model.availableEntries()[0].journal !== "Nature Energy") throw new Error("re
         self.assertIn('data-analysis-journal-drop="remove"', dashboard)
         self.assertIn("analysis-journal-search", dashboard)
         self.assertIn("analysis-journal-category", dashboard)
-        self.assertIn("analysis-journal-impact", dashboard)
+        self.assertNotIn("analysis-journal-impact", dashboard)
+        self.assertIn("overflow-wrap: anywhere", dashboard)
+        self.assertIn("[actionLabel + entry.journal, entry.category]", dashboard)
         self.assertIn("acceptedCandidateTerms", dashboard)
         self.assertIn("function removeAcceptedCandidateTerm", dashboard)
         self.assertIn('data-candidate-term-drop="add"', dashboard)
         self.assertIn('data-candidate-term-drop="remove"', dashboard)
-
-    def test_macos_journal_filter_has_dual_list_model_and_drag_drop_paths(self):
-        models = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/SettingsModels.swift")
-        journal_filter = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/JournalFilterViewController.swift")
-
-        self.assertIn("public struct DualListSelection", models)
-        self.assertIn("public mutating func remove", models)
-        self.assertIn("selectedItems.removeAll", models)
-        self.assertIn("static let paperMonitorJournal", journal_filter)
-        self.assertIn("JournalDropStackView", journal_filter)
-        self.assertIn("DraggableJournalButton", journal_filter)
-        self.assertIn("pasteboardWriterForRow", journal_filter)
-        self.assertIn("shouldSelectRow", journal_filter)
-        self.assertIn("acceptDrop", journal_filter)
-
 
 if __name__ == "__main__":
     unittest.main()

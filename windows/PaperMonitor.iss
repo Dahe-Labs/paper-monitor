@@ -40,42 +40,72 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#IconFile}
 UninstallFilesDir={app}\Uninstall
-UninstallDisplayIcon={app}\PaperMonitor.exe
+UninstallDisplayIcon={app}\PaperMonitor.ico
+ChangesAssociations=yes
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "startup"; Description: "Start Paper Monitor when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-Source: "{#SourceDir}\PaperMonitor.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\README_WINDOWS.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\config.example.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\journal_metrics.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [InstallDelete]
 Type: files; Name: "{app}\unins000.dat"
 Type: files; Name: "{app}\unins000.exe"
+Type: files; Name: "{group}\Settings.lnk"
+Type: files; Name: "{group}\Paper Monitor.lnk"
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{localappdata}\PaperMonitor\WebView2"
 
 [Icons]
-Name: "{group}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"
-Name: "{group}\Settings"; Filename: "{app}\PaperMonitor.exe"; Parameters: "settings"; WorkingDir: "{app}"
+Name: "{group}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; IconFilename: "{app}\PaperMonitor.ico"; IconIndex: 0; AppUserModelID: "DaheLabs.PaperMonitor"
 Name: "{group}\Uninstall Paper Monitor"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; Tasks: desktopicon
-
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PaperMonitor"; ValueData: """{app}\PaperMonitor.exe"" tray --quiet"; Tasks: startup
+Name: "{autodesktop}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; IconFilename: "{app}\PaperMonitor.ico"; IconIndex: 0; Tasks: desktopicon; AppUserModelID: "DaheLabs.PaperMonitor"
 
 [Run]
+Filename: "{app}\PaperMonitor.exe"; Parameters: "sync-runtime"; Flags: runhidden waituntilterminated
 Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; Description: "Launch Paper Monitor"; Flags: nowait postinstall skipifsilent unchecked
 
+[UninstallRun]
+Filename: "{app}\PaperMonitorTray.exe"; Parameters: "--quit-existing"; Flags: runhidden waituntilterminated skipifdoesntexist
+Filename: "{app}\PaperMonitor.exe"; Parameters: "uninstall-startup"; Flags: runhidden waituntilterminated skipifdoesntexist
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\PaperMonitor\WebView2"
+
 [Code]
+procedure RemoveScheduledRefreshTask;
+var
+  ResultCode: Integer;
+begin
+  { The application command removes account-scoped tasks; these are legacy fallbacks. }
+  Exec(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "\PaperMonitor Scheduled Refresh" /F',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Exec(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "\PaperMonitor Tray" /F',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
+    RemoveScheduledRefreshTask;
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PaperMonitor');
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Paper Monitor');
   end;
 end;

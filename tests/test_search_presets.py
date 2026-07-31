@@ -12,6 +12,15 @@ from paper_monitor.search_presets import (
 )
 from paper_monitor.windows_settings import default_settings_payload, settings_payload
 
+RESEARCH_DIRECTION_TERMS = {
+    "sulfide_solid_electrolyte": ["sulfide solid electrolyte", "Li6PS5Cl"],
+    "halide_solid_electrolyte": ["halide solid electrolyte", "Li3YCl6"],
+    "latp_solid_electrolyte": ["LATP", "Li1.3Al0.3Ti1.7(PO4)3"],
+    "llzo_garnet_electrolyte": ["LLZO", "Li7La3Zr2O12"],
+    "silicon_anode": ["silicon anode", "silicon/graphite anode"],
+    "sodium_battery": ["sodium-ion battery", "all-solid-state sodium battery"],
+}
+
 
 class MissingPresetResource:
     def joinpath(self, *_parts):
@@ -39,6 +48,18 @@ class SearchPresetTests(unittest.TestCase):
                 self.assertTrue(preset["crossref_query"])
                 self.assertTrue(preset["openalex_query"])
 
+    def test_catalog_covers_group_research_directions(self):
+        presets = {preset["id"]: preset for preset in SEARCH_DIRECTION_PRESETS}
+
+        for preset_id, required_terms in RESEARCH_DIRECTION_TERMS.items():
+            with self.subTest(preset=preset_id):
+                self.assertIn(preset_id, presets)
+                preset = presets[preset_id]
+                self.assertEqual(preset["crossref_query"], preset["openalex_query"])
+                for term in required_terms:
+                    self.assertIn(term, preset["crossref_query"])
+                    self.assertIn(term, preset["include_terms"])
+
     def test_default_settings_payload_returns_preset_copy(self):
         first = default_settings_payload()
         first["search_direction"]["presets"][0]["label"] = "Mutated"
@@ -54,6 +75,7 @@ class SearchPresetTests(unittest.TestCase):
         preset_ids = [preset["id"] for preset in catalog["presets"]]
         self.assertIn("solid_state_battery_general", preset_ids)
         self.assertIn("custom", preset_ids)
+        self.assertEqual(catalog["presets"], SEARCH_DIRECTION_PRESETS)
 
     def test_windows_settings_payload_canonicalizes_legacy_alias(self):
         with tempfile.TemporaryDirectory() as directory:

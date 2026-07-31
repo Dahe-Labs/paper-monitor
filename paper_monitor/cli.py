@@ -6,19 +6,10 @@ from pathlib import Path
 
 from .analysis_refresh import run_crossref_keyword_analysis
 from .app_identity import DISPLAY_NAME
-from .app_refresh import run_app_refresh
+from .article_lifecycle import ArticleLifecycle, RefreshRunStatus
 from .config import load_app_config, write_default_config
-from .dashboard import write_dashboard
 from .dashboard_writer import write_latest_dashboard
-from .filtering import MatchResult
-from .journal_metrics import load_journal_metrics
-from .keyword_analysis import AnalysisScope
-from .launchd import build_launch_agent_plist
-from .models import Article
-from .monitor import run_once
-from .notify import notify_article
-from .sources import fetch_all_sources
-from .storage import ArticleStore
+from .refresh_execution import RefreshExecution, RefreshIntent
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -35,9 +26,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--config", required=True, type=Path)
     run_parser.add_argument("--dry-run", action="store_true", help="Print notifications instead of using the system notifier.")
 
-    app_refresh_parser = subparsers.add_parser("app-refresh", help="Run once for the native desktop app and emit JSON.")
-    app_refresh_parser.add_argument("--config", required=True, type=Path)
-
     render_dashboard_parser = subparsers.add_parser(
         "render-dashboard",
         help="Regenerate the local dashboard HTML from the stored latest run and emit JSON.",
@@ -53,7 +41,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--date-to", required=True)
     analyze_parser.add_argument("--sort-mode", choices=("time", "impact_factor", "relevance"), default="time")
     analyze_parser.add_argument("--analysis-depth", choices=("fast", "exhaustive"), default="fast")
-    analyze_parser.add_argument("--top-n", type=int, default=30)
     analyze_parser.add_argument("--journal", action="append", default=[])
 
     recent_parser = subparsers.add_parser("recent", help="List recently stored matching papers.")
@@ -62,11 +49,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     dashboard_parser = subparsers.add_parser("open-dashboard", help="Open the latest local dashboard.")
     dashboard_parser.add_argument("--config", required=True, type=Path)
-
-    launchd_parser = subparsers.add_parser("write-launch-agent", help="Write a macOS LaunchAgent plist.")
-    launchd_parser.add_argument("--config", required=True, type=Path)
-    launchd_parser.add_argument("--output", required=True, type=Path)
-    launchd_parser.add_argument("--label", default="com.local.paper-monitor")
 
     test_parser = subparsers.add_parser("test-notification", help="Send one local desktop test notification.")
     test_parser.add_argument("--title", default=f"{DISPLAY_NAME} test")
@@ -86,10 +68,6 @@ def main(argv=None) -> int:
     if args.command == "run":
         return _run(args.config, dry_run=args.dry_run)
 
-    if args.command == "app-refresh":
-        print(json.dumps(run_app_refresh(args.config), ensure_ascii=False))
-        return 0
-
     if args.command == "render-dashboard":
         return _render_dashboard(args.config)
 
@@ -102,7 +80,6 @@ def main(argv=None) -> int:
                     date_to=args.date_to,
                     sort_mode=args.sort_mode,
                     analysis_depth=args.analysis_depth,
-                    top_n=args.top_n,
                     selected_journals=args.journal or None,
                 ),
                 ensure_ascii=False,
@@ -116,9 +93,6 @@ def main(argv=None) -> int:
     if args.command == "open-dashboard":
         return _open_dashboard(args.config)
 
-    if args.command == "write-launch-agent":
-        return _write_launch_agent(args.config, args.output, args.label)
-
     if args.command == "test-notification":
         return _test_notification(args.title)
 
@@ -127,34 +101,19 @@ def main(argv=None) -> int:
 
 
 def _run(config_path: Path, dry_run: bool) -> int:
-    app_config = load_app_config(config_path)
-    store = ArticleStore(app_config.database_path)
-    notifier = _print_notification if dry_run else (
-        lambda article, match: notify_article(article, match, dashboard_path=app_config.dashboard_path)
-    )
-    summary = run_once(
-        config=app_config.monitor_config,
-        store=store,
-        fetch_articles=lambda: fetch_all_sources(app_config.source_config),
-        notify=notifier,
-    )
-    metrics = load_journal_metrics(app_config.journal_metrics_path)
-    write_dashboard(
-        app_config.dashboard_path,
-        store.latest_run(),
-        store.candidates_for_run(summary.run_id),
-        metrics,
-        AnalysisScope(
-            selected_journals=tuple(app_config.monitor_config.filter_config.journals),
-            top_n=app_config.journal_scope_top_n,
-        ),
-    )
+    intent = RefreshIntent.VISIBLE if dry_run else RefreshIntent.BACKGROUND
+    outcome = RefreshExecution(config_path).execute(intent)
+    if outcome.status is RefreshRunStatus.FAILED:
+        print(f"Refresh failed: {outcome.error}", file=sys.stderr)
+        return 1
+    if dry_run:
+        print("[DRY RUN] Desktop notifications were skipped.")
     print(
         "Fetched {fetched}, matched {matched}, new {new}, skipped {skipped}".format(
-            fetched=summary.fetched,
-            matched=summary.matched,
-            new=summary.new_matches,
-            skipped=summary.skipped,
+            fetched=outcome.fetched,
+            matched=outcome.matched,
+            new=outcome.new_matches,
+            skipped=outcome.skipped,
         )
     )
     return 0
@@ -162,37 +121,16 @@ def _run(config_path: Path, dry_run: bool) -> int:
 
 def _recent(config_path: Path, limit: int) -> int:
     app_config = load_app_config(config_path)
-    store = ArticleStore(app_config.database_path)
-    for article in store.recent_articles(limit):
-        print("%s | %s | %s" % (article.published, article.journal, article.title))
-        print("  %s" % (article.doi or article.url))
-    return 0
-
-
-def _write_launch_agent(config_path: Path, output: Path, label: str) -> int:
-    config_path = config_path.resolve()
-    app_config = load_app_config(config_path)
-    python_path = _python_for_launch_agent()
-    working_directory = config_path.parent
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    (working_directory / "work" / "paper-monitor" / "logs").mkdir(parents=True, exist_ok=True)
-    plist_bytes = build_launch_agent_plist(
-        label=label,
-        python_path=python_path,
-        module_name="paper_monitor.cli",
-        working_directory=working_directory,
-        config_path=config_path,
-        interval_seconds=app_config.interval_seconds,
-    )
-    output.write_bytes(plist_bytes)
-    print("Wrote LaunchAgent plist: %s" % output)
+    lifecycle = ArticleLifecycle(app_config.database_path)
+    for article in lifecycle.list_articles(limit):
+        print("%s | %s | %s" % (article.first_detected_at, article.journal, article.title))
+        print("  %s" % article.url)
     return 0
 
 
 def _open_dashboard(config_path: Path) -> int:
     app_config = load_app_config(config_path)
-    write_latest_dashboard(app_config)
+    write_latest_dashboard(app_config, confirm_presentation=True)
     webbrowser.open(app_config.dashboard_path.resolve().as_uri())
     print("Opened dashboard: %s" % app_config.dashboard_path)
     return 0
@@ -200,33 +138,25 @@ def _open_dashboard(config_path: Path) -> int:
 
 def _render_dashboard(config_path: Path) -> int:
     app_config = load_app_config(config_path)
-    dashboard_path = write_latest_dashboard(app_config)
+    dashboard_path = write_latest_dashboard(app_config, confirm_presentation=True)
     print(json.dumps({"dashboard_path": str(dashboard_path)}, ensure_ascii=False))
     return 0
 
 
-def _python_for_launch_agent() -> Path:
-    return Path(sys.executable)
-
-
-def _print_notification(article: Article, match: MatchResult) -> None:
-    terms = ", ".join(match.matched_terms)
-    print("[DRY RUN] %s | %s | %s" % (article.journal, article.title, terms))
-    print("          %s" % (article.doi or article.url))
-
-
 def _test_notification(title: str) -> int:
-    article = Article(
-        title=title,
-        journal=DISPLAY_NAME,
-        url="https://example.org",
-        doi="",
-        published="",
-        abstract="",
-        source="local",
-    )
+    from .windows_notification import WindowsArticleNotificationAdapter
+
     try:
-        sent = notify_article(article, MatchResult(True, "matched", ["test"], DISPLAY_NAME))
+        sent = WindowsArticleNotificationAdapter().deliver(
+            {
+                "title": title,
+                "journal": DISPLAY_NAME,
+                "url": "https://example.org",
+                "doi": "",
+                "source": "local",
+            },
+            Path.cwd() / "latest.html",
+        )
     except Exception as exc:
         print("Failed to send test notification: %s" % exc, file=sys.stderr)
         return 1
@@ -240,17 +170,10 @@ def _test_notification(title: str) -> int:
 
 
 def _notification_failure_hint() -> str:
-    if sys.platform == "win32":
-        return (
-            "Failed to send test notification. On Windows, install win11toast "
-            "from requirements-windows.txt and make sure Windows notifications are enabled."
-        )
-    if sys.platform == "darwin":
-        return (
-            "Failed to send test notification. On macOS, install terminal-notifier "
-            "or make sure osascript is available."
-        )
-    return "Failed to send test notification on this platform."
+    return (
+        "Failed to send test notification. Install the Windows dependencies "
+        "and make sure Windows notifications are enabled."
+    )
 
 
 if __name__ == "__main__":

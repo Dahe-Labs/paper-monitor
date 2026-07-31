@@ -11,11 +11,12 @@ PROJECT_FILES = (
     "config.example.json",
     "journal_metrics.json",
     "requirements-windows.txt",
+    "requirements-windows.lock.txt",
 )
 
 SCRIPT_FILES = (
     "build_windows_app.ps1",
-    "generate_app_icons.py",
+    "build_windows_native_tray.ps1",
     "generate_windows_icon.py",
     "generate_windows_version_info.py",
     "install_windows_app.ps1",

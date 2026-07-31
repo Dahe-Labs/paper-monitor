@@ -74,16 +74,14 @@ if (-not (Test-Path -LiteralPath $Config)) {
 }
 
 if ($EnableStartup) {
-  Invoke-Native -FilePath $InstalledExe -Arguments @("install-startup")
+  Invoke-Native -FilePath $InstalledExe -Arguments @("install-startup", "--config", $Config)
 }
 
 if ($LaunchAfterInstall) {
-  Start-Process -FilePath $InstalledExe -ArgumentList "tray --quiet"
-  Start-Sleep -Milliseconds 700
   Start-Process -FilePath $InstalledExe
 }
 
 Write-Host "Installed $InstalledExe"
 if ($EnableStartup) {
-  Write-Host "Configured login startup with tray --quiet"
+  Write-Host "Configured non-resident background monitoring with Windows Task Scheduler"
 }

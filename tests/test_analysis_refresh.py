@@ -61,7 +61,6 @@ class CrossrefKeywordAnalysisRefreshTests(unittest.TestCase):
                 date_from="2026-06-01",
                 date_to="2026-06-24",
                 sort_mode="time",
-                top_n=30,
                 selected_journals=["Nature Energy"],
                 fetch_articles=lambda source_config: fetched,
             )
@@ -99,6 +98,48 @@ class CrossrefKeywordAnalysisRefreshTests(unittest.TestCase):
             self.assertEqual(result["matched"], 0)
             self.assertEqual(result["skipped"], 0)
             self.assertEqual(result["papers"], [])
+            self.assertEqual(result["scope"]["selected_journals"], [])
+
+    def test_run_crossref_keyword_analysis_rejects_journals_outside_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            write_default_config(config_path)
+
+            def fail_if_called(_source_config):
+                raise AssertionError("Crossref should not be queried for an out-of-scope journal")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "must first be selected in Settings: Journal of Power Sources",
+            ):
+                run_crossref_keyword_analysis(
+                    config_path,
+                    date_from="2026-06-01",
+                    date_to="2026-06-24",
+                    selected_journals=["Journal of Power Sources"],
+                    fetch_articles=fail_if_called,
+                )
+
+    def test_run_crossref_keyword_analysis_does_not_turn_arxiv_only_scope_into_global_query(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config.json"
+            write_default_config(config_path)
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            payload["journal_scope"]["selected_journals"] = ["arXiv"]
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            def fail_if_called(_source_config):
+                raise AssertionError("Crossref should not be queried for an arXiv-only scope")
+
+            result = run_crossref_keyword_analysis(
+                config_path,
+                date_from="2026-06-01",
+                date_to="2026-06-24",
+                fetch_articles=fail_if_called,
+            )
+
+            self.assertEqual(result["fetched"], 0)
+            self.assertEqual(result["scope"]["available_journals"], [])
             self.assertEqual(result["scope"]["selected_journals"], [])
 
     def test_run_crossref_keyword_analysis_uses_exhaustive_cursor_settings(self):
