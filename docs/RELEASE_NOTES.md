@@ -75,7 +75,7 @@
 
 ### Source And Network Hardening
 
-- Restored the original cross-platform regression tests and reconciled them with the current behavior, bringing the Python suite to 248 tests.
+- Restored the complete historical regression suite and reconciled it with the current Windows behavior, bringing the Python suite to 248 tests.
 - Source URLs are restricted to HTTP(S), responses are size-limited, and XML feeds reject DTD/entity declarations.
 - Ruff, Bandit, dependency auditing, line-ending rules, and local archive/build exclusions are enforced by repository configuration and CI.
 
