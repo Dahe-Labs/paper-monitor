@@ -14,12 +14,57 @@ from paper_monitor.article_lifecycle import (
     RefreshRunStatus,
 )
 from paper_monitor.config import DEFAULT_CONFIG, load_app_config
-from paper_monitor.dashboard import _keyword_analysis_payload_json, _keyword_analysis_script, write_dashboard
+from paper_monitor.dashboard import (
+    _keyword_analysis_payload_json,
+    _keyword_analysis_script,
+    render_dashboard,
+    write_dashboard_html,
+)
 from paper_monitor.journal_metrics import JournalMetrics
 from paper_monitor.windows_dashboard_server import MAX_REQUEST_BODY_BYTES, WindowsDashboardServer
 
 
 class UIServerHardeningTests(unittest.TestCase):
+    def test_dashboard_server_reuses_lifecycle_for_the_same_database_path(self):
+        created = []
+
+        def factory(path):
+            lifecycle = object()
+            created.append((Path(path), lifecycle))
+            return lifecycle
+
+        server = WindowsDashboardServer(Path("config.json"), lifecycle_factory=factory)
+        first = server._lifecycle_for(Path("first.sqlite3"))
+        repeated = server._lifecycle_for(Path("first.sqlite3"))
+        second = server._lifecycle_for(Path("second.sqlite3"))
+
+        self.assertIs(first, repeated)
+        self.assertIsNot(first, second)
+        self.assertEqual(
+            [path for path, _lifecycle in created],
+            [Path("first.sqlite3"), Path("second.sqlite3")],
+        )
+
+    def test_background_completion_invalidates_all_dashboard_snapshots_before_reload(self):
+        received = []
+        server = WindowsDashboardServer(Path("config.json"))
+        server.set_window_controller(
+            lambda payload: received.append(dict(payload)) or {"ok": True}
+        )
+        server._pending_snapshot = object()
+        server._dashboard_snapshot = object()
+
+        status, response = server.handle_api_request(
+            "/api/window-control",
+            {"action": "refresh-complete"},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(received, [{"action": "refresh-complete"}])
+        self.assertIsNone(server._pending_snapshot)
+        self.assertIsNone(server._dashboard_snapshot)
+
     def test_rendered_dashboard_confirms_canonical_presentation_over_authorized_http(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
@@ -54,9 +99,38 @@ class UIServerHardeningTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertIn("Background result", html)
                 self.assertIn("Grace Hopper", html)
+                self.assertIn("Last refresh:", html)
+                self.assertIn("Succeeded", html)
+                self.assertIn("Last run fetched: 0", html)
+                self.assertIn("New: 1", html)
                 self.assertNotIn("Rejected Candidates", html)
+                self.assertIn(
+                    '<script type="application/json" id="keyword-analysis-data">{"deferred":true}</script>',
+                    html,
+                )
                 marker = "window.paperMonitorPresentationToken = "
                 presentation_token = json.loads(html.split(marker, 1)[1].split(";", 1)[0])
+
+                connection = http.client.HTTPConnection(host, port, timeout=3)
+                connection.request("GET", "/api/keyword-analysis-data")
+                response = connection.getresponse()
+                response.read()
+                connection.close()
+                self.assertEqual(response.status, 403)
+
+                connection = http.client.HTTPConnection(host, port, timeout=3)
+                connection.request(
+                    "GET",
+                    "/api/keyword-analysis-data",
+                    headers={"X-Paper-Monitor-Token": "test-token"},
+                )
+                response = connection.getresponse()
+                analysis_payload = json.loads(response.read().decode("utf-8"))
+                connection.close()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(analysis_payload["papers"][0]["title"], "Background result")
+                self.assertNotIn("categories", analysis_payload)
+                self.assertNotIn("candidate_terms", analysis_payload)
 
                 body = json.dumps({"presentation_token": presentation_token}).encode("utf-8")
                 connection = http.client.HTTPConnection(host, port, timeout=3)
@@ -132,19 +206,16 @@ class UIServerHardeningTests(unittest.TestCase):
         self.assertIn("safeExternalHttpUrl(paper && paper.url)", script)
         self.assertIn('target="_blank" rel="noopener noreferrer"', script)
 
-    def test_analysis_endpoint_enforces_work_limits_before_calling_runner(self):
+    def test_analysis_endpoint_enforces_date_limits_before_calling_runner(self):
         calls = []
         server = WindowsDashboardServer(Path("config.json"), keyword_analysis_runner=lambda *_a, **_k: calls.append(1))
         base = {
             "date_from": "2026-01-01",
             "date_to": "2026-01-31",
-            "top_n": 30,
             "journals": ["Nature"],
         }
 
         cases = [
-            ({**base, "top_n": 101}, "top_n"),
-            ({**base, "journals": [f"Journal {index}" for index in range(101)]}, "at most 100 journals"),
             ({**base, "date_to": "2027-02-01"}, "must not exceed 366 days"),
             ({**base, "analysis_depth": "exhaustive", "date_to": "2026-04-04"}, "must not exceed 93 days"),
         ]
@@ -154,6 +225,68 @@ class UIServerHardeningTests(unittest.TestCase):
                 self.assertEqual(status, 400)
                 self.assertIn(expected_error, response["error"])
         self.assertEqual(calls, [])
+
+    def test_analysis_endpoint_accepts_the_full_three_hundred_journal_catalog(self):
+        captured = {}
+
+        def runner(_config_path, **options):
+            captured.update(options)
+            return {"ok": True}
+
+        server = WindowsDashboardServer(Path("config.json"), keyword_analysis_runner=runner)
+        journals = [f"Journal {index}" for index in range(300)]
+        status, response = server.handle_api_request(
+            "/api/analyze-keywords",
+            {
+                "date_from": "2026-01-01",
+                "date_to": "2026-01-31",
+                "journals": journals,
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(captured["selected_journals"], journals)
+
+    def test_analysis_endpoint_reports_scope_validation_as_a_bad_request(self):
+        def runner(_config_path, **_options):
+            raise ValueError("Keyword Analysis journals must first be selected in Settings: Other")
+
+        server = WindowsDashboardServer(Path("config.json"), keyword_analysis_runner=runner)
+        status, response = server.handle_api_request(
+            "/api/analyze-keywords",
+            {
+                "date_from": "2026-01-01",
+                "date_to": "2026-01-31",
+                "journals": ["Other"],
+            },
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("must first be selected in Settings", response["error"])
+
+    def test_analysis_endpoint_ignores_legacy_top_n_and_uses_explicit_journals(self):
+        captured = {}
+
+        def runner(_config_path, **options):
+            captured.update(options)
+            return {"ok": True}
+
+        server = WindowsDashboardServer(Path("config.json"), keyword_analysis_runner=runner)
+        status, response = server.handle_api_request(
+            "/api/analyze-keywords",
+            {
+                "date_from": "2026-01-01",
+                "date_to": "2026-01-31",
+                "top_n": 999,
+                "journals": ["Nature Energy"],
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response, {"ok": True})
+        self.assertNotIn("top_n", captured)
+        self.assertEqual(captured["selected_journals"], ["Nature Energy"])
 
     def test_http_server_rejects_rebound_host_and_oversized_body_and_sets_security_headers(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -205,7 +338,15 @@ class UIServerHardeningTests(unittest.TestCase):
             path = Path(directory) / "nested" / "dashboard.html"
             with ThreadPoolExecutor(max_workers=8) as executor:
                 futures = [
-                    executor.submit(write_dashboard, path, {"id": index}, [], JournalMetrics([]))
+                    executor.submit(
+                        write_dashboard_html,
+                        path,
+                        render_dashboard(
+                            {"id": index},
+                            [],
+                            JournalMetrics([]),
+                        ),
+                    )
                     for index in range(24)
                 ]
                 for future in futures:

@@ -86,7 +86,7 @@ class NonResidentLifecycleTests(unittest.TestCase):
             saved = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertFalse(saved["app_settings"]["startup_enabled"])
 
-    def test_normal_window_commands_start_only_native_tray_coordinator(self):
+    def test_normal_window_commands_defer_scheduler_sync_until_after_first_paint(self):
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
             for command in ("window", "settings", "run"):
@@ -102,9 +102,44 @@ class NonResidentLifecycleTests(unittest.TestCase):
 
                     self.assertEqual(status, 0)
                     ensure_native.assert_called_once_with(config_path)
-                    sync.assert_called_once_with(config_path)
+                    sync.assert_not_called()
                     expected_path = "/settings" if command == "settings" else "/"
-                    open_window.assert_called_once_with(config_path, path=expected_path)
+                    open_window.assert_called_once()
+                    self.assertEqual(open_window.call_args.args, (config_path,))
+                    self.assertEqual(open_window.call_args.kwargs["path"], expected_path)
+                    after_first_paint = open_window.call_args.kwargs["after_first_paint"]
+                    with patch(
+                        "paper_monitor.windows_app._sync_windows_runtime_settings"
+                    ) as deferred_sync:
+                        after_first_paint()
+                    deferred_sync.assert_called_once_with(config_path)
+
+    def test_post_paint_coordination_runs_once_outside_the_loaded_handler(self):
+        calls = []
+
+        class ImmediateThread:
+            def __init__(self, *, target, name, daemon):
+                self.target = target
+                self.name = name
+                self.daemon = daemon
+
+            def start(self):
+                self.target()
+
+        with patch(
+            "paper_monitor.windows_app_window.threading.Thread",
+            ImmediateThread,
+        ), patch("paper_monitor.windows_app_window.time.sleep") as sleep:
+            handler = windows_app_window._after_first_paint_handler(
+                lambda: calls.append("coordinated")
+            )
+            handler()
+            handler()
+
+        self.assertEqual(calls, ["coordinated"])
+        sleep.assert_called_once_with(
+            windows_app_window.POST_FIRST_PAINT_DELAY_SECONDS
+        )
 
     def test_user_close_is_allowed_and_marks_window_process_closing(self):
         close_requested = threading.Event()

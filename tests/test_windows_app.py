@@ -1,5 +1,7 @@
 import copy
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path, PureWindowsPath
@@ -81,11 +83,11 @@ class WindowsAppTests(unittest.TestCase):
                 "paper_monitor/cli.py",
                 "windows/PaperMonitor.pyw",
                 "windows/assets/PaperMonitor.ico",
+                "windows/assets/AppIconSource.png",
                 "scripts/build_windows_app.ps1",
                 "scripts/build_windows_native_tray.ps1",
                 "scripts/install_windows_app.ps1",
                 "scripts/generate_windows_icon.py",
-                "scripts/generate_app_icons.py",
                 "scripts/generate_windows_version_info.py",
                 "scripts/package_windows_release.ps1",
             ]
@@ -93,12 +95,26 @@ class WindowsAppTests(unittest.TestCase):
                 self.assertTrue((target / relative_path).exists(), relative_path)
 
             copied_paths = {path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()}
-            self.assertFalse(any(path.startswith("macos/") for path in copied_paths))
             self.assertFalse(any("__pycache__" in path for path in copied_paths))
             self.assertFalse(any(path.endswith(".DS_Store") for path in copied_paths))
             self.assertEqual(
                 (target / "README_WINDOWS.md").read_text(encoding="utf-8"),
                 Path("README_WINDOWS.md").read_text(encoding="utf-8"),
+            )
+            self.assertFalse((target / "windows/Install-PaperMonitor.ps1").exists())
+
+            generated = subprocess.run(
+                [sys.executable, str(target / "scripts/generate_windows_icon.py")],
+                cwd=target,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+            self.assertEqual(
+                (target / "windows/assets/PaperMonitor.ico").read_bytes(),
+                Path("windows/assets/PaperMonitor.ico").read_bytes(),
             )
 
     def test_prepare_windows_project_rejects_repository_target(self):

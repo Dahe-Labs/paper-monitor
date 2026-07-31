@@ -6,7 +6,8 @@ This folder is the Windows project for Paper Monitor.
 
 - `paper_monitor/`: literature search, filtering, storage, dashboard, keyword analysis, and Windows tray code.
 - `windows/PaperMonitor.pyw`: quiet Windows tray entrypoint.
-- `windows/assets/PaperMonitor.ico`: Windows tray/app icon.
+- `windows/assets/AppIconSource.png`: the source artwork for the Windows icon.
+- `windows/assets/PaperMonitor.ico`: generated Windows tray/app icon.
 - `windows/PaperMonitor.iss`: Inno Setup installer script.
 - `scripts/build_windows_app.ps1`: builds a no-console `.exe` with PyInstaller.
 - `scripts/package_windows_release.ps1`: creates release artifacts.
@@ -52,7 +53,7 @@ For a signed public release, install the Windows SDK, make a trusted code-signin
 
 `-RequireSignature` prevents an unsigned public release from being produced accidentally.
 
-The `Build Windows release` GitHub Actions workflow produces the same complete artifact set. A pushed `v<version>` tag runs tests, requires signing, and uploads the verified assets to a draft GitHub Release; publish that draft only after all platform assets are ready. Configure repository secrets named `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`. Unsigned workflow artifacts remain available only for non-uploading manual builds.
+The `Build Windows release` GitHub Actions workflow produces the same complete artifact set. A pushed `v<version>` tag runs tests, requires signing, and uploads the verified assets to a draft GitHub Release. Configure repository secrets named `WINDOWS_SIGNING_CERTIFICATE_BASE64` and `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`. Unsigned workflow artifacts remain available only for non-uploading manual builds.
 
 The release output contains:
 
@@ -74,11 +75,11 @@ The installer registers Paper Monitor in Windows installed apps and provides an 
 
 The installer does not add a registry login process. Upgrading also removes legacy `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entries so an older tray coordinator cannot remain resident. The installer can launch Paper Monitor after install only when the final-page launch option is selected.
 
-Enable **Background Monitoring** in App Settings to register a per-user Windows scheduled task. Windows then starts a short-lived Paper Monitor refresh worker only when the configured scan is due. The worker retrieves papers, updates local data, sends any notifications, and exits; Python, WebView, and the local HTTP bridge consume no background memory between scans. The task runs with the signed-in user's session so notifications remain available. It does not wake a sleeping PC, but a missed scan starts when Windows is available again.
+Enable **Background Monitoring** in App Settings to register a per-user Windows scheduled task. **Start Time** is the exact local time for the first scheduled run; later runs repeat at the selected frequency. Windows then starts a short-lived Paper Monitor refresh worker only when the configured scan is due. The worker retrieves papers, updates local data, sends any notifications, and exits; Python, WebView, and the local HTTP bridge consume no background memory between scans. The task runs with the signed-in user's session so notifications remain available. It does not wake a sleeping PC, but a missed scan starts when Windows is available again.
 
-The task ignores overlapping starts and retries a failed run twice at 15-minute intervals. Notification payloads are stored before delivery and remain pending after a toast failure. Dashboard HTML is regenerated when the window is opened rather than during a headless scheduled scan.
+The task ignores overlapping starts and retries a failed run twice at 15-minute intervals. Notification payloads are recorded before delivery. A clear pre-delivery rejection can retry; accepted or ambiguous batches are not retried, which prevents duplicate article Toasts after partial delivery. New-paper notifications use one compact item per article, group items under their local delivery date in Notification Center, show only the two-line paper title and smaller journal name, and open the paper URL in the default browser when clicked. Toasts use the explicit `DaheLabs.PaperMonitor` Windows identity.
 
-Enable **Start at Windows Sign-in** to register a separate per-user logon task. It starts only the lightweight native tray after sign-in and exits the Python launcher without opening the Dashboard window or running a literature refresh. This option is independent from **Background Monitoring**.
+Enable **Start at Windows Sign-in** to register a separate per-user logon task. It starts only the lightweight native tray after sign-in and exits the Python launcher without opening the Dashboard window or running a literature refresh. It requires **Tray Icon** and remains independent from **Background Monitoring**.
 
 User config is stored under:
 
@@ -86,11 +87,15 @@ User config is stored under:
 %APPDATA%\PaperMonitor\config.json
 ```
 
-The uninstaller removes both the scheduled refresh task and the optional sign-in tray task, plus legacy Run entries. Upgrades and uninstall preserve the user config by default.
+The uninstaller first disables both scheduled launch points, signals any active refresh to cancel, closes the main window and native tray, and waits for all three runtimes to release installed executables. It also removes legacy Run entries and the obsolete persistent WebView2 cache. Upgrades and uninstall preserve the user config, article database, and current Crossref cache by default.
 
 ## Portable
 
 Use `Paper-Monitor-Windows-<version>.zip` or the standalone `.exe` when you do not want an installed app. The portable artifacts are directly runnable and do not register uninstall entries or installer registry keys. The extracted zip uses the faster onedir layout; the standalone executable is a onefile build and may take longer to unpack at startup.
+
+The x64 package keeps only the WinRT notification namespaces and x64 WebView2 loader required at runtime. UI styling is intentionally retained because the static assets and short transitions have negligible size and idle-resource cost compared with Python, OpenSSL, pythonnet, and WebView2.
+
+For reliable Windows Toast identity and Notification Center history, prefer the installer. Windows may reject Toast persistence for a portable executable that has no Start Menu shortcut registered with the Paper Monitor AUMID; retrieval, local storage, and the Dashboard remain portable.
 
 Portable builds can also use **Background Monitoring** and **Start at Windows Sign-in** because both are current-user Task Scheduler entries. Each task records the executable's current absolute path. If the portable folder is moved, open Paper Monitor once from the new location to reconcile the tasks; deleting the portable files without disabling these options leaves harmless broken task entries that must be removed manually.
 

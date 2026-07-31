@@ -397,23 +397,30 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             return 1
         return 0
     if args.command in ("window", "settings", "run"):
-        _sync_windows_runtime_settings(config_path)
-        from .windows_native_tray import ensure_native_tray
-
-        ensure_native_tray(config_path)
         window_path = "/settings" if args.command == "settings" else "/"
         if _is_windows_platform() and _is_window_mutex_running():
             if activate_existing_app_window(config_path, path=window_path):
+                from .windows_native_tray import ensure_native_tray
+
+                ensure_native_tray(config_path)
+                _sync_windows_runtime_settings(config_path)
                 return 0
             if _is_window_mutex_running():
                 error = RuntimeError("The running Paper Monitor window did not respond.")
                 _log_window_launch_error(config_path, window_path, error)
                 show_window_launch_error(error, window_path)
                 return 1
+        from .windows_native_tray import ensure_native_tray
+
+        ensure_native_tray(config_path)
         from .windows_app_window import open_dashboard_window
 
         try:
-            return open_dashboard_window(config_path, path=window_path)
+            return open_dashboard_window(
+                config_path,
+                path=window_path,
+                after_first_paint=lambda: _sync_windows_runtime_settings(config_path),
+            )
         except Exception as exc:
             _log_window_launch_error(config_path, window_path, exc)
             show_window_launch_error(exc, window_path)

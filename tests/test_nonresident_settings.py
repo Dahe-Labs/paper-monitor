@@ -26,6 +26,9 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertIn('id="launch_at_login"', html)
         self.assertIn("without opening the app window", html)
         self.assertIn("Keep the lightweight native tray available after the window closes", html)
+        self.assertIn('id="max_notifications" type="number" min="1" max="20"', html)
+        self.assertIn('<label for="refresh_start_time">Start Time</label>', html)
+        self.assertNotIn('id="crossref_rows"', html)
         self.assertNotIn("data-legacy-resident-setting", html)
         self.assertIn("[hidden]", css)
         self.assertIn("display: none !important", css)
@@ -38,6 +41,7 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertNotIn("legacyResidentSettings", javascript)
         self.assertNotIn("silent_startup_notifications", javascript)
         self.assertNotIn("refresh_on_launch", javascript)
+        self.assertNotIn('numberValue("crossref_rows")', javascript)
 
     def test_installer_removes_legacy_login_startup(self):
         installer = read_text("windows/PaperMonitor.iss")
@@ -47,10 +51,17 @@ class NonResidentSettingsContractTests(unittest.TestCase):
         self.assertNotIn("if CurStep = ssInstall", installer)
         self.assertEqual(installer.count("RegDeleteValue(HKCU"), 2)
         self.assertIn("[UninstallRun]", installer)
+        self.assertIn('Parameters: "--quit-existing"', installer)
         self.assertIn('Parameters: "uninstall-startup"', installer)
         self.assertIn("RemoveScheduledRefreshTask", installer)
         self.assertIn('\\PaperMonitor Scheduled Refresh" /F', installer)
         self.assertIn('\\PaperMonitor Tray" /F', installer)
+        self.assertGreaterEqual(
+            installer.count(
+                'Type: filesandordirs; Name: "{localappdata}\\PaperMonitor\\WebView2"'
+            ),
+            2,
+        )
 
     def test_documentation_distinguishes_native_tray_from_heavy_runtime(self):
         windows_readme = read_text("README_WINDOWS.md")
@@ -133,12 +144,84 @@ class RuntimeScheduleSettingsTests(unittest.TestCase):
             )
 
     def test_interval_rounds_up_to_supported_whole_hours(self):
+        self.assertEqual(windows_runtime_settings._interval_hours({}), 24)
+        self.assertEqual(
+            windows_runtime_settings._interval_hours({"interval_seconds": "invalid"}),
+            24,
+        )
         self.assertEqual(windows_runtime_settings._interval_hours({"interval_seconds": 60}), 1)
         self.assertEqual(windows_runtime_settings._interval_hours({"interval_seconds": 9001}), 3)
         self.assertEqual(
             windows_runtime_settings._interval_hours({"interval_seconds": 10**12}),
             24 * 30,
         )
+
+    def test_uninstall_disables_launch_points_before_stopping_runtime(self):
+        scheduler = types.ModuleType("paper_monitor.windows_scheduled_task")
+        scheduler.sync_scheduled_refresh = Mock()
+        scheduler.sync_silent_startup = Mock()
+        calls = []
+        scheduler.sync_scheduled_refresh.side_effect = lambda *_args: calls.append("refresh-task")
+        scheduler.sync_silent_startup.side_effect = lambda *_args: calls.append("startup-task")
+
+        with (
+            patch.dict(sys.modules, {scheduler.__name__: scheduler}),
+            patch.object(windows_runtime_settings, "os", types.SimpleNamespace(name="nt")),
+            patch.object(
+                windows_runtime_settings,
+                "_stop_installed_runtime",
+                side_effect=lambda *_args: calls.append("runtime"),
+            ) as stop_runtime,
+            patch.object(windows_runtime_settings, "remove_legacy_startup_entry") as cleanup,
+        ):
+            config_path = Path("config.json")
+            windows_runtime_settings.remove_windows_runtime_integrations(config_path)
+
+        stop_runtime.assert_called_once_with(config_path.resolve())
+        scheduler.sync_scheduled_refresh.assert_called_once_with(config_path.resolve(), False, 1)
+        scheduler.sync_silent_startup.assert_called_once_with(config_path.resolve(), False)
+        cleanup.assert_called_once_with()
+        self.assertEqual(calls, ["refresh-task", "startup-task", "runtime"])
+
+    def test_uninstall_runtime_shutdown_waits_for_window_tray_and_refresh(self):
+        mutex = types.ModuleType("paper_monitor.windows_mutex")
+        mutex.REFRESH_MUTEX_NAME = "refresh"
+        mutex.TRAY_MUTEX_NAME = "tray"
+        mutex.WINDOW_MUTEX_NAME = "window"
+        mutex_checks = {"refresh": 0, "window": 0, "tray": 0}
+
+        def is_mutex_running(name):
+            mutex_checks[name] += 1
+            return name in {"refresh", "window"} and mutex_checks[name] == 1
+
+        mutex.is_mutex_running = Mock(side_effect=is_mutex_running)
+        tray = types.ModuleType("paper_monitor.windows_native_tray")
+        tray.stop_native_tray = Mock(return_value=True)
+        refresh = types.ModuleType("paper_monitor.windows_refresh_control")
+        refresh.request_refresh_stop = Mock(return_value=True)
+        control = types.ModuleType("paper_monitor.windows_window_control")
+        control.WindowControlError = RuntimeError
+        control.send_window_control = Mock(return_value={"ok": True})
+
+        with (
+            patch.dict(
+                sys.modules,
+                {
+                    mutex.__name__: mutex,
+                    tray.__name__: tray,
+                    refresh.__name__: refresh,
+                    control.__name__: control,
+                },
+            ),
+            patch.object(windows_runtime_settings.time, "monotonic", side_effect=[0.0, 0.1, 0.2]),
+            patch.object(windows_runtime_settings.time, "sleep") as sleep,
+        ):
+            windows_runtime_settings._stop_installed_runtime(Path("config.json"))
+
+        control.send_window_control.assert_called_once_with(Path("config.json"), "close")
+        tray.stop_native_tray.assert_called_once_with()
+        refresh.request_refresh_stop.assert_called_once_with()
+        sleep.assert_called_once_with(windows_runtime_settings.UNINSTALL_EXIT_POLL_SECONDS)
 
     def test_unreadable_or_malformed_config_never_removes_existing_task(self):
         with tempfile.TemporaryDirectory() as directory:

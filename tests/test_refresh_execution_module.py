@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from paper_monitor.config import MonitorConfig
 from paper_monitor.filtering import FilterConfig
 from paper_monitor.journal_metrics import JournalMetric, JournalMetrics
 from paper_monitor.models import Article
+from paper_monitor.refresh_cancellation import RefreshCancellation, RefreshCancelled
 from paper_monitor.refresh_errors import RefreshAlreadyRunning
 from paper_monitor.refresh_execution import RefreshExecution, RefreshIntent
 from paper_monitor.sources import SourceFetchResult
@@ -86,12 +88,13 @@ class RefreshExecutionModuleTests(unittest.TestCase):
         run_id_iterator = iter(run_ids)
         dependencies = SimpleNamespace(
             load_config=lambda _path: self.config,
-            fetch_sources=lambda _source_config: next(result_iterator),
+            fetch_sources=lambda _source_config, _cancellation: next(result_iterator),
             load_metrics=lambda _path: self.metrics,
             lifecycle_factory=lambda _path: self.lifecycle,
             notification_adapter_factory=lambda _config: self.notifier,
             acquire_refresh_mutex=acquire_mutex,
             close_refresh_mutex=lambda _handle: None,
+            create_refresh_cancellation=RefreshCancellation,
             new_run_id=lambda: next(run_id_iterator),
         )
         with mock.patch(
@@ -117,6 +120,10 @@ class RefreshExecutionModuleTests(unittest.TestCase):
         self.assertEqual(outcome.skipped, 1)
         self.assertEqual(outcome.notification.delivery, NotificationDelivery.ACCEPTED)
         self.assertEqual(len(self.notifier.notifications), 1)
+        notification_article = self.notifier.notifications[0].articles[0]
+        self.assertEqual(notification_article.title, "Solid-state battery discovery")
+        self.assertEqual(notification_article.journal, "Journal of Batteries")
+        self.assertEqual(notification_article.url, "https://example.org/article")
         self.assertEqual(len(snapshot.articles), 1)
         self.assertEqual(snapshot.articles[0].impact_reference, 9.25)
         self.assertFalse(hasattr(snapshot.articles[0], "abstract"))
@@ -221,6 +228,38 @@ class RefreshExecutionModuleTests(unittest.TestCase):
 
         with self.assertRaises(RefreshAlreadyRunning):
             execution.execute(RefreshIntent.BACKGROUND)
+
+    def test_refresh_cancellation_propagates_without_committing_a_failed_run(self):
+        dependencies = SimpleNamespace(
+            load_config=lambda _path: self.config,
+            fetch_sources=lambda _source_config, _cancellation: (_ for _ in ()).throw(
+                RefreshCancelled("stopping")
+            ),
+            load_metrics=lambda _path: self.metrics,
+            lifecycle_factory=lambda _path: self.lifecycle,
+            notification_adapter_factory=lambda _config: self.notifier,
+            acquire_refresh_mutex=lambda: object(),
+            close_refresh_mutex=lambda _handle: None,
+            create_refresh_cancellation=RefreshCancellation,
+            new_run_id=lambda: "cancelled-run",
+        )
+        with mock.patch(
+            "paper_monitor.refresh_execution._production_dependencies",
+            return_value=dependencies,
+        ):
+            execution = RefreshExecution(self.config_path)
+
+        with self.assertRaisesRegex(RefreshCancelled, "stopping"):
+            execution.execute(RefreshIntent.BACKGROUND)
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM lifecycle_refresh_runs"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(count, 0)
 
     def test_production_source_adapters_feed_one_refresh_without_duplicate_redetection(self):
         metrics_path = Path(self.temp_dir.name) / "metrics.json"
@@ -366,7 +405,7 @@ class RefreshExecutionModuleTests(unittest.TestCase):
             {("RSS Author",), ("Crossref Author",), ("OpenAlex Author",)},
         )
         self.assertTrue(all(not hasattr(article, "abstract") for article in second.snapshot.articles))
-        self.assertEqual(
+        self.assertCountEqual(
             requested_hosts,
             [
                 "feed.example",

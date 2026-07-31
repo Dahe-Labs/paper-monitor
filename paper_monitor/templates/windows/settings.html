@@ -28,21 +28,6 @@ __SETTINGS_CSS__
       <form id="settings-form">
         <section class="panel active" id="panel-search" role="tabpanel" aria-labelledby="tab-search">
           <div class="form-grid">
-            <div class="row compact">
-              <label for="journal_scope_top_n">Top N Journals</label>
-              <input id="journal_scope_top_n" type="number" min="1" max="300" step="1" required data-testid="top-n-journals">
-            </div>
-
-            <div class="row compact">
-              <label for="interval_seconds">Background Refresh Frequency</label>
-              <select id="interval_seconds" required data-testid="refresh-frequency"></select>
-            </div>
-
-            <div class="row compact">
-              <label for="refresh_start_time">Preferred Start Time</label>
-              <input id="refresh_start_time" type="time" data-testid="refresh-start-time">
-            </div>
-
             <div class="row">
               <label for="search_direction">Search Direction</label>
               <select id="search_direction" required data-testid="search-direction"></select>
@@ -63,22 +48,19 @@ __SETTINGS_CSS__
               <textarea id="openalex_query" spellcheck="false" data-testid="openalex-query"></textarea>
             </div>
 
-            <div class="row compact">
-              <label for="max_notifications">Max Notifications</label>
-              <input id="max_notifications" type="number" min="1" max="100" step="1" required>
-            </div>
           </div>
 
           <details class="advanced">
             <summary>Source Options</summary>
             <div class="source-grid">
+              <div class="source-note" id="source_scope_status" role="status" aria-live="polite" hidden></div>
               <label class="check"><input id="crossref_enabled" type="checkbox"> Crossref</label>
               <div class="field"><label for="crossref_days_back">Crossref Days</label><input id="crossref_days_back" type="number" min="1" max="3650" step="1" required></div>
-              <div class="field"><label for="crossref_rows">Rows</label><input id="crossref_rows" type="number" min="1" max="1000" step="1" required></div>
               <div class="field"><label for="crossref_rows_per_journal">Rows / Journal</label><input id="crossref_rows_per_journal" type="number" min="1" max="1000" step="1" required></div>
               <div class="field"><label for="crossref_timeout_seconds">Timeout</label><input id="crossref_timeout_seconds" type="number" min="1" max="120" step="1" required></div>
               <div class="field"><label for="crossref_max_workers">Workers</label><input id="crossref_max_workers" type="number" min="1" max="16" step="1" required></div>
               <div class="field"><label for="crossref_mailto">Mailto</label><input id="crossref_mailto" type="email"></div>
+              <div class="source-note" id="crossref_pool_status" role="status" aria-live="polite"></div>
 
               <label class="check"><input id="openalex_enabled" type="checkbox"> OpenAlex</label>
               <div class="field"><label for="openalex_days_back">OpenAlex Days</label><input id="openalex_days_back" type="number" min="1" max="3650" step="1" required></div>
@@ -104,8 +86,25 @@ __SETTINGS_CSS__
             </div>
 
             <div class="row compact">
-              <label for="launch_at_login">Start at Windows Sign-in</label>
-              <label class="check"><input id="launch_at_login" type="checkbox" data-testid="launch-at-login"> Start the lightweight tray silently after sign-in without opening the app window</label>
+              <label for="interval_seconds">Refresh Frequency</label>
+              <select id="interval_seconds" required data-testid="refresh-frequency"></select>
+            </div>
+
+            <div class="row compact">
+              <label for="refresh_start_time">Start Time</label>
+              <input id="refresh_start_time" type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" autocomplete="off" pattern="(?:[01]\d|2[0-3]):[0-5]\d" required aria-label="Start time in 24-hour HH:MM format" title="Enter an exact local time in 24-hour HH:MM format" data-testid="refresh-start-time">
+            </div>
+
+            <div class="setting-note" id="background_schedule_status" role="status" aria-live="polite"></div>
+
+            <div class="row compact">
+              <label for="notifications_enabled">Notifications</label>
+              <label class="check"><input id="notifications_enabled" type="checkbox" data-testid="notifications-enabled"> Send desktop notifications for new papers found by background monitoring</label>
+            </div>
+
+            <div class="row compact">
+              <label for="max_notifications">Maximum Notifications</label>
+              <input id="max_notifications" type="number" min="1" max="20" step="1" required>
             </div>
 
             <div class="row compact">
@@ -114,8 +113,8 @@ __SETTINGS_CSS__
             </div>
 
             <div class="row compact">
-              <label for="notifications_enabled">Notifications</label>
-              <label class="check"><input id="notifications_enabled" type="checkbox" data-testid="notifications-enabled"> Send desktop notifications for new matched papers</label>
+              <label for="launch_at_login">Start at Windows Sign-in</label>
+              <label class="check"><input id="launch_at_login" type="checkbox" data-testid="launch-at-login"> Start the lightweight tray silently after sign-in without opening the app window</label>
             </div>
 
           </div>

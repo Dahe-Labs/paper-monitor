@@ -20,10 +20,6 @@ venv/
 build/
 dist/
 public_release/
-macos/PaperMonitorApp/.build/
-macos/PaperMonitorApp/DerivedData/
-*.app
-*.dmg
 
 # Local runtime data
 work/
@@ -33,8 +29,6 @@ config.json
 config.json.bak
 
 # Platform/editor files
-.DS_Store
-._*
 Thumbs.db
 .idea/
 .vscode/

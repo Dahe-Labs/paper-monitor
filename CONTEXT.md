@@ -17,7 +17,7 @@ A matched Article submitted during a Refresh Run with its Article Listing and ex
 _Avoid_: Search result, cached response, notification payload
 
 **Article Lifecycle**:
-The progression of an Article from detection through listing, presentation or notification, and eventual replacement by a Retired Article Fingerprint.
+The progression of an Article from detection through listing, presentation or notification, and permanent deletion after its active retention window.
 _Avoid_: Dashboard state, notification queue, article cache
 
 **Article Listing**:
@@ -27,10 +27,6 @@ _Avoid_: File, article record, search result
 **Journal Impact Reference**:
 A frozen OpenAlex two-year mean citedness value used only as rough journal-level context. It is not a Clarivate Journal Impact Factor and never determines Article selection or notification eligibility.
 _Avoid_: Journal Impact Factor, Article quality score, acceptance threshold
-
-**Retired Article Fingerprint**:
-A non-reversible identity retained after an Article Listing expires, used only to prevent the same Article from being presented or notified again. It contains no article metadata.
-_Avoid_: Archived Article, hidden listing, history record
 
 **Refresh Run**:
 One bounded attempt to search the configured sources and record its outcome and discovered articles.
@@ -57,8 +53,8 @@ An article that has never been presented and has never previously produced a sys
 _Avoid_: New result, unread article, pending toast
 
 **Refresh Notification**:
-The single system notification that summarizes all Notification-Eligible Articles from one Refresh Run. A one-Article notification names that Article; a multi-Article notification reports the count and a short title preview.
-_Avoid_: Per-Article notification batch, repeated toast, refresh alert stream
+The lifecycle-owned batch of Notification-Eligible Articles from one Refresh Run. The Windows Adapter renders the selected Articles as compact Toasts grouped by local delivery day, while acceptance and retry state remain atomic for the whole batch.
+_Avoid_: Separate notification database, repeated toast, refresh alert stream
 
 **Tray Host**:
 The optional native Windows notification-area adapter that exposes menu commands and launches bounded Paper Monitor processes without owning refresh timing or application state.

@@ -10,6 +10,12 @@ class SettingsAccessibilityTests(unittest.TestCase):
 
         self.assertNotIn('<div class="field"><span>', html)
         self.assertIn('for="openalex_api_key"', html)
+        self.assertIn('id="refresh_start_time" type="text" inputmode="numeric"', html)
+        self.assertIn('<label for="refresh_start_time">Start Time</label>', html)
+        self.assertIn('aria-label="Start time in 24-hour HH:MM format"', html)
+        self.assertIn('pattern="(?:[01]\\d|2[0-3]):[0-5]\\d" required', html)
+        self.assertNotIn("Preferred Start Time", html)
+        self.assertNotIn('id="refresh_start_time" type="time"', html)
         self.assertIn('aria-label="Search candidate journals"', html)
         self.assertIn('aria-label="Sort candidate journals"', html)
         self.assertIn('role="status" aria-live="polite"', html)
@@ -24,6 +30,9 @@ class SettingsAccessibilityTests(unittest.TestCase):
         self.assertIn('panel.hidden = !active', script)
         self.assertIn('addEventListener("invalid"', script)
         self.assertIn('apiKey.required = enabled', script)
+        self.assertIn("syncBackgroundMonitoringState", script)
+        self.assertIn("syncTrayStartupState", script)
+        self.assertIn("syncJournalSourceAvailability", script)
 
     def test_settings_controls_use_accessible_contrast_tokens(self):
         css = (ROOT / "paper_monitor" / "static" / "windows" / "settings.css").read_text(encoding="utf-8")

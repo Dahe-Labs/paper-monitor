@@ -16,11 +16,9 @@ from .windows_mutex import REFRESH_MUTEX_NAME, is_mutex_running
 
 MAX_SEARCH_TERM_LENGTH = 120
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
-MAX_ANALYSIS_JOURNALS = 100
-MAX_EXHAUSTIVE_ANALYSIS_JOURNALS = 50
 MAX_ANALYSIS_DATE_SPAN_DAYS = 366
 MAX_EXHAUSTIVE_ANALYSIS_DATE_SPAN_DAYS = 93
-MAX_ANALYSIS_TOP_N = 100
+_NO_PRESENTATION_TOKEN = ""
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "base-uri 'none'; "
@@ -72,8 +70,12 @@ class WindowsDashboardServer:
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._refresh_state_lock = threading.Lock()
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle: Optional[ArticleLifecycle] = None
+        self._lifecycle_path: Optional[Path] = None
         self._refresh_thread: Optional[threading.Thread] = None
         self._pending_snapshot: Optional[DashboardSnapshot] = None
+        self._dashboard_snapshot: Optional[DashboardSnapshot] = None
         self._last_refresh: Optional[RefreshOutcome] = None
         self._refresh_state: Dict[str, object] = {
             "ok": True,
@@ -116,7 +118,7 @@ class WindowsDashboardServer:
                 if path == "/settings":
                     from .windows_settings import render_settings_page
 
-                    html = render_settings_page(outer.config_path, outer.url.rstrip("/"), outer.token)
+                    html = render_settings_page(outer.url.rstrip("/"), outer.token)
                     _send_html(self, 200, html)
                     return
 
@@ -149,6 +151,16 @@ class WindowsDashboardServer:
                         _send_json(self, 403, {"error": "Unauthorized"})
                         return
                     _send_json(self, 200, outer.refresh_status())
+                    return
+
+                if path == "/api/keyword-analysis-data":
+                    if not outer.authorized(self.headers):
+                        _send_json(self, 403, {"error": "Unauthorized"})
+                        return
+                    try:
+                        _send_json(self, 200, outer.keyword_analysis_payload())
+                    except Exception as exc:
+                        _send_json(self, 500, {"error": "Could not load keyword-analysis data: %s" % exc})
                     return
 
                 _send_json(self, 404, {"error": "Not found"})
@@ -213,6 +225,13 @@ class WindowsDashboardServer:
     def set_window_controller(self, window_controller: Optional[WindowController]) -> None:
         self.window_controller = window_controller
 
+    def invalidate_dashboard_cache(self) -> None:
+        """Make the next dashboard render read the canonical lifecycle database."""
+
+        with self._refresh_state_lock:
+            self._pending_snapshot = None
+            self._dashboard_snapshot = None
+
     def dashboard_html(self) -> str:
         from .config import load_app_config
         from .lifecycle_dashboard import render_lifecycle_dashboard
@@ -222,15 +241,49 @@ class WindowsDashboardServer:
             snapshot = self._pending_snapshot
             self._pending_snapshot = None
             last_refresh = self._last_refresh
+        lifecycle = self._lifecycle_for(app_config.database_path)
         if snapshot is None:
-            snapshot = self.lifecycle_factory(app_config.database_path).dashboard_snapshot()
-        html = render_lifecycle_dashboard(app_config, snapshot, last_refresh)
+            snapshot = lifecycle.dashboard_snapshot()
+        persisted_refresh = lifecycle.latest_refresh_run()
+        if persisted_refresh is not None:
+            last_refresh = persisted_refresh
+        with self._refresh_state_lock:
+            self._dashboard_snapshot = snapshot
+        html = render_lifecycle_dashboard(
+            app_config,
+            snapshot,
+            last_refresh,
+            defer_keyword_analysis=True,
+        )
         return _inject_bridge_config(
             html,
             self.url.rstrip("/"),
             self.token,
             snapshot.presentation_token,
         )
+
+    def keyword_analysis_payload(self) -> Dict[str, object]:
+        from .config import load_app_config
+        from .lifecycle_dashboard import lifecycle_keyword_analysis_payload
+
+        app_config = load_app_config(self.config_path)
+        with self._refresh_state_lock:
+            snapshot = self._dashboard_snapshot
+        if snapshot is None:
+            articles = self._lifecycle_for(app_config.database_path).list_articles()
+            snapshot = DashboardSnapshot(
+                presentation_token=_NO_PRESENTATION_TOKEN,
+                articles=articles,
+            )
+        return lifecycle_keyword_analysis_payload(app_config, snapshot)
+
+    def _lifecycle_for(self, database_path: Path) -> ArticleLifecycle:
+        path = Path(database_path)
+        with self._lifecycle_lock:
+            if self._lifecycle is None or self._lifecycle_path != path:
+                self._lifecycle = self.lifecycle_factory(path)
+                self._lifecycle_path = path
+            return self._lifecycle
 
     def handle_api_request(self, path: str, payload: Dict[str, object]) -> Tuple[int, Dict[str, object]]:
         if path == "/api/settings":
@@ -290,7 +343,7 @@ class WindowsDashboardServer:
 
             try:
                 app_config = load_app_config(self.config_path)
-                confirmed = self.lifecycle_factory(app_config.database_path).confirm_presentation(token)
+                confirmed = self._lifecycle_for(app_config.database_path).confirm_presentation(token)
             except UnknownPresentationToken:
                 return 409, {"ok": False, "error": "presentation_token is unknown or expired"}
             except Exception as exc:
@@ -300,6 +353,10 @@ class WindowsDashboardServer:
         if path == "/api/window-control":
             if self.window_controller is None:
                 return 503, {"ok": False, "error": "window_control_unavailable"}
+            if str(payload.get("action") or "") == "refresh-complete":
+                # A scheduled process has committed through ArticleLifecycle.
+                # Do not let an older visible-refresh snapshot mask that commit.
+                self.invalidate_dashboard_cache()
             try:
                 response = self.window_controller(payload)
             except Exception as exc:
@@ -316,6 +373,8 @@ class WindowsDashboardServer:
                 return 409, {"ok": False, "error": "analysis_already_running"}
             try:
                 return 200, self.keyword_analysis_runner(self.config_path, **options)
+            except ValueError as exc:
+                return 400, {"ok": False, "error": str(exc)}
             except Exception as exc:
                 return 500, {"error": f"Crossref analysis failed: {exc}"}
             finally:
@@ -717,11 +776,7 @@ def _analysis_request_options(payload: Dict[str, object]) -> Tuple[Dict[str, obj
     if span_days > max_span:
         return {}, f"Date range for {analysis_depth} analysis must not exceed {max_span} days"
 
-    top_n, top_n_error = _analysis_top_n(payload.get("top_n", 30))
-    if top_n_error:
-        return {}, top_n_error
-
-    journals, journals_error = _analysis_journals(payload.get("journals"), analysis_depth)
+    journals, journals_error = _analysis_journals(payload.get("journals"))
     if journals_error:
         return {}, journals_error
 
@@ -730,7 +785,6 @@ def _analysis_request_options(payload: Dict[str, object]) -> Tuple[Dict[str, obj
         "date_to": date_to_text,
         "sort_mode": _sort_mode(payload.get("sort_mode")),
         "analysis_depth": analysis_depth,
-        "top_n": top_n,
         "selected_journals": journals,
     }, None
 
@@ -746,26 +800,9 @@ def _analysis_date(value: object) -> Tuple[str, Optional[date]]:
     return text, parsed
 
 
-def _analysis_top_n(value: object) -> Tuple[int, Optional[str]]:
-    if isinstance(value, bool):
-        return 0, f"top_n must be an integer between 1 and {MAX_ANALYSIS_TOP_N}"
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return 0, f"top_n must be an integer between 1 and {MAX_ANALYSIS_TOP_N}"
-    if isinstance(value, float) and not value.is_integer():
-        return 0, f"top_n must be an integer between 1 and {MAX_ANALYSIS_TOP_N}"
-    if parsed < 1 or parsed > MAX_ANALYSIS_TOP_N:
-        return 0, f"top_n must be between 1 and {MAX_ANALYSIS_TOP_N}"
-    return parsed, None
-
-
-def _analysis_journals(value: object, analysis_depth: str) -> Tuple[List[str], Optional[str]]:
+def _analysis_journals(value: object) -> Tuple[List[str], Optional[str]]:
     if not isinstance(value, list):
         return [], "journals must be a list"
-    max_journals = MAX_EXHAUSTIVE_ANALYSIS_JOURNALS if analysis_depth == "exhaustive" else MAX_ANALYSIS_JOURNALS
-    if len(value) > max_journals:
-        return [], f"{analysis_depth.capitalize()} analysis supports at most {max_journals} journals"
 
     journals = []
     seen = set()

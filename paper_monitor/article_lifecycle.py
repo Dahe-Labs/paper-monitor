@@ -94,6 +94,18 @@ class CommitOutcome:
 
 
 @dataclass(frozen=True)
+class RefreshRunSummary:
+    run_id: str
+    status: RefreshRunStatus
+    fetched: int
+    matched: int
+    new_matches: int
+    skipped: int
+    error: str
+    committed_at: str
+
+
+@dataclass(frozen=True)
 class DashboardArticle:
     article_id: str
     title: str
@@ -123,24 +135,18 @@ class NotificationArticle:
 
 
 @dataclass(frozen=True)
-class NotificationHandoff:
-    run_id: str
-    article_count: int
-    articles: Tuple[NotificationArticle, ...]
-
-
-@dataclass(frozen=True)
 class RefreshNotification:
     run_id: str
     heading: str
     body: str
     article_count: int
     preview_titles: Tuple[str, ...]
+    articles: Tuple[NotificationArticle, ...] = ()
 
 
 class NotificationAdapter(Protocol):
     def deliver(self, notification: RefreshNotification) -> NotificationDelivery:
-        """Submit one notification and classify whether Windows accepted it."""
+        """Submit one notification batch and classify whether Windows accepted it."""
 
 
 @dataclass(frozen=True)
@@ -245,27 +251,67 @@ class ArticleLifecycle:
             )
             return self._commit_outcome(connection, run_id)
 
+    def latest_refresh_run(self) -> Optional[RefreshRunSummary]:
+        """Return the last committed Refresh Run across visible and background callers."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT run_id, status, fetched, matched, new_count, skipped, error, committed_at
+                FROM lifecycle_refresh_runs
+                ORDER BY committed_at DESC, run_id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return RefreshRunSummary(
+            run_id=str(row[0]),
+            status=RefreshRunStatus(str(row[1])),
+            fetched=int(row[2]),
+            matched=int(row[3]),
+            new_matches=int(row[4]),
+            skipped=int(row[5]),
+            error=str(row[6] or ""),
+            committed_at=str(row[7]),
+        )
+
     def dashboard_snapshot(self) -> DashboardSnapshot:
         now = self._now()
-        token = uuid.uuid4().hex
+        token = ""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._prune_expired(connection)
             rows = self._dashboard_rows(connection)
-            connection.execute(
-                """
-                INSERT INTO lifecycle_presentation_tokens (token, created_at, confirmed_at)
-                VALUES (?, ?, NULL)
-                """,
-                (token, now),
+            has_unpresented = bool(
+                connection.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM lifecycle_articles
+                        WHERE presented_at IS NULL
+                    )
+                    """
+                ).fetchone()[0]
             )
-            connection.executemany(
-                """
-                INSERT INTO lifecycle_presentation_articles (token, article_id)
-                VALUES (?, ?)
-                """,
-                ((token, str(row["article_id"])) for row in rows),
-            )
+            if has_unpresented:
+                token = uuid.uuid4().hex
+                connection.execute(
+                    """
+                    INSERT INTO lifecycle_presentation_tokens (token, created_at, confirmed_at)
+                    VALUES (?, ?, NULL)
+                    """,
+                    (token, now),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO lifecycle_presentation_articles (token, article_id)
+                    SELECT ?, article_id
+                    FROM lifecycle_articles
+                    WHERE presented_at IS NULL
+                    """,
+                    (token,),
+                )
 
         return DashboardSnapshot(
             presentation_token=token,
@@ -317,102 +363,6 @@ class ArticleLifecycle:
             )
             return max(cursor.rowcount, 0)
 
-    def accept_notification_handoff(
-        self,
-        run_id: str,
-        *,
-        limit: int,
-    ) -> NotificationHandoff:
-        """Atomically hand eligible Articles to a shell that owns notification UI.
-
-        The handoff preserves the legacy macOS/CLI contract: once the shell accepts
-        the batch, Articles are not offered again even if that shell suppresses UI.
-        """
-
-        normalized_run_id = str(run_id or "").strip()
-        if not normalized_run_id:
-            raise ValueError("run_id must not be empty")
-        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
-            raise ValueError("limit must be a non-negative integer")
-        now = self._now()
-        with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            self._prune_expired(connection)
-            if connection.execute(
-                "SELECT 1 FROM lifecycle_refresh_runs WHERE run_id = ?",
-                (normalized_run_id,),
-            ).fetchone() is None:
-                raise KeyError(normalized_run_id)
-            prior = connection.execute(
-                "SELECT state FROM lifecycle_notification_attempts WHERE run_id = ?",
-                (normalized_run_id,),
-            ).fetchone()
-            if prior is not None and str(prior["state"]) != "rejected":
-                return NotificationHandoff(normalized_run_id, 0, ())
-
-            rows = connection.execute(
-                """
-                SELECT article.article_id, article.title, article.journal, article.url,
-                       article.doi, article.published, article.source
-                FROM lifecycle_refresh_articles AS detected
-                JOIN lifecycle_articles AS article ON article.article_id = detected.article_id
-                WHERE detected.run_id = ?
-                  AND article.presented_at IS NULL
-                  AND article.notification_state = 'eligible'
-                ORDER BY article.first_detected_at DESC, article.article_id ASC
-                """,
-                (normalized_run_id,),
-            ).fetchall()
-            if not rows:
-                self._write_notification_attempt(
-                    connection,
-                    normalized_run_id,
-                    state="not_needed",
-                    article_count=0,
-                    now=now,
-                    last_error="",
-                )
-                return NotificationHandoff(normalized_run_id, 0, ())
-
-            article_ids = tuple(str(row["article_id"]) for row in rows)
-            placeholders = ",".join("?" for _ in article_ids)
-            connection.execute(
-                f"""
-                UPDATE lifecycle_articles
-                SET notification_state = 'consumed', notified_at = ?
-                WHERE article_id IN ({placeholders})
-                  AND presented_at IS NULL
-                  AND notification_state = 'eligible'
-                """,  # nosec B608
-                (now, *article_ids),
-            )
-            self._write_notification_attempt(
-                connection,
-                normalized_run_id,
-                state="accepted",
-                article_count=len(article_ids),
-                now=now,
-                last_error="",
-            )
-            selected = rows[:limit]
-
-        return NotificationHandoff(
-            run_id=normalized_run_id,
-            article_count=len(article_ids),
-            articles=tuple(
-                NotificationArticle(
-                    article_id=str(row["article_id"]),
-                    title=str(row["title"]),
-                    journal=str(row["journal"]),
-                    url=str(row["url"]),
-                    doi=str(row["doi"]),
-                    published=str(row["published"]),
-                    source=str(row["source"]),
-                )
-                for row in selected
-            ),
-        )
-
     def deliver_notification(
         self,
         run_id: str,
@@ -460,7 +410,8 @@ class ArticleLifecycle:
 
             rows = connection.execute(
                 """
-                SELECT article.article_id, article.title, article.journal
+                SELECT article.article_id, article.title, article.journal, article.url,
+                       article.doi, article.published, article.source
                 FROM lifecycle_refresh_articles AS detected
                 JOIN lifecycle_articles AS article ON article.article_id = detected.article_id
                 WHERE detected.run_id = ?
@@ -1416,6 +1367,22 @@ def _build_notification(run_id: str, rows: Sequence[sqlite3.Row]) -> RefreshNoti
         body=body,
         article_count=len(rows),
         preview_titles=titles[:3],
+        articles=_notification_articles(rows),
+    )
+
+
+def _notification_articles(rows: Sequence[sqlite3.Row]) -> Tuple[NotificationArticle, ...]:
+    return tuple(
+        NotificationArticle(
+            article_id=str(row["article_id"]),
+            title=str(row["title"]),
+            journal=str(row["journal"]),
+            url=str(row["url"]),
+            doi=str(row["doi"]),
+            published=str(row["published"]),
+            source=str(row["source"]),
+        )
+        for row in rows
     )
 
 

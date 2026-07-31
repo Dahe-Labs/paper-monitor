@@ -9,7 +9,7 @@ on:
       version:
         description: Release version, with or without the v prefix
         required: true
-        default: "0.1.8"
+        default: "0.1.16"
       upload_release:
         description: Upload assets to an existing matching GitHub Release
         required: false

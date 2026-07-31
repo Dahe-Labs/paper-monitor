@@ -25,11 +25,121 @@
       if (settingsLoaded) settingsDirty = true;
     }
 
+    function setDisabled(ids, disabled) {
+      ids.forEach(function (id) {
+        const element = field(id);
+        if (element) element.disabled = Boolean(disabled);
+      });
+    }
+
+    function syncBackgroundMonitoringState() {
+      const enabled = field("startup_enabled").checked;
+      setDisabled(["interval_seconds", "refresh_start_time"], !enabled);
+      const status = field("background_schedule_status");
+      status.dataset.enabled = enabled ? "true" : "false";
+      status.textContent = enabled
+        ? "Background monitoring is on. Start Time is an exact local time; later runs repeat at the selected frequency."
+        : "Background monitoring is off. Refresh Frequency and Start Time are saved but will not run.";
+      syncNotificationState();
+    }
+
+    function syncNotificationState() {
+      const monitoringEnabled = field("startup_enabled").checked;
+      const notifications = field("notifications_enabled");
+      notifications.disabled = !monitoringEnabled;
+      field("max_notifications").disabled = !monitoringEnabled || !notifications.checked;
+    }
+
+    function syncTrayStartupState() {
+      const trayEnabled = field("show_tray_icon").checked;
+      const launchAtLogin = field("launch_at_login");
+      if (!trayEnabled) launchAtLogin.checked = false;
+      launchAtLogin.disabled = !trayEnabled;
+    }
+
     function syncOpenAlexRequirement() {
-      const enabled = field("openalex_enabled").checked;
+      const enabled = field("openalex_enabled").checked && !field("openalex_enabled").disabled;
       const apiKey = field("openalex_api_key");
       apiKey.required = enabled;
       apiKey.setAttribute("aria-required", enabled ? "true" : "false");
+    }
+
+    function syncCrossrefPoolStatus() {
+      const mailtoField = field("crossref_mailto");
+      const status = field("crossref_pool_status");
+      if (!field("crossref_enabled").checked || field("crossref_enabled").disabled) {
+        status.dataset.pool = "off";
+        status.textContent = "Crossref is off. Its saved source limits will apply when it is enabled.";
+        return;
+      }
+      const mailto = mailtoField.value.trim();
+      const requestedWorkers = Math.max(1, Number(field("crossref_max_workers").value) || 1);
+      const mailtoIsValid = !mailto || mailtoField.validity.valid;
+      if (!mailtoIsValid) {
+        status.dataset.pool = "invalid";
+        status.textContent = "Enter a valid contact email. Until then Crossref uses the public pool: 1 effective worker, 1 request/second.";
+        return;
+      }
+      if (!mailto) {
+        status.dataset.pool = "public";
+        status.textContent = "Public pool: 1 effective worker, 1 request/second. Add a contact email to use up to 3 polite-pool workers; the email is sent to Crossref with requests.";
+        return;
+      }
+      const effectiveWorkers = Math.min(requestedWorkers, 3);
+      status.dataset.pool = "polite";
+      status.textContent = "Polite pool: " + effectiveWorkers + " effective worker" +
+        (effectiveWorkers === 1 ? "" : "s") +
+        " (up to 3), 3 request starts/second. The contact email is sent to Crossref with requests.";
+    }
+
+    function syncSourceOptionState() {
+      const sourceFields = {
+        crossref_enabled: [
+          "crossref_days_back",
+          "crossref_rows_per_journal",
+          "crossref_timeout_seconds",
+          "crossref_max_workers",
+          "crossref_mailto"
+        ],
+        openalex_enabled: [
+          "openalex_days_back",
+          "openalex_per_page",
+          "openalex_max_pages",
+          "openalex_api_key"
+        ],
+        arxiv_enabled: [
+          "arxiv_days_back",
+          "arxiv_max_results",
+          "arxiv_search_field",
+          "arxiv_timeout_seconds",
+          "arxiv_query"
+        ]
+      };
+      Object.keys(sourceFields).forEach(function (checkboxId) {
+        const checkbox = field(checkboxId);
+        const active = checkbox.checked && !checkbox.disabled;
+        setDisabled(sourceFields[checkboxId], !active);
+      });
+      syncOpenAlexRequirement();
+      syncCrossrefPoolStatus();
+    }
+
+    function syncJournalSourceAvailability() {
+      const formalJournalCount = selectedJournals.filter(function (journal) {
+        return journalKey(journal) !== "arxiv";
+      }).length;
+      const unavailable = formalJournalCount === 0;
+      ["crossref_enabled", "openalex_enabled"].forEach(function (id) {
+        const checkbox = field(id);
+        checkbox.disabled = unavailable;
+        if (unavailable) checkbox.checked = false;
+      });
+      const status = field("source_scope_status");
+      status.hidden = !unavailable;
+      status.textContent = unavailable
+        ? "Crossref and OpenAlex require at least one formal journal in Journal Filter."
+        : "";
+      syncSourceOptionState();
     }
 
     function setValue(id, value) {
@@ -446,6 +556,7 @@
       field("selected_journal_count").textContent = String(selectedJournals.length) + " selected";
       field("candidate_journal_count").textContent = String(candidates.length) + " available";
       setLines("selected_journals", selectedJournals);
+      syncJournalSourceAvailability();
     }
 
     function setJournalPicker(catalog, selected) {
@@ -552,7 +663,7 @@
         return "1 day";
       }
       if (value % 86400 === 0) {
-        return String(value / 86400) + " day";
+        return String(value / 86400) + " days";
       }
       if (value % 3600 === 0) {
         return String(value / 3600) + "h";
@@ -624,6 +735,12 @@
         setValue("custom_direction_name", preset.label);
         setValue("crossref_query", preset.crossref_query);
         setValue("openalex_query", preset.openalex_query);
+        if (Array.isArray(preset.include_terms)) {
+          setLines("include_terms", preset.include_terms);
+        }
+        if (Array.isArray(preset.exclude_terms)) {
+          setLines("exclude_terms", preset.exclude_terms);
+        }
       } else if (!field("custom_direction_name").value.trim()) {
         setValue("custom_direction_name", "Custom");
       }
@@ -671,7 +788,6 @@
       fillFrequencyOptions(payload.refresh_frequency_options, payload.interval_seconds);
       setValue("refresh_start_time", payload.refresh_start_time || "");
       setValue("max_notifications", payload.max_notifications);
-      setValue("journal_scope_top_n", journalScope.top_n);
       fillSearchDirection(direction);
       setChecked("startup_enabled", appSettings.startup_enabled);
       setChecked("launch_at_login", appSettings.launch_at_login);
@@ -684,11 +800,11 @@
 
       setChecked("crossref_enabled", crossref.enabled);
       setValue("crossref_days_back", crossref.days_back);
-      setValue("crossref_rows", crossref.rows);
       setValue("crossref_rows_per_journal", crossref.rows_per_journal);
       setValue("crossref_timeout_seconds", crossref.timeout_seconds);
       setValue("crossref_max_workers", crossref.max_workers);
       setValue("crossref_mailto", crossref.mailto);
+      syncCrossrefPoolStatus();
 
       setChecked("openalex_enabled", openalex.enabled);
       setValue("openalex_days_back", openalex.days_back);
@@ -703,6 +819,9 @@
       setValue("arxiv_search_field", arxiv.search_field || "title");
       setValue("arxiv_timeout_seconds", arxiv.timeout_seconds);
       setValue("arxiv_query", arxiv.query);
+      syncBackgroundMonitoringState();
+      syncTrayStartupState();
+      syncJournalSourceAvailability();
     }
 
     function selectedDirectionLabel() {
@@ -737,14 +856,12 @@
         include_terms: lines("include_terms"),
         exclude_terms: lines("exclude_terms"),
         journal_scope: {
-          top_n: numberValue("journal_scope_top_n"),
           selected_journals: selectedJournals.slice()
         },
         sources: {
           crossref: {
             enabled: field("crossref_enabled").checked,
             days_back: numberValue("crossref_days_back"),
-            rows: numberValue("crossref_rows"),
             rows_per_journal: numberValue("crossref_rows_per_journal"),
             timeout_seconds: numberValue("crossref_timeout_seconds"),
             max_workers: numberValue("crossref_max_workers"),
@@ -852,10 +969,16 @@
     field("defaults-button").addEventListener("click", function () {
       restoreDefaults();
     });
+    field("startup_enabled").addEventListener("change", syncBackgroundMonitoringState);
+    field("notifications_enabled").addEventListener("change", syncNotificationState);
+    field("show_tray_icon").addEventListener("change", syncTrayStartupState);
     field("search_direction").addEventListener("change", applyPreset);
     field("crossref_query").addEventListener("input", promoteToCustom);
+    field("crossref_enabled").addEventListener("change", syncSourceOptionState);
+    field("crossref_max_workers").addEventListener("input", syncCrossrefPoolStatus);
+    field("crossref_mailto").addEventListener("input", syncCrossrefPoolStatus);
     field("openalex_query").addEventListener("input", promoteToCustom);
-    field("openalex_enabled").addEventListener("change", syncOpenAlexRequirement);
+    field("openalex_enabled").addEventListener("change", syncSourceOptionState);
     field("custom_direction_name").addEventListener("input", function () {
       if (field("search_direction").value !== "custom") {
         promoteToCustom();
@@ -869,6 +992,7 @@
       } else {
         removeSelectedJournal("arXiv");
       }
+      syncSourceOptionState();
     });
     field("journal_sort_mode").addEventListener("change", renderJournalPicker);
     field("add_manual_journal").addEventListener("click", addManualJournal);

@@ -102,6 +102,39 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertEqual(snapshot.articles[0].impact_reference, 9.25)
         self.assertFalse(hasattr(snapshot.articles[0], "abstract"))
 
+    def test_latest_refresh_run_reports_the_last_persisted_background_outcome(self):
+        self.lifecycle.commit_refresh(
+            RefreshCommit(
+                run_id="run-before",
+                status=RefreshRunStatus.PARTIAL,
+                fetched=4,
+                matched=2,
+                skipped=2,
+                error="one source failed",
+            )
+        )
+        self.clock.advance(days=1)
+        self.lifecycle.commit_refresh(
+            RefreshCommit(
+                run_id="run-latest",
+                status=RefreshRunStatus.SUCCEEDED,
+                fetched=1047,
+                matched=99,
+                skipped=948,
+            )
+        )
+
+        latest = self.lifecycle.latest_refresh_run()
+
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.run_id, "run-latest")
+        self.assertEqual(latest.status, RefreshRunStatus.SUCCEEDED)
+        self.assertEqual(latest.fetched, 1047)
+        self.assertEqual(latest.matched, 99)
+        self.assertEqual(latest.new_matches, 0)
+        self.assertEqual(latest.skipped, 948)
+        self.assertEqual(latest.committed_at, "2026-07-14T12:00:00Z")
+
     def test_publisher_tracking_query_is_not_part_of_doi_identity(self):
         publisher = ArticleDetection(
             title="Tracked publisher article",
@@ -162,7 +195,50 @@ class ArticleLifecycleTests(unittest.TestCase):
         with self.assertRaises(UnknownPresentationToken):
             self.lifecycle.confirm_presentation("unknown")
 
-    def test_one_notification_summarizes_run_and_is_never_repeated_after_acceptance(self):
+    def test_presented_articles_do_not_create_redundant_presentation_rows(self):
+        self.commit("run-presented-once", detection())
+        first = self.lifecycle.dashboard_snapshot()
+        self.assertEqual(self.lifecycle.confirm_presentation(first.presentation_token), 1)
+
+        repeated = [self.lifecycle.dashboard_snapshot() for _ in range(5)]
+        with closing(sqlite3.connect(str(self.lifecycle.path))) as connection:
+            token_count = connection.execute(
+                "SELECT COUNT(*) FROM lifecycle_presentation_tokens"
+            ).fetchone()[0]
+            mapping_count = connection.execute(
+                "SELECT COUNT(*) FROM lifecycle_presentation_articles"
+            ).fetchone()[0]
+
+        self.assertTrue(all(snapshot.presentation_token == "" for snapshot in repeated))
+        self.assertEqual(token_count, 1)
+        self.assertEqual(mapping_count, 1)
+
+    def test_presentation_token_maps_only_newly_unpresented_articles(self):
+        self.commit("run-first-presented", detection("first", title="First article"))
+        first = self.lifecycle.dashboard_snapshot()
+        self.assertEqual(self.lifecycle.confirm_presentation(first.presentation_token), 1)
+        self.commit("run-second-unpresented", detection("second", title="Second article"))
+
+        second = self.lifecycle.dashboard_snapshot()
+        with closing(sqlite3.connect(str(self.lifecycle.path))) as connection:
+            mapped_titles = [
+                row[0]
+                for row in connection.execute(
+                    """
+                    SELECT article.title
+                    FROM lifecycle_presentation_articles AS mapping
+                    JOIN lifecycle_articles AS article
+                      ON article.article_id = mapping.article_id
+                    WHERE mapping.token = ?
+                    """,
+                    (second.presentation_token,),
+                ).fetchall()
+            ]
+
+        self.assertEqual(mapped_titles, ["Second article"])
+        self.assertEqual(self.lifecycle.confirm_presentation(second.presentation_token), 1)
+
+    def test_one_notification_batch_carries_articles_and_is_never_repeated_after_acceptance(self):
         self.commit("run-many", *(detection(str(index), title=f"Article {index}") for index in range(4)))
         notifier = FakeNotifier(NotificationDelivery.ACCEPTED)
 
@@ -174,28 +250,20 @@ class ArticleLifecycleTests(unittest.TestCase):
         self.assertEqual(first.article_count, 4)
         self.assertEqual(first.notification.heading, "4 new articles detected")
         self.assertEqual(len(first.notification.preview_titles), 3)
+        self.assertEqual(len(first.notification.articles), 4)
+        self.assertEqual(
+            {article.title for article in first.notification.articles},
+            {f"Article {index}" for index in range(4)},
+        )
+        self.assertTrue(
+            all(article.journal == "Journal of Batteries" for article in first.notification.articles)
+        )
+        self.assertTrue(
+            all(article.url.startswith("https://example.org/articles/") for article in first.notification.articles)
+        )
         self.assertFalse(second.attempted)
         self.assertEqual(second.state, "accepted")
         self.assertEqual(len(notifier.notifications), 1)
-
-    def test_shell_notification_handoff_is_capped_but_consumes_the_whole_run(self):
-        self.commit(
-            "shell-run",
-            *(detection(str(index), title=f"Shell article {index}") for index in range(4)),
-        )
-
-        first = self.lifecycle.accept_notification_handoff("shell-run", limit=2)
-        repeated = self.lifecycle.accept_notification_handoff("shell-run", limit=2)
-        notifier = FakeNotifier(NotificationDelivery.ACCEPTED)
-        background = self.lifecycle.deliver_notification("shell-run", notifier)
-
-        self.assertEqual(first.article_count, 4)
-        self.assertEqual(len(first.articles), 2)
-        self.assertEqual(repeated.article_count, 0)
-        self.assertEqual(repeated.articles, ())
-        self.assertEqual(background.state, "accepted")
-        self.assertFalse(background.attempted)
-        self.assertEqual(notifier.notifications, [])
 
     def test_only_clear_rejection_retries_and_ambiguous_failure_is_consumed(self):
         self.commit("run-retry", detection("retry", title="Retryable article"))

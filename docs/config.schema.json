@@ -12,7 +12,6 @@
     "interval_seconds",
     "include_terms",
     "exclude_terms",
-    "journals",
     "journal_scope",
     "search_direction",
     "sources"
@@ -34,16 +33,18 @@
     "interval_seconds": {
       "type": "integer",
       "minimum": 60,
-      "maximum": 2592000
+      "maximum": 2592000,
+      "default": 86400
     },
     "refresh_start_time": {
       "type": "string",
-      "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$"
+      "pattern": "^$|^([01][0-9]|2[0-3]):[0-5][0-9]$",
+      "default": "09:00"
     },
     "max_notifications": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 100
+      "maximum": 20
     },
     "app_settings": {
       "type": "object",
@@ -87,24 +88,13 @@
       },
       "maxItems": 500
     },
-    "journals": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 200
-      },
-      "maxItems": 300
-    },
     "journal_scope": {
       "type": "object",
       "additionalProperties": true,
+      "required": [
+        "selected_journals"
+      ],
       "properties": {
-        "top_n": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 300
-        },
         "selected_journals": {
           "type": "array",
           "items": {
@@ -112,7 +102,7 @@
             "minLength": 1,
             "maxLength": 200
           },
-          "maxItems": 300
+          "maxItems": 301
         }
       }
     },
@@ -201,12 +191,6 @@
                 "null"
               ],
               "minimum": 0
-            },
-            "journal_titles": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
             },
             "query": {
               "type": "string",

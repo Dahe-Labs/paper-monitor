@@ -17,7 +17,6 @@ PROJECT_FILES = (
 SCRIPT_FILES = (
     "build_windows_app.ps1",
     "build_windows_native_tray.ps1",
-    "generate_app_icons.py",
     "generate_windows_icon.py",
     "generate_windows_version_info.py",
     "install_windows_app.ps1",

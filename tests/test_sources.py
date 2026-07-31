@@ -1,6 +1,7 @@
 import json
 import subprocess
 import tempfile
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from paper_monitor.models import Article
+from paper_monitor.refresh_cancellation import RefreshCancellation, RefreshCancelled
 from paper_monitor.sources import (
     build_arxiv_url,
     build_crossref_urls,
@@ -34,6 +36,14 @@ class FakeHTTPResponse:
 
     def read(self, _size=-1):
         return self.data
+
+
+class ToggleCancellation(RefreshCancellation):
+    def __init__(self):
+        self.requested = False
+
+    def is_requested(self):
+        return self.requested
 
 
 class SourceParsingTests(unittest.TestCase):
@@ -357,6 +367,49 @@ class SourceParsingTests(unittest.TestCase):
                 articles = fetch_all_sources(source_config)
 
         self.assertEqual(articles, [expected])
+
+    def test_fetch_all_sources_runs_independent_adapters_concurrently_in_config_order(self):
+        rss_started = threading.Event()
+        crossref_started = threading.Event()
+        expected = Article(
+            title="Concurrent Crossref paper",
+            journal="Nature Energy",
+            url="https://example.org/concurrent",
+            doi="10.1000/concurrent",
+            published="2026-06-20",
+            abstract="",
+            source="Crossref",
+        )
+        source_config = {
+            "rss": [{"name": "First RSS", "url": "https://example.org/first.rss"}],
+            "crossref": {"enabled": True},
+            "openalex": {"enabled": False},
+            "arxiv": {"enabled": False},
+        }
+
+        def fake_rss_fetch(_url):
+            rss_started.set()
+            if not crossref_started.wait(2):
+                raise RuntimeError("Crossref did not start alongside RSS")
+            return b"<rss><channel></channel></rss>"
+
+        def fake_crossref(_config, *, cancellation):
+            crossref_started.set()
+            if not rss_started.wait(2):
+                raise RuntimeError("RSS did not start alongside Crossref")
+            cancellation.checkpoint()
+            return [expected]
+
+        with patch("paper_monitor.sources.fetch_url", side_effect=fake_rss_fetch):
+            with patch("paper_monitor.sources.fetch_crossref", side_effect=fake_crossref):
+                result = fetch_all_sources(source_config)
+
+        self.assertEqual(result, [expected])
+        self.assertEqual(
+            [(status["source"], status["target"]) for status in result.source_statuses],
+            [("RSS", "First RSS"), ("Crossref", "")],
+        )
+        self.assertTrue(all(status["status"] == "succeeded" for status in result.source_statuses))
 
     def test_fetch_url_retries_with_curl_when_site_returns_client_challenge_html(self):
         challenge = b"""<!DOCTYPE html>
@@ -751,6 +804,56 @@ class SourceParsingTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(first[0].doi, "10.1038/cached")
         self.assertEqual(second[0].doi, "10.1038/cached")
+
+    def test_fetch_crossref_cancellation_stops_before_next_journal_request(self):
+        payload = {"message": {"items": []}}
+        cancellation = ToggleCancellation()
+        calls = []
+
+        def fake_fetch(url):
+            calls.append(url)
+            cancellation.requested = True
+            return json.dumps(payload).encode("utf-8")
+
+        with self.assertRaises(RefreshCancelled):
+            fetch_crossref(
+                {
+                    "date_from": "2026-06-01",
+                    "date_to": "2026-06-24",
+                    "journal_titles": ["Nature Energy", "Nature Materials"],
+                    "max_workers": 1,
+                    "retry_count": 0,
+                    "min_request_interval_seconds": 0,
+                },
+                fetch=fake_fetch,
+                cancellation=cancellation,
+            )
+
+        self.assertEqual(len(calls), 1)
+
+    def test_fetch_crossref_prunes_configured_cache_before_network_request(self):
+        payload = {"message": {"items": []}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir) / "crossref-cache"
+            with patch(
+                "paper_monitor.sources._maybe_prune_crossref_cache"
+            ) as prune:
+                fetch_crossref(
+                    {
+                        "date_from": "2026-06-01",
+                        "date_to": "2026-06-24",
+                        "journal_titles": ["Nature Energy"],
+                        "max_workers": 1,
+                        "retry_count": 0,
+                        "min_request_interval_seconds": 0,
+                        "cache_dir": str(cache_dir),
+                        "cache_ttl_seconds": 3600,
+                    },
+                    fetch=lambda _url: json.dumps(payload).encode("utf-8"),
+                )
+
+        self.assertGreaterEqual(prune.call_count, 1)
+        self.assertEqual(prune.call_args_list[0].args, (cache_dir, 3600))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from typing import Callable, Iterable, Optional
 
 from .app_identity import WINDOWS_APP_USER_MODEL_ID
 from .article_lifecycle import RefreshRunStatus
+from .refresh_cancellation import RefreshCancelled
 from .refresh_execution import RefreshExecution, RefreshIntent
 
 _RETRYABLE_NOTIFICATION_STATES = {"deferred", "rejected"}
@@ -29,6 +30,7 @@ def run_background_refresh(
         status = RefreshRunStatus(outcome.status)
         if status is RefreshRunStatus.FAILED:
             raise RuntimeError(outcome.error or "Every configured article source failed.")
+        _notify_open_dashboard(config)
         notification = outcome.notification
         if notification is not None and notification.state in _RETRYABLE_NOTIFICATION_STATES:
             raise RuntimeError(
@@ -36,10 +38,25 @@ def run_background_refresh(
                 or f"Windows notification delivery was {notification.state}."
             )
         return 0
+    except RefreshCancelled:
+        return 0
     except Exception as exc:
         _log_background_error(config, exc)
         _write_stderr(f"Paper Monitor background refresh failed: {exc}")
         return 1
+
+
+def _notify_open_dashboard(config_path: Path) -> None:
+    """Best-effort reload after a scheduled refresh commits new lifecycle data."""
+
+    from .windows_window_control import WindowControlError, send_window_control
+
+    try:
+        send_window_control(config_path, "refresh-complete")
+    except WindowControlError:
+        # A dashboard window is optional. Missing or stale control state must
+        # never turn a successful scheduled refresh into a Task Scheduler retry.
+        return
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:

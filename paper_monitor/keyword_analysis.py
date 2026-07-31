@@ -20,8 +20,8 @@ class AnalysisScope:
     selected_journals: Tuple[str, ...] = ()
     selected_terms: Tuple[str, ...] = ()
     sort_mode: str = "time"
-    top_n: int = 30
     selected_paper_ids: Tuple[str, ...] = ()
+    available_journals: Tuple[str, ...] = ()
 
 
 DEFAULT_TAXONOMY: Tuple[TaxonomyCategory, ...] = (
@@ -293,20 +293,33 @@ def build_keyword_analysis_payload(
     candidates: List[Dict[str, object]], metrics: JournalMetrics, scope: Optional[AnalysisScope] = None
 ) -> Dict[str, object]:
     analysis_scope = scope or AnalysisScope()
-    papers = _all_matched_papers(candidates, metrics)
+    payload = build_keyword_analysis_seed_payload(candidates, metrics, analysis_scope)
     selected = selected_papers(candidates, metrics, analysis_scope)
     categories = classify_papers(selected, DEFAULT_TAXONOMY)
     candidate_terms = discover_candidate_terms(selected, 2, DEFAULT_BLOCKLIST, DEFAULT_TAXONOMY)
 
+    payload.update({
+        "selected_paper_ids": [str(paper["id"]) for paper in selected],
+        "categories": categories,
+        "candidate_terms": candidate_terms,
+    })
+    return payload
+
+
+def build_keyword_analysis_seed_payload(
+    candidates: List[Dict[str, object]],
+    metrics: JournalMetrics,
+    scope: Optional[AnalysisScope] = None,
+) -> Dict[str, object]:
+    """Build only the local data needed by the browser-side analysis implementation."""
+
+    analysis_scope = scope or AnalysisScope()
     return {
         "scope": _scope_payload(analysis_scope),
         "taxonomy": [_taxonomy_payload(category) for category in DEFAULT_TAXONOMY],
         "blocklist": sorted(DEFAULT_BLOCKLIST),
         "journal_catalog": _journal_catalog_payload(metrics),
-        "papers": papers,
-        "selected_paper_ids": [str(paper["id"]) for paper in selected],
-        "categories": categories,
-        "candidate_terms": candidate_terms,
+        "papers": _all_matched_papers(candidates, metrics),
     }
 
 
@@ -437,7 +450,7 @@ def discover_candidate_terms(
 
 def _scope_payload(scope: AnalysisScope) -> Dict[str, object]:
     payload = asdict(scope)
-    for key in ("selected_journals", "selected_terms", "selected_paper_ids"):
+    for key in ("available_journals", "selected_journals", "selected_terms", "selected_paper_ids"):
         payload[key] = list(payload[key])
     return payload
 

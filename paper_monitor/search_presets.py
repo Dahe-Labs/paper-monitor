@@ -69,6 +69,138 @@ _FALLBACK_CATALOG: Dict[str, object] = {
             "is_custom": False,
         },
         {
+            "id": "sulfide_solid_electrolyte",
+            "label": "Sulfide solid electrolyte",
+            "crossref_query": (
+                "sulfide solid electrolyte OR sulfide electrolyte OR sulfide-based all-solid-state battery "
+                "OR thiophosphate electrolyte OR lithium thiophosphate OR argyrodite OR LGPS OR Li10GeP2S12 "
+                "OR LPSCl OR Li6PS5Cl OR Li7P3S11 OR Li3PS4"
+            ),
+            "openalex_query": (
+                "sulfide solid electrolyte OR sulfide electrolyte OR sulfide-based all-solid-state battery "
+                "OR thiophosphate electrolyte OR lithium thiophosphate OR argyrodite OR LGPS OR Li10GeP2S12 "
+                "OR LPSCl OR Li6PS5Cl OR Li7P3S11 OR Li3PS4"
+            ),
+            "include_terms": [
+                "sulfide solid electrolyte",
+                "sulfide electrolyte",
+                "sulfide-based all-solid-state battery",
+                "thiophosphate electrolyte",
+                "lithium thiophosphate",
+                "argyrodite",
+                "LGPS",
+                "Li10GeP2S12",
+                "LPSCl",
+                "Li6PS5Cl",
+                "Li7P3S11",
+                "Li3PS4",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
+            "id": "halide_solid_electrolyte",
+            "label": "Halide solid electrolyte",
+            "crossref_query": (
+                "halide solid electrolyte OR halide electrolyte OR halide-based all-solid-state battery "
+                "OR chloride solid electrolyte OR lithium halide electrolyte OR Li3YCl6 OR Li3InCl6 "
+                "OR Li2ZrCl6 OR Li3ScCl6 OR Li3YBr6"
+            ),
+            "openalex_query": (
+                "halide solid electrolyte OR halide electrolyte OR halide-based all-solid-state battery "
+                "OR chloride solid electrolyte OR lithium halide electrolyte OR Li3YCl6 OR Li3InCl6 "
+                "OR Li2ZrCl6 OR Li3ScCl6 OR Li3YBr6"
+            ),
+            "include_terms": [
+                "halide solid electrolyte",
+                "halide electrolyte",
+                "halide-based all-solid-state battery",
+                "chloride solid electrolyte",
+                "lithium halide electrolyte",
+                "Li3YCl6",
+                "Li3InCl6",
+                "Li2ZrCl6",
+                "Li3ScCl6",
+                "Li3YBr6",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
+            "id": "latp_solid_electrolyte",
+            "label": "LATP solid electrolyte",
+            "crossref_query": (
+                "LATP OR LATP electrolyte OR LATP solid electrolyte OR lithium aluminum titanium phosphate "
+                "OR lithium aluminium titanium phosphate OR Li1+xAlxTi2-x(PO4)3 "
+                "OR Li1.3Al0.3Ti1.7(PO4)3 OR NASICON LATP"
+            ),
+            "openalex_query": (
+                "LATP OR LATP electrolyte OR LATP solid electrolyte OR lithium aluminum titanium phosphate "
+                "OR lithium aluminium titanium phosphate OR Li1+xAlxTi2-x(PO4)3 "
+                "OR Li1.3Al0.3Ti1.7(PO4)3 OR NASICON LATP"
+            ),
+            "include_terms": [
+                "LATP",
+                "LATP electrolyte",
+                "LATP solid electrolyte",
+                "lithium aluminum titanium phosphate",
+                "lithium aluminium titanium phosphate",
+                "Li1+xAlxTi2-x(PO4)3",
+                "Li1.3Al0.3Ti1.7(PO4)3",
+                "NASICON LATP",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
+            "id": "llzo_garnet_electrolyte",
+            "label": "LLZO / LLZTO garnet electrolyte",
+            "crossref_query": (
+                "LLZO OR LLZTO OR LLZO electrolyte OR Li7La3Zr2O12 OR lithium lanthanum zirconium oxide "
+                "OR lithium lanthanum zirconate OR garnet solid electrolyte OR garnet electrolyte"
+            ),
+            "openalex_query": (
+                "LLZO OR LLZTO OR LLZO electrolyte OR Li7La3Zr2O12 OR lithium lanthanum zirconium oxide "
+                "OR lithium lanthanum zirconate OR garnet solid electrolyte OR garnet electrolyte"
+            ),
+            "include_terms": [
+                "LLZO",
+                "LLZTO",
+                "LLZO electrolyte",
+                "Li7La3Zr2O12",
+                "lithium lanthanum zirconium oxide",
+                "lithium lanthanum zirconate",
+                "garnet solid electrolyte",
+                "garnet electrolyte",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
             "id": "lithium_metal_anode",
             "label": "Lithium metal anode",
             "crossref_query": (
@@ -86,6 +218,73 @@ _FALLBACK_CATALOG: Dict[str, object] = {
                 "lithium dendrite",
                 "solid electrolyte interphase",
                 "SEI",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
+            "id": "silicon_anode",
+            "label": "Silicon anode",
+            "crossref_query": (
+                "silicon anode OR Si anode OR silicon-based anode OR silicon negative electrode "
+                "OR silicon-carbon anode OR silicon carbon anode OR silicon/graphite anode "
+                "OR Si/C anode OR prelithiated silicon"
+            ),
+            "openalex_query": (
+                "silicon anode OR Si anode OR silicon-based anode OR silicon negative electrode "
+                "OR silicon-carbon anode OR silicon carbon anode OR silicon/graphite anode "
+                "OR Si/C anode OR prelithiated silicon"
+            ),
+            "include_terms": [
+                "silicon anode",
+                "Si anode",
+                "silicon-based anode",
+                "silicon negative electrode",
+                "silicon-carbon anode",
+                "silicon carbon anode",
+                "silicon/graphite anode",
+                "Si/C anode",
+                "prelithiated silicon",
+            ],
+            "exclude_terms": [
+                "solid-state laser",
+                "solid state laser",
+                "solid-state lighting",
+                "solid-state drive",
+            ],
+            "aliases": [],
+            "is_custom": False,
+        },
+        {
+            "id": "sodium_battery",
+            "label": "Sodium battery",
+            "crossref_query": (
+                "sodium-ion battery OR sodium ion battery OR Na-ion battery OR sodium-ion batteries "
+                "OR Na-ion batteries OR sodium metal battery OR all-solid-state sodium battery "
+                "OR solid-state sodium battery OR sodium solid electrolyte OR Na battery"
+            ),
+            "openalex_query": (
+                "sodium-ion battery OR sodium ion battery OR Na-ion battery OR sodium-ion batteries "
+                "OR Na-ion batteries OR sodium metal battery OR all-solid-state sodium battery "
+                "OR solid-state sodium battery OR sodium solid electrolyte OR Na battery"
+            ),
+            "include_terms": [
+                "sodium-ion battery",
+                "sodium ion battery",
+                "Na-ion battery",
+                "sodium-ion batteries",
+                "Na-ion batteries",
+                "sodium metal battery",
+                "all-solid-state sodium battery",
+                "solid-state sodium battery",
+                "sodium solid electrolyte",
+                "Na battery",
             ],
             "exclude_terms": [
                 "solid-state laser",
@@ -184,10 +383,6 @@ def find_preset(preset_id: object, include_aliases: bool = True) -> Optional[Map
         if isinstance(aliases, list) and text in {str(alias) for alias in aliases}:
             return preset
     return None
-
-
-def preset_ids() -> List[str]:
-    return [str(preset["id"]) for preset in search_direction_presets()]
 
 
 def _default_search_direction() -> Dict[str, object]:

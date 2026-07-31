@@ -55,30 +55,18 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertNotIn("\nfrom .windows_settings import", server)
         self.assertIn("def _default_keyword_analysis_runner", server)
 
-    def test_tray_and_status_dashboard_actions_do_not_use_cli_or_browser_openers(self):
+    def test_windows_tray_dashboard_actions_do_not_use_cli_or_browser_openers(self):
         windows_app = read_text("paper_monitor/windows_app.py")
-        macos_app_delegate = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/AppDelegate.swift")
-        macos_click_policy = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/StatusItemClickPolicy.swift")
 
         self.assertNotIn("open-dashboard", windows_app)
         self.assertNotIn("webbrowser.open", windows_app)
         self.assertNotIn("os.startfile", windows_app)
-
-        status_start = macos_app_delegate.index("private func statusMenu()")
-        status_end = macos_app_delegate.index("@objc private func statusOpenSettings()")
-        status_actions = macos_app_delegate[status_start:status_end]
-        self.assertIn('action: #selector(statusOpenDashboard)', status_actions)
-        self.assertIn("openDashboard()", status_actions)
-        self.assertNotIn("NSWorkspace.shared.open", status_actions)
-        self.assertNotIn("open-dashboard", status_actions)
-        self.assertNotIn("NSWorkspace.shared.open", macos_click_policy)
 
     def test_windows_background_monitoring_is_nonresident(self):
         source = read_text("paper_monitor/windows_app.py")
         background = read_text("paper_monitor/windows_background.py")
         schedule = read_text("paper_monitor/windows_scheduled_task.py")
         launcher = read_text("windows/PaperMonitor.pyw")
-        install = read_text("windows/Install-PaperMonitor.ps1")
 
         self.assertIn('"scheduled-refresh"', source)
         self.assertIn("RefreshExecution", background)
@@ -91,31 +79,6 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn('"MultipleInstancesPolicy"', schedule)
         self.assertIn('"RunOnlyIfNetworkAvailable"', schedule)
         self.assertIn('"InteractiveToken"', schedule)
-        self.assertIn("install-startup --config $Config", install)
-        self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList @("tray", "--quiet")', install)
-        self.assertIn('Start-Process -FilePath $InstalledExe', install)
-
-    def test_macos_launch_refresh_is_only_wired_from_application_launch(self):
-        app_delegate = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/AppDelegate.swift")
-        lifecycle = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/LaunchLifecycle.swift")
-
-        did_finish_start = app_delegate.index("public func applicationDidFinishLaunching")
-        reopen_start = app_delegate.index("public func applicationShouldHandleReopen")
-        did_finish = app_delegate[did_finish_start:reopen_start]
-        self.assertIn("requestNotificationAuthorizationThenRefresh", did_finish)
-        self.assertIn("launchReason: launchOptions.launchReason", did_finish)
-        self.assertIn("if launchReason == .loginStartup", app_delegate)
-
-        reopen_end = app_delegate.index("public func applicationShouldTerminateAfterLastWindowClosed")
-        reopen = app_delegate[reopen_start:reopen_end]
-        self.assertNotIn("runLaunchRefreshIfNeeded", reopen)
-        self.assertNotIn("LaunchRefreshPolicy", reopen)
-        self.assertNotIn("applicationDidBecomeActive", app_delegate)
-        self.assertNotIn("didWake", app_delegate)
-        self.assertIn('case processLaunch = "process_launch"', lifecycle)
-        self.assertIn('case loginStartup = "login_startup"', lifecycle)
-        self.assertIn('case manualRefresh = "manual_refresh"', lifecycle)
-        self.assertIn('case scheduledRefresh = "scheduled_refresh"', lifecycle)
 
     def test_windows_release_keeps_portable_artifacts(self):
         package_script = read_text("scripts/package_windows_release.ps1")
@@ -129,6 +92,14 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("Copy-ReleaseFile -Source $DistExe -Destination $ExeAssetPath", package_script)
         self.assertIn('$DistAppDir = Join-Path $Root "dist\\windows\\PaperMonitor"', package_script)
         self.assertIn('Copy-Item -Path (Join-Path $DistAppDir "*")', package_script)
+        self.assertNotIn(
+            'Destination (Join-Path $StagingDir "config.example.json")',
+            package_script,
+        )
+        self.assertNotIn(
+            'Destination (Join-Path $StagingDir "journal_metrics.json")',
+            package_script,
+        )
         self.assertIn("$AssetPaths += @($ZipPath, $ExeAssetPath)", package_script)
         self.assertIn('"SHA256SUMS-$Version.txt"', package_script)
         self.assertIn('"CURRENT_WINDOWS_RELEASE.txt"', package_script)
@@ -198,7 +169,7 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("DefaultDirName={localappdata}\\Programs\\PaperMonitor", installer)
         self.assertIn("PrivilegesRequired=lowest", installer)
         self.assertIn("UninstallFilesDir={app}\\Uninstall", installer)
-        self.assertIn("UninstallDisplayIcon={app}\\PaperMonitor.exe", installer)
+        self.assertIn("UninstallDisplayIcon={app}\\PaperMonitor.ico", installer)
         self.assertIn('Name: "{group}\\Paper Monitor"', installer)
         self.assertNotIn('Name: "{group}\\Settings"; Filename:', installer)
         self.assertIn('Type: files; Name: "{group}\\Settings.lnk"', installer)
@@ -247,26 +218,11 @@ class ProductContractAuditTests(unittest.TestCase):
         self.assertIn("exits", notes)
         self.assertIn("no Paper Monitor process", notes)
 
-    def test_macos_status_item_primary_click_opens_dashboard_not_menu(self):
-        app_delegate = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/AppDelegate.swift")
-        click_policy = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/StatusItemClickPolicy.swift")
-
-        self.assertNotIn("statusItem?.menu = statusMenu()", app_delegate)
-        self.assertIn("statusItem?.button?.action", app_delegate)
-        self.assertIn("statusItem?.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])", app_delegate)
-        self.assertIn("case .rightMouseDown, .rightMouseUp:", click_policy)
-        self.assertIn("return .openDashboard", click_policy)
-
     def test_ui_date_formatting_is_locale_independent_english(self):
         dashboard = read_text("paper_monitor/dashboard.py")
         date_utils = read_text("paper_monitor/date_utils.py")
-        menu = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/AppMainMenuController.swift")
-        swift_formatter = read_text("macos/PaperMonitorApp/Sources/PaperMonitorCore/EnglishDateFormatter.swift")
 
         self.assertIn("format_display_date", date_utils)
         self.assertIn('Intl.DateTimeFormat("en-US"', dashboard)
         self.assertNotIn('strftime("%b %d")', dashboard)
         self.assertNotIn("toLocaleDateString", dashboard)
-        self.assertIn("EnglishDateFormatter.compactDateTime", menu)
-        self.assertNotIn("DateFormatter.localizedString", menu)
-        self.assertIn('Locale(identifier: "en_US_POSIX")', swift_formatter)

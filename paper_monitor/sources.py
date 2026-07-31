@@ -25,15 +25,17 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 from .date_utils import first_iso_date
 from .models import Article, normalize_doi
+from .refresh_cancellation import RefreshCancellation, RefreshCancelled
 
 USER_AGENT = "paper-monitor/0.1 (local personal research monitor)"
 CROSSREF_PUBLIC_LIST_CONCURRENCY_LIMIT = 1
 CROSSREF_POLITE_LIST_CONCURRENCY_LIMIT = 3
 CROSSREF_PUBLIC_LIST_REQUEST_INTERVAL_SECONDS = 1.0
 CROSSREF_POLITE_LIST_REQUEST_INTERVAL_SECONDS = 1.0 / 3.0
+SOURCE_ACQUISITION_MAX_WORKERS = 8
 MAX_RESPONSE_BYTES = 50 * 1024 * 1024
-CROSSREF_CACHE_MAX_FILES = 2000
-CROSSREF_CACHE_MAX_BYTES = 256 * 1024 * 1024
+CROSSREF_CACHE_MAX_FILES = 512
+CROSSREF_CACHE_MAX_BYTES = 64 * 1024 * 1024
 _CACHE_PRUNE_INTERVAL_SECONDS = 30.0
 _CACHE_PRUNE_LOCK = threading.Lock()
 _CACHE_LAST_PRUNED: Dict[str, float] = {}
@@ -103,9 +105,15 @@ def fetch_url(url: str, timeout: int = 30) -> bytes:
     return data
 
 
-def fetch_all_sources(source_config: Dict[str, object]) -> SourceFetchResult:
-    articles: List[Article] = []
-    statuses: List[Dict[str, object]] = []
+def fetch_all_sources(
+    source_config: Dict[str, object],
+    *,
+    cancellation: Optional[RefreshCancellation] = None,
+) -> SourceFetchResult:
+    cancellation = cancellation or RefreshCancellation()
+    cancellation.checkpoint()
+    tasks: List[Callable[[], SourceFetchResult]] = []
+
     for feed in source_config.get("rss", []):
         if not isinstance(feed, dict):
             continue
@@ -113,68 +121,147 @@ def fetch_all_sources(source_config: Dict[str, object]) -> SourceFetchResult:
         if not url:
             continue
         source_name = str(feed.get("name") or url)
-        try:
-            fetched = parse_rss_feed(fetch_url(url), source_name)
-        except Exception as error:
-            _warn("RSS source failed: %s (%s)" % (url, error))
-            statuses.append(_source_status("RSS", "failed", target=source_name, error=error))
-        else:
-            articles.extend(fetched)
-            statuses.append(_source_status("RSS", "succeeded", target=source_name, count=len(fetched)))
+        tasks.append(
+            lambda _url=url, _source_name=source_name: _fetch_source_adapter(
+                "RSS",
+                _source_name,
+                lambda: parse_rss_feed(fetch_url(_url), _source_name),
+                cancellation,
+            )
+        )
 
     crossref = source_config.get("crossref", {})
     if isinstance(crossref, dict) and crossref.get("enabled", True):
-        try:
-            fetched = fetch_crossref(crossref)
-        except Exception as error:
-            _warn("Crossref source failed: %s" % error)
-            statuses.append(_source_status("Crossref", "failed", error=error))
-        else:
-            articles.extend(fetched)
-            request_statuses = list(getattr(fetched, "source_statuses", ()))
-            request_errors = [
-                str(status.get("error") or "").strip()
-                for status in request_statuses
-                if status.get("status") in {"failed", "partial"}
-            ]
-            if getattr(fetched, "all_failed", False):
-                status_name = "failed"
-            elif request_errors:
-                status_name = "partial"
-            else:
-                status_name = "succeeded"
-            statuses.append(
-                _source_status(
-                    "Crossref",
-                    status_name,
-                    count=len(fetched),
-                    error="; ".join(request_errors[:3]),
-                )
+        tasks.append(
+            lambda _config=crossref: _fetch_source_adapter(
+                "Crossref",
+                "",
+                lambda: fetch_crossref(_config, cancellation=cancellation),
+                cancellation,
             )
+        )
 
     openalex = source_config.get("openalex", {})
     if isinstance(openalex, dict) and openalex.get("enabled", False):
-        try:
-            fetched = fetch_openalex(openalex)
-        except Exception as error:
-            _warn("OpenAlex source failed: %s" % error)
-            statuses.append(_source_status("OpenAlex", "failed", error=error))
-        else:
-            articles.extend(fetched)
-            statuses.append(_source_status("OpenAlex", "succeeded", count=len(fetched)))
+        tasks.append(
+            lambda _config=openalex: _fetch_source_adapter(
+                "OpenAlex",
+                "",
+                lambda: fetch_openalex(_config, cancellation=cancellation),
+                cancellation,
+            )
+        )
 
     arxiv = source_config.get("arxiv", {})
     if isinstance(arxiv, dict) and arxiv.get("enabled", False):
-        try:
-            fetched = fetch_arxiv(arxiv)
-        except Exception as error:
-            _warn("arXiv source failed: %s" % error)
-            statuses.append(_source_status("arXiv", "failed", error=error))
-        else:
-            articles.extend(fetched)
-            statuses.append(_source_status("arXiv", "succeeded", count=len(fetched)))
+        tasks.append(
+            lambda _config=arxiv: _fetch_source_adapter(
+                "arXiv",
+                "",
+                lambda: fetch_arxiv(_config, cancellation=cancellation),
+                cancellation,
+            )
+        )
 
+    if not tasks:
+        return SourceFetchResult()
+    if len(tasks) == 1:
+        return tasks[0]()
+
+    worker_count = min(SOURCE_ACQUISITION_MAX_WORKERS, len(tasks))
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="PaperMonitorSource",
+    )
+    future_to_index = {
+        executor.submit(task): index
+        for index, task in enumerate(tasks)
+    }
+    results: Dict[int, SourceFetchResult] = {}
+    try:
+        pending = set(future_to_index)
+        while pending:
+            cancellation.checkpoint()
+            completed, pending = concurrent.futures.wait(
+                pending,
+                timeout=0.1,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in completed:
+                results[future_to_index[future]] = future.result()
+        cancellation.checkpoint()
+    except RefreshCancelled:
+        for future in future_to_index:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    except BaseException:
+        for future in future_to_index:
+            future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
+
+    articles: List[Article] = []
+    statuses: List[Dict[str, object]] = []
+    for index in range(len(tasks)):
+        result = results[index]
+        articles.extend(result)
+        statuses.extend(result.source_statuses)
     return SourceFetchResult(articles, statuses)
+
+
+def _fetch_source_adapter(
+    source: str,
+    target: str,
+    fetch: Callable[[], Iterable[Article]],
+    cancellation: RefreshCancellation,
+) -> SourceFetchResult:
+    try:
+        cancellation.checkpoint()
+        fetched = fetch()
+        cancellation.checkpoint()
+    except RefreshCancelled:
+        raise
+    except Exception as error:
+        detail = " (%s)" % target if target else ""
+        _warn("%s source failed%s: %s" % (source, detail, error))
+        return SourceFetchResult(
+            source_statuses=[
+                _source_status(source, "failed", target=target, error=error)
+            ]
+        )
+
+    articles = list(fetched)
+    request_statuses = list(getattr(fetched, "source_statuses", ()))
+    request_errors = [
+        str(status.get("error") or "").strip()
+        for status in request_statuses
+        if status.get("status") in {"failed", "partial"}
+    ]
+    request_had_problem = any(
+        status.get("status") in {"failed", "partial"}
+        for status in request_statuses
+    )
+    if getattr(fetched, "all_failed", False):
+        status_name = "failed"
+    elif request_had_problem:
+        status_name = "partial"
+    else:
+        status_name = "succeeded"
+    return SourceFetchResult(
+        articles,
+        [
+            _source_status(
+                source,
+                status_name,
+                target=target,
+                count=len(articles),
+                error="; ".join(error for error in request_errors[:3] if error),
+            )
+        ],
+    )
 
 
 def _source_status(
@@ -201,7 +288,13 @@ def _compact_error(error: object, limit: int = 300) -> str:
     return text[: max(0, limit - 3)].rstrip() + "..."[:limit]
 
 
-def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> SourceFetchResult:
+def fetch_crossref(
+    config: Dict[str, object],
+    fetch: Optional[Callable[[str], bytes]] = None,
+    cancellation: Optional[RefreshCancellation] = None,
+) -> SourceFetchResult:
+    cancellation = cancellation or RefreshCancellation()
+    cancellation.checkpoint()
     articles: List[Article] = []
     statuses: List[Dict[str, object]] = []
     urls = build_crossref_urls(config)
@@ -220,7 +313,11 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
         fetch_one = fetch
     request_interval = _crossref_min_request_interval_seconds(config)
     if request_interval > 0:
-        fetch_one = _rate_limited_fetch(fetch_one, request_interval)
+        fetch_one = _rate_limited_fetch(
+            fetch_one,
+            request_interval,
+            cancellation=cancellation,
+        )
     if retry_count > 0:
         network_fetch = fetch_one
 
@@ -231,12 +328,14 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
                 retry_count,
                 retry_base_seconds,
                 retry_max_seconds,
+                cancellation=cancellation,
             )
 
         fetch_one = retrying_fetch
     cache_dir = str(config.get("cache_dir") or "").strip()
     cache_ttl_seconds = int(config.get("cache_ttl_seconds") or 0)
     if cache_dir and cache_ttl_seconds > 0:
+        _maybe_prune_crossref_cache(Path(cache_dir), cache_ttl_seconds)
         network_fetch = fetch_one
 
         def cached_fetch(url: str, _network_fetch: Callable[[str], bytes] = network_fetch) -> bytes:
@@ -249,10 +348,29 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
 
         fetch_one = cached_fetch
 
+    uncancelled_fetch = fetch_one
+
+    def cancellable_fetch(
+        url: str,
+        _fetch: Callable[[str], bytes] = uncancelled_fetch,
+    ) -> bytes:
+        cancellation.checkpoint()
+        data = _fetch(url)
+        cancellation.checkpoint()
+        return data
+
+    fetch_one = cancellable_fetch
+
     if max_workers == 1 or len(urls) <= 1:
         for url in urls:
+            cancellation.checkpoint()
             if cursor_pagination:
-                fetched, error, succeeded = _fetch_crossref_url_pages_result(url, fetch_one, max_cursor_pages)
+                fetched, error, succeeded = _fetch_crossref_url_pages_result(
+                    url,
+                    fetch_one,
+                    max_cursor_pages,
+                    cancellation=cancellation,
+                )
             else:
                 fetched, error, succeeded = _fetch_crossref_url_result(url, fetch_one)
             articles.extend(fetched)
@@ -267,46 +385,67 @@ def fetch_crossref(config: Dict[str, object], fetch: Optional[Callable[[str], by
             )
         return SourceFetchResult(articles, statuses)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, len(urls))) as executor:
+    worker_count = min(max_workers, len(urls))
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
+    remaining_urls = iter(enumerate(urls))
+    future_to_request: Dict[concurrent.futures.Future, tuple[int, str]] = {}
+    request_results: Dict[int, tuple[List[Article], Dict[str, object]]] = {}
+
+    def submit_next() -> bool:
+        cancellation.checkpoint()
+        try:
+            request_index, url = next(remaining_urls)
+        except StopIteration:
+            return False
         if cursor_pagination:
-            future_to_url = {
-                executor.submit(_fetch_crossref_url_pages_result, url, fetch_one, max_cursor_pages): url
-                for url in urls
-            }
+            future = executor.submit(
+                _fetch_crossref_url_pages_result,
+                url,
+                fetch_one,
+                max_cursor_pages,
+                cancellation,
+            )
         else:
-            future_to_url = {executor.submit(fetch_one, url): url for url in urls}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url = future_to_url[future]
-            try:
-                result = future.result()
-                if cursor_pagination:
-                    fetched, error, succeeded = result
-                else:
-                    fetched = parse_crossref_response(result, source_name="Crossref")
-                    error = None
-                    succeeded = True
-            except Exception as error:
-                _warn("Crossref query failed: %s (%s)" % (_redact_query_url(url), error))
-                fetched = []
-                statuses.append(
+            future = executor.submit(_fetch_crossref_url_result, url, fetch_one)
+        future_to_request[future] = (request_index, url)
+        return True
+
+    try:
+        for _worker in range(worker_count):
+            if not submit_next():
+                break
+        while future_to_request:
+            cancellation.checkpoint()
+            completed, _pending = concurrent.futures.wait(
+                tuple(future_to_request),
+                timeout=0.1,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in completed:
+                request_index, url = future_to_request.pop(future)
+                fetched, error, succeeded = future.result()
+                request_results[request_index] = (
+                    fetched,
                     _source_status(
                         "Crossref request",
-                        "failed",
+                        "partial"
+                        if succeeded and error
+                        else ("succeeded" if succeeded else "failed"),
                         target=_redact_query_url(url),
-                        error=error,
-                    )
+                        count=len(fetched),
+                        error=error or "",
+                    ),
                 )
-                continue
-            articles.extend(fetched)
-            statuses.append(
-                _source_status(
-                    "Crossref request",
-                    "partial" if succeeded and error else ("succeeded" if succeeded else "failed"),
-                    target=_redact_query_url(url),
-                    count=len(fetched),
-                    error=error or "",
-                )
-            )
+                submit_next()
+    finally:
+        if cancellation.is_requested():
+            for future in future_to_request:
+                future.cancel()
+        executor.shutdown(wait=True, cancel_futures=True)
+    for request_index in range(len(urls)):
+        fetched, status = request_results[request_index]
+        articles.extend(fetched)
+        statuses.append(status)
     return SourceFetchResult(articles, statuses)
 
 
@@ -336,7 +475,13 @@ def _crossref_uses_polite_pool(config: Dict[str, object]) -> bool:
     return bool(mailto)
 
 
-def _rate_limited_fetch(fetch: Callable[[str], bytes], min_interval_seconds: float) -> Callable[[str], bytes]:
+def _rate_limited_fetch(
+    fetch: Callable[[str], bytes],
+    min_interval_seconds: float,
+    *,
+    cancellation: Optional[RefreshCancellation] = None,
+) -> Callable[[str], bytes]:
+    cancellation = cancellation or RefreshCancellation()
     lock = threading.Lock()
     next_allowed_at = 0.0
 
@@ -346,17 +491,12 @@ def _rate_limited_fetch(fetch: Callable[[str], bytes], min_interval_seconds: flo
             now = time.monotonic()
             wait_seconds = next_allowed_at - now
             if wait_seconds > 0:
-                time.sleep(wait_seconds)
+                cancellation.wait(wait_seconds)
                 now = time.monotonic()
             next_allowed_at = now + min_interval_seconds
         return fetch(url)
 
     return wrapper
-
-
-def _fetch_crossref_url(url: str, fetch: Callable[[str], bytes]) -> List[Article]:
-    articles, _error, _succeeded = _fetch_crossref_url_result(url, fetch)
-    return articles
 
 
 def _fetch_crossref_url_result(
@@ -365,21 +505,20 @@ def _fetch_crossref_url_result(
 ) -> tuple[List[Article], Optional[BaseException], bool]:
     try:
         return parse_crossref_response(fetch(url), source_name="Crossref"), None, True
+    except RefreshCancelled:
+        raise
     except Exception as error:
         _warn("Crossref query failed: %s (%s)" % (_redact_query_url(url), error))
         return [], error, False
-
-
-def _fetch_crossref_url_pages(url: str, fetch: Callable[[str], bytes], max_pages: int) -> List[Article]:
-    articles, _error, _succeeded = _fetch_crossref_url_pages_result(url, fetch, max_pages)
-    return articles
 
 
 def _fetch_crossref_url_pages_result(
     url: str,
     fetch: Callable[[str], bytes],
     max_pages: int,
+    cancellation: Optional[RefreshCancellation] = None,
 ) -> tuple[List[Article], Optional[BaseException], bool]:
+    cancellation = cancellation or RefreshCancellation()
     articles: List[Article] = []
     current_url = url
     rows = _rows_from_url(url)
@@ -388,7 +527,11 @@ def _fetch_crossref_url_pages_result(
 
     for _page in range(max_pages):
         try:
+            cancellation.checkpoint()
             payload = _crossref_payload(fetch(current_url))
+            cancellation.checkpoint()
+        except RefreshCancelled:
+            raise
         except Exception as error:
             _warn("Crossref query failed: %s (%s)" % (_redact_query_url(current_url), error))
             return articles, error, fetched_page
@@ -502,8 +645,12 @@ def _fetch_url_with_retries(
     retry_count: int,
     retry_base_seconds: float,
     retry_max_seconds: float,
+    *,
+    cancellation: Optional[RefreshCancellation] = None,
 ) -> bytes:
+    cancellation = cancellation or RefreshCancellation()
     for attempt in range(retry_count + 1):
+        cancellation.checkpoint()
         try:
             return fetch(url)
         except urllib.error.HTTPError as error:
@@ -511,7 +658,14 @@ def _fetch_url_with_retries(
                 _close_http_error(error)
                 raise
             _close_http_error(error)
-            time.sleep(_retry_delay_seconds(error, attempt, retry_base_seconds, retry_max_seconds))
+            cancellation.wait(
+                _retry_delay_seconds(
+                    error,
+                    attempt,
+                    retry_base_seconds,
+                    retry_max_seconds,
+                )
+            )
     return fetch(url)
 
 
@@ -591,10 +745,17 @@ def build_crossref_urls(config: Dict[str, object]) -> List[str]:
     return urls
 
 
-def fetch_arxiv(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> List[Article]:
+def fetch_arxiv(
+    config: Dict[str, object],
+    fetch: Optional[Callable[[str], bytes]] = None,
+    cancellation: Optional[RefreshCancellation] = None,
+) -> List[Article]:
+    cancellation = cancellation or RefreshCancellation()
     timeout = int(config.get("timeout_seconds", 20))
     fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
+    cancellation.checkpoint()
     articles = parse_arxiv_response(fetch_one(build_arxiv_url(config)))
+    cancellation.checkpoint()
     return _filter_articles_by_days_back(articles, config.get("days_back", 3))
 
 
@@ -715,7 +876,12 @@ def _bounded_crossref_rows(value: object) -> int:
     return min(1000, max(1, rows))
 
 
-def fetch_openalex(config: Dict[str, object], fetch: Optional[Callable[[str], bytes]] = None) -> List[Article]:
+def fetch_openalex(
+    config: Dict[str, object],
+    fetch: Optional[Callable[[str], bytes]] = None,
+    cancellation: Optional[RefreshCancellation] = None,
+) -> List[Article]:
+    cancellation = cancellation or RefreshCancellation()
     timeout = int(config.get("timeout_seconds", 30))
     fetch_one = fetch or (lambda url: fetch_url(url, timeout=timeout))
     max_pages = _bounded_openalex_pages(config.get("max_pages", 1))
@@ -724,7 +890,9 @@ def fetch_openalex(config: Dict[str, object], fetch: Optional[Callable[[str], by
     seen_cursors = set()
 
     for _page in range(max_pages):
+        cancellation.checkpoint()
         payload = _openalex_payload(fetch_one(current_url))
+        cancellation.checkpoint()
         articles.extend(_openalex_articles_from_payload(payload, source_name="OpenAlex"))
         next_cursor = _openalex_next_cursor(payload)
         if max_pages <= 1 or not next_cursor or next_cursor in seen_cursors:

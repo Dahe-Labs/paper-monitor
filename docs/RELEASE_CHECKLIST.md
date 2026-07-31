@@ -1,12 +1,12 @@
 # Paper Monitor Release Checklist
 
-Use this checklist for every Mac or Windows release candidate. Keep the checks boring and repeatable.
+Use this checklist for every Windows release candidate. Keep the checks boring and repeatable.
 
 ## Source And Contract
 
 - Confirm `config.example.json` still matches `paper_monitor.config.DEFAULT_CONFIG`.
 - Confirm `docs/config.schema.json` covers every user-facing config field.
-- Confirm Windows Settings and Mac `SettingsStore` preserve unknown config keys.
+- Confirm Windows Settings preserves unknown config keys.
 - Confirm `settings_schema_version` is at least `2` after any settings save.
 
 ## Python Core
@@ -36,7 +36,7 @@ Use this checklist for every Mac or Windows release candidate. Keep the checks b
 - For a public release, package with `-CodeSigningCertificateThumbprint`, `-TimestampUrl`, and `-RequireSignature`.
 - Confirm the release directory contains the installer, portable zip, standalone exe, and `SHA256SUMS-<version>.txt`.
 - Push the signed `v<version>` tag; confirm the Windows workflow passes quality checks, builds signed assets, and creates or updates a draft GitHub Release.
-- Confirm the draft Release contains the same four Windows assets and the tag exposes clean source archives; publish it only after all platform assets and checks are complete.
+- Confirm the draft Release contains the same four Windows assets and the tag exposes clean source archives; publish it only after all checks are complete.
 - Confirm the installer and standalone executable have valid Authenticode signatures and matching FileVersion/ProductVersion metadata.
 - Install `Paper-Monitor-Windows-<version>-Setup.exe` in a clean user profile or VM.
 - Confirm the installer appears in Windows installed apps and provides a working uninstaller.
@@ -53,14 +53,6 @@ Use this checklist for every Mac or Windows release candidate. Keep the checks b
 - Verify the local bridge listens only on `127.0.0.1` and requires `X-Paper-Monitor-Token`.
 - Reopen Paper Monitor after closing it and confirm a clean new window starts without a hidden predecessor.
 - Start a refresh from Dashboard while another refresh owns the named guard and confirm the second request returns HTTP 202 with `status: running` and the same `request_id`.
-
-## macOS
-
-- Run `swift test` from `macos/PaperMonitorApp` on macOS.
-- Build the app bundle and launch it from a clean Application Support directory.
-- Confirm bundled runtime installation preserves user `config.json`.
-- Confirm notification permission, refresh scheduling, dashboard, settings save, and keyword analysis.
-- Confirm zip output excludes `._*`, `.DS_Store`, and `__MACOSX`.
 
 ## Release Notes
 

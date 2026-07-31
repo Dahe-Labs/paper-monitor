@@ -1,11 +1,18 @@
 import json
 import os
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Optional
 
 SECONDS_PER_HOUR = 60 * 60
+DEFAULT_INTERVAL_SECONDS = 24 * SECONDS_PER_HOUR
+# A source request can be configured for up to 120 seconds. Cooperative
+# cancellation stops pagination/retries immediately, while this upper bound
+# still lets the one in-flight network request release its executable cleanly.
+UNINSTALL_EXIT_TIMEOUT_SECONDS = 130.0
+UNINSTALL_EXIT_POLL_SECONDS = 0.05
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 LEGACY_RUN_VALUE_NAME = "Paper Monitor"
 
@@ -50,16 +57,62 @@ def sync_windows_runtime_settings(
 
 
 def remove_windows_runtime_integrations(config_path: Path) -> None:
-    """Remove both per-user Paper Monitor tasks without rewriting saved preferences."""
+    """Stop the installed UI/tray and remove tasks without rewriting preferences."""
 
     if os.name != "nt":
         return
     from .windows_scheduled_task import sync_scheduled_refresh, sync_silent_startup
 
     resolved_config = Path(config_path).resolve()
+    # Disable launch points first so a scheduled instance cannot start between
+    # shutdown signalling and the final mutex check.
     sync_scheduled_refresh(resolved_config, False, 1)
     sync_silent_startup(resolved_config, False)
+    _stop_installed_runtime(resolved_config)
     remove_legacy_startup_entry()
+
+
+def _stop_installed_runtime(config_path: Path) -> None:
+    """Best-effort shutdown so the uninstaller can remove locked executables."""
+
+    from .windows_mutex import (
+        REFRESH_MUTEX_NAME,
+        TRAY_MUTEX_NAME,
+        WINDOW_MUTEX_NAME,
+        is_mutex_running,
+    )
+    from .windows_native_tray import stop_native_tray
+    from .windows_refresh_control import request_refresh_stop
+    from .windows_window_control import WindowControlError, send_window_control
+
+    deadline = time.monotonic() + UNINSTALL_EXIT_TIMEOUT_SECONDS
+    request_refresh_stop()
+    # A visible refresh runs inside the window host. Wait for it to leave its
+    # lifecycle/database critical section before asking that host to exit.
+    while (
+        is_mutex_running(REFRESH_MUTEX_NAME)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(UNINSTALL_EXIT_POLL_SECONDS)
+
+    if is_mutex_running(WINDOW_MUTEX_NAME):
+        try:
+            send_window_control(config_path, "close")
+        except WindowControlError:
+            pass
+    stop_native_tray()
+
+    runtime_mutexes = (WINDOW_MUTEX_NAME, TRAY_MUTEX_NAME, REFRESH_MUTEX_NAME)
+    while time.monotonic() < deadline:
+        if not any(is_mutex_running(name) for name in runtime_mutexes):
+            return
+        time.sleep(UNINSTALL_EXIT_POLL_SECONDS)
+    running = [name for name in runtime_mutexes if is_mutex_running(name)]
+    if running:
+        raise RuntimeError(
+            "Paper Monitor processes did not exit before uninstall: "
+            + ", ".join(running)
+        )
 
 
 def remove_legacy_startup_entry(*, registry_module=None) -> None:
@@ -105,9 +158,11 @@ def _app_settings(payload: Mapping[str, object]) -> Mapping[str, object]:
 
 def _interval_hours(payload: Mapping[str, object]) -> int:
     try:
-        interval_seconds = int(payload.get("interval_seconds", 12 * SECONDS_PER_HOUR))
+        interval_seconds = int(
+            payload.get("interval_seconds", DEFAULT_INTERVAL_SECONDS)
+        )
     except (TypeError, ValueError):
-        interval_seconds = 12 * SECONDS_PER_HOUR
+        interval_seconds = DEFAULT_INTERVAL_SECONDS
     interval_seconds = max(SECONDS_PER_HOUR, interval_seconds)
     rounded_hours = (interval_seconds + SECONDS_PER_HOUR - 1) // SECONDS_PER_HOUR
     return min(24 * 30, rounded_hours)

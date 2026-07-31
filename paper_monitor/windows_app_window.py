@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Protocol
 
+from .windows_icon import default_windows_icon_path
 from .windows_mutex import WINDOW_MUTEX_NAME, acquire_mutex, close_handle
 from .windows_window_control import (
     WindowControlError,
@@ -27,6 +28,7 @@ DEFAULT_TITLE = "Paper Monitor"
 DEFAULT_WIDTH = 1180
 DEFAULT_HEIGHT = 760
 DEFAULT_MIN_SIZE = (720, 520)
+POST_FIRST_PAINT_DELAY_SECONDS = 0.1
 LOGGER = logging.getLogger(__name__)
 
 
@@ -52,6 +54,7 @@ def open_dashboard_window(
     dashboard_server_factory: DashboardServerFactory = _default_dashboard_server_factory,
     title: str = DEFAULT_TITLE,
     path: str = "/",
+    after_first_paint: Optional[Callable[[], None]] = None,
 ) -> int:
     """Open the dashboard in a pywebview window and stop the server on close."""
 
@@ -98,11 +101,19 @@ def open_dashboard_window(
             close_requested,
         )
         _attach_closing_handler(window, close_requested)
-        _attach_loaded_handler(window)
+        icon_path = default_windows_icon_path()
+        _attach_loaded_handler(
+            window,
+            icon_path=icon_path,
+            after_first_paint=after_first_paint,
+        )
         # The local dashboard does not need persistent browser cookies or
         # storage. Private mode makes pywebview dispose the WebView2 control on
         # close instead of waiting for a later garbage-collection pass.
-        webview.start(private_mode=True)
+        start_options = {"private_mode": True}
+        if icon_path is not None:
+            start_options["icon"] = str(icon_path)
+        webview.start(**start_options)
         return 0
     finally:
         clear_window_control(config_path)
@@ -451,15 +462,69 @@ def _remove_private_webview_data(user_data_folder: str) -> None:
     shutil.rmtree(candidate, ignore_errors=True)
 
 
-def _attach_loaded_handler(window) -> None:
+def _attach_loaded_handler(
+    window,
+    icon_path: Optional[Path] = None,
+    after_first_paint: Optional[Callable[[], None]] = None,
+) -> None:
     events = getattr(window, "events", None)
     loaded = getattr(events, "loaded", None)
     if loaded is None:
         return
     try:
+        if icon_path is not None:
+            configure_taskbar = _configure_taskbar_identity(window, icon_path)
+            before_show = getattr(events, "before_show", None)
+            if before_show is not None:
+                before_show += configure_taskbar
+            events.loaded += configure_taskbar
         events.loaded += _restore_refresh_view(window)
+        if after_first_paint is not None:
+            events.loaded += _after_first_paint_handler(after_first_paint)
     except (AttributeError, TypeError):
         return
+
+
+def _after_first_paint_handler(task: Callable[[], None]) -> Callable[..., None]:
+    started = False
+
+    def start(*_args, **_kwargs) -> None:
+        nonlocal started
+        if started:
+            return
+        started = True
+
+        def run() -> None:
+            time.sleep(POST_FIRST_PAINT_DELAY_SECONDS)
+            try:
+                task()
+            except Exception as exc:
+                LOGGER.debug("Post-paint Windows coordination failed: %s", exc)
+
+        threading.Thread(
+            target=run,
+            name="PaperMonitorPostPaint",
+            daemon=False,
+        ).start()
+
+    return start
+
+
+def _configure_taskbar_identity(window, icon_path: Path) -> Callable[..., None]:
+    configured = False
+
+    def configure(*_args, **_kwargs) -> None:
+        nonlocal configured
+        if configured:
+            return
+        try:
+            from .windows_taskbar import configure_window_taskbar
+
+            configured = configure_window_taskbar(window, icon_path)
+        except Exception as exc:
+            LOGGER.debug("Could not configure Paper Monitor taskbar identity: %s", exc)
+
+    return configure
 
 
 def _restore_refresh_view(window) -> Callable[..., None]:

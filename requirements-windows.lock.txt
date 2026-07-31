@@ -36,43 +36,12 @@ typing-extensions==4.16.0
     # via
     #   pywebview
     #   winrt-runtime
-win11toast==0.36.3
-    # via -r requirements-windows.txt
 winrt-runtime==3.2.1
     # via
+    #   -r requirements-windows.txt
     #   winrt-windows-data-xml-dom
-    #   winrt-windows-foundation
-    #   winrt-windows-foundation-collections
-    #   winrt-windows-globalization
-    #   winrt-windows-graphics-imaging
-    #   winrt-windows-media-core
-    #   winrt-windows-media-ocr
-    #   winrt-windows-media-playback
-    #   winrt-windows-media-speechsynthesis
-    #   winrt-windows-storage
-    #   winrt-windows-storage-streams
     #   winrt-windows-ui-notifications
 winrt-windows-data-xml-dom==3.2.1
-    # via win11toast
-winrt-windows-foundation==3.2.1
-    # via win11toast
-winrt-windows-foundation-collections==3.2.1
-    # via win11toast
-winrt-windows-globalization==3.2.1
-    # via win11toast
-winrt-windows-graphics-imaging==3.2.1
-    # via win11toast
-winrt-windows-media-core==3.2.1
-    # via win11toast
-winrt-windows-media-ocr==3.2.1
-    # via win11toast
-winrt-windows-media-playback==3.2.1
-    # via win11toast
-winrt-windows-media-speechsynthesis==3.2.1
-    # via win11toast
-winrt-windows-storage==3.2.1
-    # via win11toast
-winrt-windows-storage-streams==3.2.1
-    # via win11toast
+    # via -r requirements-windows.txt
 winrt-windows-ui-notifications==3.2.1
-    # via win11toast
+    # via -r requirements-windows.txt

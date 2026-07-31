@@ -1,6 +1,33 @@
-# Paper Monitor 0.1.13
+# Paper Monitor 0.1.16
 
-Publication-date accuracy, journal selection clarity, and silent sign-in startup update.
+Windows-only lifecycle, scheduling, search-direction, and packaging update.
+
+## Included
+
+- Added ready-to-use search directions for sulfide and halide solid electrolytes, LATP, LLZO/LLZTO, silicon anodes, and sodium batteries, with material names, acronyms, and representative formulas for Crossref and OpenAlex.
+- Selecting a Windows search direction now applies its include/exclude terms together with its source queries, so retrieved papers are evaluated by the matching material-specific filter.
+- Renamed `Preferred Start Time` to the exact `Start Time`, made its dependency on Background Monitoring explicit, and aligned the runtime fallback with the once-daily default.
+- The Dashboard now reads and displays the last persisted background refresh time, status, and counts, including successful runs that found zero new papers.
+- Removed the ineffective Crossref `Rows` control; the explicit journal scope always uses `Rows / Journal`.
+- Settings now prevent no-op combinations such as sign-in startup without a tray or Crossref/OpenAlex without a formal journal.
+- Scheduled refresh notifications and the Dashboard now share one SQLite lifecycle; opening the app invalidates stale snapshots and shows newly detected papers first even when a source reports only year-month publication precision.
+- The Dashboard labels first-detected and published dates separately and no longer renders a zero-remaining pagination button.
+- Removed the macOS application, build scripts, tests, CI jobs, compatibility notification handoff, and downloadable macOS release assets; the maintained product is Windows-only.
+- Moved the icon source into `windows/assets` and removed the pale rounded-square backing tile while preserving the paper, radar magnifier, molecule, and indicator foreground.
+- Regenerated every Windows ICO frame from 16 to 256 pixels with transparent corners, so the taskbar, tray, shortcuts, executable, and installer no longer show a second white frame inside the Windows selection tile.
+
+# Paper Monitor 0.1.15
+
+Windows taskbar icon identity hotfix.
+
+## Included
+
+- The main Windows window now sets its explicit AppUserModelID and relaunch icon resource on the native window, so the taskbar group uses the shared Paper Monitor icon instead of a stale cached icon.
+- Windows shortcuts now reference the installed ICO explicitly, upgrades recreate the Start menu shortcut, and Explorer is notified to refresh icon and association metadata.
+
+# Paper Monitor 0.1.14
+
+Windows lifecycle correctness, compact notifications, and runtime footprint update.
 
 ## Included
 
@@ -10,6 +37,17 @@ Publication-date accuracy, journal selection clarity, and silent sign-in startup
 - Settings now provides an independent `Start at Windows sign-in` option backed by a per-user Task Scheduler logon task.
 - Sign-in startup launches only the lightweight tray after a short delay; it neither opens the main window nor performs a network refresh.
 - Closing the main window explicitly releases WebView2 resources before destruction so no UI child process is left resident.
+- Journal retrieval and Keyword Analysis now use only the journals explicitly selected in Settings; the conflicting Top N mode has been removed.
+- Windows article Toasts are grouped by local delivery day, show only a two-line title and smaller journal name, and open the paper URL in the default browser.
+- Toast delivery now uses a minimal direct WinRT adapter with the explicit `DaheLabs.PaperMonitor` identity instead of filing notifications under `Python`.
+- Uninstall disables launch points first, cooperatively cancels any active refresh, and does not return until the window, tray, and refresh workers have released installed executables.
+- The supported notification limit is consistently 1–20 in config loading, Settings, runtime delivery, and the JSON schema.
+- Crossref cache retention is capped at 64 MiB/512 files and is pruned before cached retrieval; upgrades and uninstall remove the obsolete persistent WebView2 cache.
+- Keyword Analysis initializes only when opened, and long paper timelines initially render 50 papers at a time while retaining every item in the local payload.
+- macOS and Windows now share `AppIconSource.png` as the only icon artwork; the Windows app, pywebview window, native tray, shortcuts, Toast identity, and installer all consume its generated ICO.
+- Generated macOS iconset/ICNS files, dead wrappers, obsolete installer code, duplicate onedir resources, and Windows-only files in the macOS bundle have been removed without deleting compatibility migrations or user data.
+- Windows packaging omits unused WinRT feature families, non-x64 WebView2 loader binaries, runtime documentation, and duplicate resources; the verified x64 onedir release is 12.7% smaller than 0.1.13.
+- Platform version defaults were aligned at 0.1.14.
 
 # Paper Monitor 0.1.8
 

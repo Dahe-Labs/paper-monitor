@@ -40,7 +40,8 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#IconFile}
 UninstallFilesDir={app}\Uninstall
-UninstallDisplayIcon={app}\PaperMonitor.exe
+UninstallDisplayIcon={app}\PaperMonitor.ico
+ChangesAssociations=yes
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -55,19 +56,25 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Type: files; Name: "{app}\unins000.dat"
 Type: files; Name: "{app}\unins000.exe"
 Type: files; Name: "{group}\Settings.lnk"
+Type: files; Name: "{group}\Paper Monitor.lnk"
 Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{localappdata}\PaperMonitor\WebView2"
 
 [Icons]
-Name: "{group}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; AppUserModelID: "DaheLabs.PaperMonitor"
+Name: "{group}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; IconFilename: "{app}\PaperMonitor.ico"; IconIndex: 0; AppUserModelID: "DaheLabs.PaperMonitor"
 Name: "{group}\Uninstall Paper Monitor"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; Tasks: desktopicon; AppUserModelID: "DaheLabs.PaperMonitor"
+Name: "{autodesktop}\Paper Monitor"; Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; WorkingDir: "{app}"; IconFilename: "{app}\PaperMonitor.ico"; IconIndex: 0; Tasks: desktopicon; AppUserModelID: "DaheLabs.PaperMonitor"
 
 [Run]
 Filename: "{app}\PaperMonitor.exe"; Parameters: "sync-runtime"; Flags: runhidden waituntilterminated
 Filename: "{app}\PaperMonitor.exe"; Parameters: "window"; Description: "Launch Paper Monitor"; Flags: nowait postinstall skipifsilent unchecked
 
 [UninstallRun]
+Filename: "{app}\PaperMonitorTray.exe"; Parameters: "--quit-existing"; Flags: runhidden waituntilterminated skipifdoesntexist
 Filename: "{app}\PaperMonitor.exe"; Parameters: "uninstall-startup"; Flags: runhidden waituntilterminated skipifdoesntexist
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{localappdata}\PaperMonitor\WebView2"
 
 [Code]
 procedure RemoveScheduledRefreshTask;

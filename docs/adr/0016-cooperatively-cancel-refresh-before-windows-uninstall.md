@@ -1,0 +1,5 @@
+# Cooperatively cancel refresh before Windows uninstall
+
+Windows uninstall will disable scheduled launch points before process shutdown, signal a named `Local\PaperMonitorRefreshStop` event, wait for the refresh mutex to disappear, and only then close the window and tray hosts. It will not return until all three mutexes have disappeared. Source adapters check a platform-neutral cancellation token between feeds, journal requests, pagination pages, retries, rate-limit waits, matching steps, and persistence.
+
+An already-running synchronous HTTP request is allowed to finish within its configured timeout; subsequent work is cancelled. Cancellation observed before the lifecycle commit prevents that commit; cancellation observed immediately after a completed commit prevents notification or presentation work. The uninstall wait bound therefore covers the maximum supported source timeout. This preserves database integrity without force-terminating a worker while it may own SQLite or notification state.

@@ -50,6 +50,52 @@ class WindowsScheduledTaskTests(unittest.TestCase):
             dt.datetime(2026, 7, 13, 9, 0, 0),
         )
 
+    def test_start_boundary_honors_an_exact_time_two_minutes_ahead(self):
+        now = dt.datetime(2026, 7, 31, 2, 24, 37)
+
+        boundary = scheduled.next_start_boundary(24, "02:26", now=now)
+
+        self.assertEqual(boundary, dt.datetime(2026, 7, 31, 2, 26, 0))
+        self.assertEqual(boundary - now, dt.timedelta(minutes=1, seconds=23))
+
+    def test_every_start_minute_stays_future_and_on_the_interval_phase(self):
+        timezone = dt.timezone(dt.timedelta(hours=10))
+        moments = (
+            dt.datetime(2026, 7, 31, 0, 0, 1, tzinfo=timezone),
+            dt.datetime(2026, 7, 31, 12, 34, 56, tzinfo=timezone),
+            dt.datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone),
+        )
+        for interval_hours in (1, 6, 12, 24, 48, 168):
+            interval = dt.timedelta(hours=interval_hours)
+            for now in moments:
+                for minute_of_day in range(24 * 60):
+                    hour, minute = divmod(minute_of_day, 60)
+                    start_time = f"{hour:02d}:{minute:02d}"
+                    boundary = scheduled.next_start_boundary(
+                        interval_hours,
+                        start_time,
+                        now=now,
+                    )
+                    anchor = now.replace(
+                        hour=hour,
+                        minute=minute,
+                        second=0,
+                        microsecond=0,
+                    )
+
+                    self.assertGreaterEqual(boundary, now)
+                    if anchor >= now:
+                        self.assertEqual(boundary, anchor)
+                    else:
+                        self.assertLess(boundary, now + interval)
+                    self.assertEqual(boundary.second, 0)
+                    self.assertEqual(boundary.microsecond, 0)
+                    self.assertEqual(
+                        (boundary - anchor).total_seconds()
+                        % interval.total_seconds(),
+                        0,
+                    )
+
     def test_task_xml_is_interactive_non_overlapping_and_runs_when_available(self):
         command = [
             r"C:\Program Files\Paper Monitor\PaperMonitor.exe",

@@ -158,7 +158,7 @@ class DashboardAndMetricsTests(unittest.TestCase):
             {"id": 1, "started_at": "2026-06-24", "fetched": 5, "matched": 2, "new_matches": 1, "skipped": 3},
             [],
             load_journal_metrics(Path("/does/not/exist.json")),
-            AnalysisScope(selected_journals=("Nature Energy", "Joule", "arXiv"), top_n=15),
+            AnalysisScope(selected_journals=("Nature Energy", "Joule", "arXiv")),
         )
 
         self.assertIn('<div class="pill">Selected journals: 3</div>', html)
@@ -508,6 +508,205 @@ if (timeHtml.indexOf("Low") > timeHtml.indexOf("High")) {{
 
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_matched_papers_script_pages_large_lists_without_dropping_data(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+
+        script = _matched_papers_script()[len("<script>") : -len("</script>")]
+        harness = f"""
+global.document = {{
+  addEventListener() {{}},
+  getElementById() {{ return null; }}
+}};
+{script}
+const items = Array.from({{length: 120}}, (_, index) => ({{
+  title: "Paper " + index,
+  html: "<article>Paper " + index + "</article>",
+  detected: "2026-07-" + String(30 - (index % 30)).padStart(2, "0"),
+  detected_label: "Date " + index,
+  impact_factor: 120 - index,
+  index
+}}));
+const firstPage = renderMatchedPapers(items, "impact_factor", "<p>empty</p>", 50);
+if ((firstPage.match(/<article>/g) || []).length !== 50) {{
+  throw new Error("first page should render 50 papers");
+}}
+if (!firstPage.includes("Show older papers") || !firstPage.includes("70 remaining")) {{
+  throw new Error("first page should expose the remaining papers");
+}}
+const secondPage = renderMatchedPapers(items, "impact_factor", "<p>empty</p>", 100);
+if ((secondPage.match(/<article>/g) || []).length !== 100) {{
+  throw new Error("second page should render 100 papers");
+}}
+"""
+
+        result = _run_node_script(node, harness)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_matched_papers_script_preserves_the_server_rendered_first_page(self):
+        script = _matched_papers_script()
+        wire_body = script.split("function wireMatchedPapersSort()", 1)[1].split(
+            "function renderMatchedPapers", 1
+        )[0]
+
+        self.assertNotIn("\n  render();\n}", wire_body)
+
+    def test_keyword_analysis_initialization_waits_until_view_is_opened(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+
+        script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
+        harness = f"""
+let ready = null;
+global.document = {{
+  addEventListener(name, callback) {{
+    if (name === "DOMContentLoaded") ready = callback;
+  }},
+  getElementById(id) {{
+    if (id === "keyword-analysis-data") return {{ textContent: "{{}}" }};
+    return null;
+  }}
+}};
+{script}
+let loaded = 0;
+let defaulted = 0;
+let rendered = 0;
+loadSavedAnalysisState = function () {{ loaded += 1; }};
+initializeAnalysisDefaults = function () {{ defaulted += 1; }};
+renderKeywordAnalysis = function () {{ rendered += 1; }};
+wireDashboardRefreshEvents = function () {{}};
+wireAnalysisEvents = function () {{}};
+restoreDashboardView = function () {{}};
+ready();
+if (loaded || defaulted || rendered) {{
+  throw new Error("hidden analysis initialized during dashboard startup");
+}}
+showKeywordAnalysisView();
+if (loaded !== 1 || defaulted !== 1 || rendered !== 1) {{
+  throw new Error("analysis did not initialize exactly once when opened");
+}}
+showKeywordAnalysisView();
+if (loaded !== 1 || defaulted !== 1 || rendered !== 2) {{
+  throw new Error("analysis initialization was repeated");
+}}
+"""
+
+        result = _run_node_script(node, harness)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_deferred_keyword_analysis_fetches_local_seed_once(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not available")
+
+        script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
+        harness = f"""
+const payloadElement = {{ textContent: JSON.stringify({{ deferred: true }}) }};
+global.document = {{
+  addEventListener() {{}},
+  getElementById(id) {{
+    if (id === "keyword-analysis-data") return payloadElement;
+    return null;
+  }},
+  createElement() {{ return {{}}; }}
+}};
+global.localStorage = {{ getItem() {{ return null; }}, setItem() {{}} }};
+global.navigator = {{}};
+global.window = {{
+  paperMonitorBridgeBaseURL: "http://127.0.0.1:8765/",
+  paperMonitorBridgeToken: "secret-token"
+}};
+let requests = [];
+global.fetch = function (url, options) {{
+  requests.push({{ url, options }});
+  return Promise.resolve({{
+    ok: true,
+    json() {{
+      return Promise.resolve({{
+        scope: {{}},
+        taxonomy: [],
+        blocklist: [],
+        journal_catalog: [],
+        papers: [{{ id: "paper-1", title: "Local seed" }}]
+      }});
+    }}
+  }});
+}};
+{script}
+let loaded = 0;
+let defaulted = 0;
+let rendered = 0;
+loadSavedAnalysisState = function () {{ loaded += 1; }};
+initializeAnalysisDefaults = function () {{ defaulted += 1; }};
+renderKeywordAnalysis = function () {{ rendered += 1; }};
+
+(async function () {{
+  initializeKeywordAnalysis();
+  initializeKeywordAnalysis();
+  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  if (requests.length !== 1) throw new Error("deferred seed should be fetched once");
+  if (requests[0].url !== "http://127.0.0.1:8765/api/keyword-analysis-data") {{
+    throw new Error("unexpected seed URL " + requests[0].url);
+  }}
+  if (requests[0].options.headers["X-Paper-Monitor-Token"] !== "secret-token") {{
+    throw new Error("missing local authorization token");
+  }}
+  if (!keywordAnalysisInitialized || loaded !== 1 || defaulted !== 1) {{
+    throw new Error("deferred analysis was not initialized exactly once");
+  }}
+  if (keywordAnalysisState.payload.papers[0].title !== "Local seed") {{
+    throw new Error("local seed did not replace deferred bootstrap");
+  }}
+  if (rendered !== 1) throw new Error("loaded seed should render once");
+}})().catch(function (error) {{
+  console.error(error && error.stack || error);
+  process.exitCode = 1;
+}});
+"""
+
+        result = _run_node_script(node, harness)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dashboard_initial_dom_is_bounded_but_payload_retains_all_papers(self):
+        candidates = []
+        for index in range(60):
+            candidates.append(
+                {
+                    "title": f"Paper {index}",
+                    "journal": "Nature Energy",
+                    "url": f"https://example.org/{index}",
+                    "doi": f"10.1000/{index}",
+                    "published": f"2026-06-{(index % 30) + 1:02d}",
+                    "detected": f"2026-06-{(index % 30) + 1:02d}",
+                    "source": "fixture",
+                    "matched": True,
+                    "reason": "matched",
+                    "matched_terms": ["solid electrolyte"],
+                    "journal_match": "Nature Energy",
+                }
+            )
+
+        html = render_dashboard(
+            {"id": 1, "started_at": "2026-06-30", "matched": len(candidates)},
+            candidates,
+            load_journal_metrics(Path("/does/not/exist.json")),
+        )
+        initial_html, payload_and_rest = html.split(
+            '<script type="application/json" id="matched-papers-data">',
+            1,
+        )
+        payload_text = payload_and_rest.split("</script>", 1)[0]
+        payload = json.loads(payload_text)
+
+        self.assertEqual(initial_html.count('<article class="paper">'), 50)
+        self.assertIn("Show older papers", initial_html)
+        self.assertEqual(len(payload["items"]), 60)
+
     def test_escapes_metric_level_text_in_dashboard(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             metrics_path = Path(temp_dir) / "metrics.json"
@@ -793,8 +992,29 @@ if (timeHtml.indexOf("Low") > timeHtml.indexOf("High")) {{
             "coercePositiveInt",
             "localStorage",
             "analyzeKeywords",
+            "loadDeferredKeywordAnalysisPayload",
+            "/api/keyword-analysis-data",
         ]:
             self.assertIn(hook, html)
+
+    def test_dashboard_can_defer_keyword_analysis_seed_data(self):
+        html = render_dashboard(
+            {"id": 1},
+            [
+                {
+                    "title": "Deferred paper",
+                    "url": "https://example.org/deferred",
+                    "matched": True,
+                }
+            ],
+            load_journal_metrics(Path("/does/not/exist.json")),
+            defer_keyword_analysis=True,
+        )
+        start = '<script type="application/json" id="keyword-analysis-data">'
+        payload = json.loads(html.split(start, 1)[1].split("</script>", 1)[0])
+
+        self.assertEqual(payload, {"deferred": True})
+        self.assertNotIn('"taxonomy":', html)
 
     def test_keyword_analysis_script_is_valid_javascript(self):
         node = shutil.which("node")
@@ -1031,7 +1251,6 @@ initializeAnalysisDefaults();
 keywordAnalysisState.dateFrom = "2026-06-01";
 keywordAnalysisState.dateTo = "2026-06-24";
 keywordAnalysisState.sortMode = "impact_factor";
-keywordAnalysisState.topN = 12;
 keywordAnalysisState.selectedJournals = ["Nature Energy"];
 const controls = renderAnalysisControls();
 if (controls.includes('data-scope-action="run-keyword-analysis"') || controls.includes(">Analyze<")) {{
@@ -1047,8 +1266,8 @@ if (posted.type !== "analyzeKeywords") {{
 if (posted.date_from !== "2026-06-01" || posted.date_to !== "2026-06-24") {{
   throw new Error("date range not posted correctly: " + JSON.stringify(posted));
 }}
-if (posted.sort_mode !== "impact_factor" || posted.top_n !== 12) {{
-  throw new Error("sort/topN not posted correctly: " + JSON.stringify(posted));
+if (posted.sort_mode !== "impact_factor" || Object.prototype.hasOwnProperty.call(posted, "top_n")) {{
+  throw new Error("sort or removed top_n field not posted correctly: " + JSON.stringify(posted));
 }}
 if (posted.analysis_depth !== "fast") {{
   throw new Error("analysis depth should default to fast: " + JSON.stringify(posted));
@@ -1171,7 +1390,7 @@ if (keywordAnalysisState.dateTo !== "2026-06-24") {{
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30},
+            "scope": {},
             "taxonomy": [],
             "blocklist": [],
             "papers": [],
@@ -1247,7 +1466,7 @@ if (button.textContent !== "Analyzing..." || !button.disabled) {{
         if node is None:
             self.skipTest("node is not available")
 
-        payload = {"scope": {"top_n": 30}, "taxonomy": [], "blocklist": [], "papers": []}
+        payload = {"scope": {}, "taxonomy": [], "blocklist": [], "papers": []}
         script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
         harness = f"""
 const payload = {json.dumps(payload)};
@@ -1341,7 +1560,7 @@ if (keywordAnalysisState.dateTo !== "2024-02-29") {{
         if node is None:
             self.skipTest("node is not available")
 
-        payload = {"scope": {"top_n": 30}, "taxonomy": [], "blocklist": [], "papers": []}
+        payload = {"scope": {}, "taxonomy": [], "blocklist": [], "papers": []}
         script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
         harness = f"""
 const payload = {json.dumps(payload)};
@@ -1443,7 +1662,7 @@ if (keywordAnalysisState.dateFrom !== "2024-02-29") {{
         if node is None:
             self.skipTest("node is not available")
 
-        payload = {"scope": {"top_n": 30}, "taxonomy": [], "blocklist": [], "papers": []}
+        payload = {"scope": {}, "taxonomy": [], "blocklist": [], "papers": []}
         script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
         harness = f"""
 const payload = {json.dumps(payload)};
@@ -1517,7 +1736,7 @@ if (posted.date_from !== "2026-01-01" || posted.date_to !== "2026-06-30") {{
         if node is None:
             self.skipTest("node is not available")
 
-        payload = {"scope": {"top_n": 30}, "taxonomy": [], "blocklist": [], "papers": []}
+        payload = {"scope": {}, "taxonomy": [], "blocklist": [], "papers": []}
         script = _keyword_analysis_script()[len("<script>") : -len("</script>")]
         harness = f"""
 const payload = {json.dumps(payload)};
@@ -1598,14 +1817,13 @@ if (keywordAnalysisState.dateFrom !== "2026-06-24") {{
         if node is None:
             self.skipTest("node is not available")
 
-        payload = {"scope": {"top_n": 30}, "taxonomy": [], "blocklist": [], "papers": []}
+        payload = {"scope": {}, "taxonomy": [], "blocklist": [], "papers": []}
         refreshed = {
             "scope": {
                 "date_from": "2026-06-01",
                 "date_to": "2026-06-24",
                 "selected_journals": ["Journal of Power Sources"],
                 "sort_mode": "time",
-                "top_n": 5,
                 "source": "crossref",
             },
             "taxonomy": [],
@@ -1678,7 +1896,7 @@ renderKeywordAnalysis = originalRender;
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30, "source": "crossref"},
+            "scope": {"source": "crossref"},
             "taxonomy": [],
             "blocklist": [],
             "papers": [],
@@ -1720,7 +1938,7 @@ if (!status.includes("0 fetched") || !status.includes("0 matched")) {{
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30},
+            "scope": {},
             "taxonomy": [],
             "blocklist": [],
             "papers": [],
@@ -1793,7 +2011,7 @@ if (elements["keyword-analysis-nav"].textContent !== "Keyword Analysis") {{
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 2},
+            "scope": {},
             "taxonomy": [],
             "blocklist": [],
             "papers": [
@@ -1844,11 +2062,10 @@ global.window = {{}};
 global.navigator = {{}};
 {script}
 initializeAnalysisDefaults();
-keywordAnalysisState.topN = 2;
 keywordAnalysisState.selectedTerms = ["term that no longer has a visible filter"];
 let selectedIds = selectedAnalysisPapers().map((paper) => paper.id);
 if (selectedIds.join(",") !== "paper-1,paper-2,paper-3") {{
-  throw new Error("expected article selection to ignore stale matched-term filters and not apply Top Journals as an article cap, got " + selectedIds.join(","));
+  throw new Error("expected article selection to ignore stale matched-term filters, got " + selectedIds.join(","));
 }}
 keywordAnalysisState.hasPaperSelection = true;
 keywordAnalysisState.selectedPaperIds = ["paper-3"];
@@ -1875,7 +2092,7 @@ if (controls.includes("data-term-option") || controls.includes("<h3>Matched Term
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30},
+            "scope": {},
             "taxonomy": [],
             "blocklist": [],
             "papers": [
@@ -1943,7 +2160,7 @@ let controls = renderAnalysisControls();
     throw new Error("left controls should not include " + fragment);
   }}
 }});
-["analysis-sort-prev", "analysis-sort-next", "analysis-top-n-decrement", "analysis-top-n-increment"].forEach((action) => {{
+["analysis-sort-prev", "analysis-sort-next"].forEach((action) => {{
   if (!controls.includes('data-stepper-action="' + action + '"')) {{
     throw new Error("missing stepper action " + action);
   }}
@@ -1952,9 +2169,8 @@ if (!controls.includes('data-stepper-action="analysis-sort-prev" aria-label="Pre
     !controls.includes('data-stepper-action="analysis-sort-next" aria-label="Next sort mode">&gt;</button>')) {{
   throw new Error("sort stepper should use left/right angle controls: " + controls);
 }}
-if (!controls.includes('data-stepper-action="analysis-top-n-decrement" aria-label="Decrease top journals">-</button>') ||
-    !controls.includes('data-stepper-action="analysis-top-n-increment" aria-label="Increase top journals">+</button>')) {{
-  throw new Error("Top Journals stepper should keep minus/plus controls: " + controls);
+if (controls.includes("analysis-top-n") || controls.includes("Top Journals")) {{
+  throw new Error("removed Top N controls should not render: " + controls);
 }}
 if (!controls.includes('class="analysis-dual-listbox analysis-journal-list"')) {{
   throw new Error("journal list should use taller analysis-specific class");
@@ -2049,15 +2265,6 @@ applyAnalysisStepperAction("analysis-sort-next");
 if (keywordAnalysisState.sortMode !== "impact_factor") {{
   throw new Error("sort stepper should advance to impact factor, got " + keywordAnalysisState.sortMode);
 }}
-keywordAnalysisState.topN = 2;
-applyAnalysisStepperAction("analysis-top-n-increment");
-if (keywordAnalysisState.topN !== 3) {{
-  throw new Error("Top N increment failed, got " + keywordAnalysisState.topN);
-}}
-applyAnalysisStepperAction("analysis-top-n-decrement");
-if (keywordAnalysisState.topN !== 2) {{
-  throw new Error("Top N decrement failed, got " + keywordAnalysisState.topN);
-}}
 applyAnalysisControlAction("clear-journals");
 if (selectedAnalysisPapers().length !== 0) {{
   throw new Error("clearing journals should empty selected papers");
@@ -2093,9 +2300,14 @@ if (terms.includes("interfacial resistance") || terms.includes("lithium depositi
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30, "selected_journals": ["Nature Energy", "Joule"]},
+            "scope": {"selected_journals": ["Nature Energy", "Joule"]},
             "taxonomy": [],
             "blocklist": [],
+            "journal_catalog": [
+                {"journal": "Nature Energy"},
+                {"journal": "Joule"},
+                {"journal": "Science"},
+            ],
             "papers": [
                 {
                     "id": "paper-1",
@@ -2170,7 +2382,7 @@ if (!posted || posted.journals.join(",") !== "Nature Energy,Joule") {{
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30, "selected_journals": ["Nature Energy", "Joule"]},
+            "scope": {"selected_journals": ["Nature Energy", "Joule"]},
             "taxonomy": [],
             "blocklist": [],
             "papers": [],
@@ -2216,7 +2428,7 @@ if (keywordAnalysisState.selectedJournals.join(",") !== "Nature Energy,Joule") {
             self.skipTest("node is not available")
 
         payload = {
-            "scope": {"top_n": 30},
+            "scope": {},
             "taxonomy": [],
             "blocklist": [],
             "papers": [

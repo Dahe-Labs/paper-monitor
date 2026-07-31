@@ -23,7 +23,6 @@ from typing import Any
 
 TASK_XML_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 LEGACY_TASK_NAME = r"\PaperMonitor Scheduled Refresh"
-DEFAULT_TASK_NAME = LEGACY_TASK_NAME
 TASK_NAME_PREFIX = r"\PaperMonitor\Scheduled Refresh - "
 LEGACY_SILENT_STARTUP_TASK_NAME = r"\PaperMonitor Tray"
 SILENT_STARTUP_TASK_NAME_PREFIX = r"\PaperMonitor\Tray at sign-in - "

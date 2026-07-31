@@ -24,6 +24,7 @@ from .config import AppConfig, load_app_config
 from .filtering import match_article
 from .journal_metrics import JournalMetrics, load_journal_metrics
 from .models import Article, normalize_doi
+from .refresh_cancellation import RefreshCancellation, RefreshCancelled
 from .refresh_errors import RefreshAlreadyRunning
 from .sources import fetch_all_sources
 from .windows_mutex import REFRESH_MUTEX_NAME, acquire_mutex, close_handle
@@ -55,12 +56,16 @@ class RefreshOutcome:
 @dataclass(frozen=True)
 class _ExecutionDependencies:
     load_config: Callable[[Path], AppConfig]
-    fetch_sources: Callable[[Mapping[str, object]], Sequence[Article]]
+    fetch_sources: Callable[
+        [Mapping[str, object], RefreshCancellation],
+        Sequence[Article],
+    ]
     load_metrics: Callable[[Path], JournalMetrics]
     lifecycle_factory: Callable[[Path], ArticleLifecycle]
     notification_adapter_factory: Callable[[AppConfig], Optional[NotificationAdapter]]
     acquire_refresh_mutex: Callable[[], object]
     close_refresh_mutex: Callable[[object], None]
+    create_refresh_cancellation: Callable[[], RefreshCancellation]
     new_run_id: Callable[[], str]
 
 
@@ -78,7 +83,12 @@ class RefreshExecution:
         self.config_path = Path(config_path).expanduser().resolve()
         dependencies = _production_dependencies()
         if fetch_sources is not None:
-            dependencies = replace(dependencies, fetch_sources=fetch_sources)
+            dependencies = replace(
+                dependencies,
+                fetch_sources=lambda source_config, _cancellation: fetch_sources(
+                    source_config
+                ),
+            )
         self._dependencies = dependencies
 
     def execute(self, intent: RefreshIntent) -> RefreshOutcome:
@@ -87,22 +97,41 @@ class RefreshExecution:
             raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
 
         refresh_mutex = None
+        cancellation = None
         try:
             refresh_mutex = self._dependencies.acquire_refresh_mutex()
             if refresh_mutex is None:
                 raise RefreshAlreadyRunning("A Paper Monitor refresh is already running.")
-            return self._execute_owned(refresh_intent)
+            cancellation = self._dependencies.create_refresh_cancellation()
+            cancellation.checkpoint()
+            return self._execute_owned(refresh_intent, cancellation)
         finally:
-            self._dependencies.close_refresh_mutex(refresh_mutex)
-            _PROCESS_REFRESH_LOCK.release()
+            try:
+                if cancellation is not None:
+                    cancellation.close()
+            finally:
+                try:
+                    self._dependencies.close_refresh_mutex(refresh_mutex)
+                finally:
+                    _PROCESS_REFRESH_LOCK.release()
 
-    def _execute_owned(self, intent: RefreshIntent) -> RefreshOutcome:
+    def _execute_owned(
+        self,
+        intent: RefreshIntent,
+        cancellation: RefreshCancellation,
+    ) -> RefreshOutcome:
         config = self._dependencies.load_config(self.config_path)
         lifecycle = self._dependencies.lifecycle_factory(config.database_path)
         run_id = str(self._dependencies.new_run_id())
 
         try:
-            fetched_articles = self._dependencies.fetch_sources(config.source_config)
+            fetched_articles = self._dependencies.fetch_sources(
+                config.source_config,
+                cancellation,
+            )
+            cancellation.checkpoint()
+        except RefreshCancelled:
+            raise
         except Exception as exc:
             return self._failed_outcome(
                 lifecycle,
@@ -129,6 +158,7 @@ class RefreshExecution:
         matched_count = 0
         skipped_count = 0
         for article in fetched_articles:
+            cancellation.checkpoint()
             match = match_article(article, config.monitor_config.filter_config)
             if not match.matched:
                 skipped_count += 1
@@ -161,6 +191,7 @@ class RefreshExecution:
             if _is_partial(fetched_articles, source_statuses)
             else RefreshRunStatus.SUCCEEDED
         )
+        cancellation.checkpoint()
         commit = lifecycle.commit_refresh(
             RefreshCommit(
                 run_id=run_id,
@@ -176,9 +207,11 @@ class RefreshExecution:
 
         notification = None
         snapshot = None
+        cancellation.checkpoint()
         if intent is RefreshIntent.BACKGROUND and config.app_settings.notifications_enabled:
             notifier = self._dependencies.notification_adapter_factory(config)
             if notifier is not None:
+                cancellation.checkpoint()
                 notification = lifecycle.deliver_notification(run_id, notifier)
             else:
                 notification = NotificationOutcome(
@@ -240,24 +273,33 @@ class RefreshExecution:
 
 
 def _production_dependencies() -> _ExecutionDependencies:
+    from .windows_refresh_control import create_refresh_cancellation
+
     return _ExecutionDependencies(
         load_config=load_app_config,
-        fetch_sources=fetch_all_sources,
+        fetch_sources=lambda source_config, cancellation: fetch_all_sources(
+            source_config,
+            cancellation=cancellation,
+        ),
         load_metrics=load_journal_metrics,
         lifecycle_factory=ArticleLifecycle,
         notification_adapter_factory=_production_notification_adapter,
         acquire_refresh_mutex=lambda: acquire_mutex(REFRESH_MUTEX_NAME),
         close_refresh_mutex=close_handle,
+        create_refresh_cancellation=create_refresh_cancellation,
         new_run_id=lambda: uuid.uuid4().hex,
     )
 
 
-def _production_notification_adapter(_config: AppConfig) -> Optional[NotificationAdapter]:
+def _production_notification_adapter(config: AppConfig) -> Optional[NotificationAdapter]:
     if sys.platform != "win32":
         return None
     from .windows_notification import WindowsSummaryNotificationAdapter
 
-    return WindowsSummaryNotificationAdapter()
+    return WindowsSummaryNotificationAdapter(
+        dashboard_path=config.dashboard_path,
+        max_notifications=config.monitor_config.max_notifications,
+    )
 
 
 def _source_statuses(result: object) -> Tuple[Mapping[str, object], ...]:

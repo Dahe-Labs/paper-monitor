@@ -47,24 +47,15 @@ from scripts.generate_windows_version_info import numeric_version, render_versio
 class StabilityFixTests(unittest.TestCase):
     def test_install_script_configures_scheduler_without_starting_tray(self):
         script = Path("scripts/install_windows_app.ps1").read_text(encoding="utf-8")
-        release_script = Path("windows/Install-PaperMonitor.ps1").read_text(encoding="utf-8")
 
         self.assertIn("[switch]$EnableStartup", script)
         self.assertIn("[switch]$LaunchAfterInstall", script)
-        self.assertIn("[switch]$EnableStartup", release_script)
-        self.assertIn("[switch]$LaunchAfterInstall", release_script)
         self.assertIn("if ($EnableStartup)", script)
-        self.assertIn("if ($EnableStartup)", release_script)
         self.assertIn("if ($LaunchAfterInstall)", script)
-        self.assertIn("if ($LaunchAfterInstall)", release_script)
         self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList "tray --quiet"', script)
-        self.assertNotIn('Start-Process -FilePath $InstalledExe -ArgumentList @("tray", "--quiet")', release_script)
         self.assertIn('Invoke-Native -FilePath $InstalledExe -Arguments @("install-startup", "--config", $Config)', script)
-        self.assertIn("& $InstalledExe install-startup", release_script)
         self.assertIn("function Stop-InstalledPaperMonitor", script)
-        self.assertIn("function Stop-InstalledPaperMonitor", release_script)
         self.assertIn("Stop-InstalledPaperMonitor -ExecutablePath $InstalledExe", script)
-        self.assertIn("Stop-InstalledPaperMonitor -ExecutablePath $InstalledExe", release_script)
 
     def test_config_readers_accept_utf8_bom_without_preserving_it_on_save(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,22 +97,38 @@ class StabilityFixTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.json"
+            icon_path = Path(directory) / "PaperMonitor.ico"
+            icon_path.write_bytes(b"icon")
             fake_webview = FakeWebview()
             fake_server = FakeServer()
             with patch.dict(os.environ, {"LOCALAPPDATA": directory}):
                 with patch("paper_monitor.windows_app_window._load_webview", return_value=fake_webview):
                     with patch(
-                        "paper_monitor.windows_app_window._release_webview2_resources"
-                    ) as release_webview:
-                        status = windows_app_window.open_dashboard_window(
-                            config_path,
-                            dashboard_server_factory=lambda _path: fake_server,
-                        )
+                        "paper_monitor.windows_app_window.default_windows_icon_path",
+                        return_value=icon_path,
+                    ):
+                        with patch(
+                            "paper_monitor.windows_app_window._release_webview2_resources"
+                        ) as release_webview:
+                            with patch(
+                                "paper_monitor.windows_app_window._acquire_window_mutex",
+                                return_value=1,
+                            ):
+                                with patch(
+                                    "paper_monitor.windows_app_window.close_handle"
+                                ):
+                                    status = windows_app_window.open_dashboard_window(
+                                        config_path,
+                                        dashboard_server_factory=lambda _path: fake_server,
+                                    )
 
-                        self.assertEqual(release_webview.call_count, 1)
+                            self.assertEqual(release_webview.call_count, 1)
 
             self.assertEqual(status, 0)
-            self.assertEqual(fake_webview.start_kwargs, {"private_mode": True})
+            self.assertEqual(
+                fake_webview.start_kwargs,
+                {"private_mode": True, "icon": str(icon_path)},
+            )
             self.assertEqual(fake_server.stop_count, 1)
             self.assertEqual(fake_server.stop_count, 1)
 
@@ -467,7 +474,7 @@ class StabilityFixTests(unittest.TestCase):
             self.assertEqual(server.refresh_status()["status"], "failed")
 
     def test_settings_page_uses_top_left_back_link_and_restore_defaults(self):
-        html = render_settings_page(Path("config.json"), "http://127.0.0.1:1", "token")
+        html = render_settings_page("http://127.0.0.1:1", "token")
 
         self.assertIn('class="back-link" id="dashboard-link"', html)
         self.assertIn("&larr; Main Window", html)
@@ -478,6 +485,10 @@ class StabilityFixTests(unittest.TestCase):
         self.assertIn('data-testid="journal-sort-mode"', html)
         self.assertIn('data-testid="manual-journal-name"', html)
         self.assertIn('id="openalex_max_pages"', html)
+        self.assertIn('id="crossref_pool_status"', html)
+        self.assertIn("Public pool: 1 effective worker", html)
+        self.assertIn("Polite pool:", html)
+        self.assertIn("the email is sent to Crossref with requests", html)
         self.assertIn("Background Monitoring", html)
         self.assertIn("Run short scheduled refresh tasks", html)
         self.assertIn("Start at Windows Sign-in", html)
@@ -531,7 +542,7 @@ class StabilityFixTests(unittest.TestCase):
                 import os
 
                 os.chdir(directory)
-                html = render_settings_page(Path("config.json"), "http://127.0.0.1:1", "token")
+                html = render_settings_page("http://127.0.0.1:1", "token")
             finally:
                 os.chdir(current)
 
@@ -586,6 +597,68 @@ class StabilityFixTests(unittest.TestCase):
                     "refresh_on_launch": True,
                 },
             )
+
+    def test_background_monitoring_requires_an_exact_start_time(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(
+                json.dumps(DEFAULT_CONFIG, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            response = save_settings(
+                config_path,
+                {
+                    "refresh_start_time": "",
+                    "app_settings": {"startup_enabled": True},
+                },
+            )
+
+        self.assertIn("Start Time is required", response["error"])
+
+    def test_start_at_sign_in_cannot_be_saved_without_the_tray(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(
+                json.dumps(DEFAULT_CONFIG, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            response = save_settings(
+                config_path,
+                {
+                    "app_settings": {
+                        "launch_at_login": True,
+                        "show_tray_icon": False,
+                    }
+                },
+            )
+
+        self.assertIn("requires Tray Icon", response["error"])
+
+    def test_network_sources_are_disabled_without_a_formal_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.json"
+            config_path.write_text(
+                json.dumps(DEFAULT_CONFIG, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            response = save_settings(
+                config_path,
+                {
+                    "journal_scope": {"selected_journals": ["arXiv"]},
+                    "sources": {
+                        "crossref": {"enabled": True},
+                        "openalex": {"enabled": False},
+                    },
+                },
+            )
+            saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(response, {"ok": True})
+        self.assertFalse(saved["sources"]["crossref"]["enabled"])
+        self.assertFalse(saved["sources"]["openalex"]["enabled"])
 
     def test_app_settings_save_preserves_unknown_future_keys(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -716,19 +789,42 @@ class StabilityFixTests(unittest.TestCase):
 
         self.assertIn('"_sqlite3"', script)
         self.assertIn('"unicodedata"', script)
+        self.assertIn('"winrt.windows.data.xml.dom"', script)
+        self.assertIn('"winrt.windows.ui.notifications"', script)
+        self.assertNotIn('"--hidden-import",\n  "win11toast"', script)
+        self.assertIn('"--exclude-module",\n  "win11toast"', script)
+        self.assertIn('"winrt.windows.media.playback"', script)
+        self.assertIn('"winrt.windows.storage.streams"', script)
         self.assertIn('"--collect-data"', script)
         self.assertIn('"--collect-binaries"', script)
         self.assertIn('"--collect-submodules"', script)
         self.assertIn('($WebViewLib + ";webview\\lib")', script)
         self.assertIn("Test-OnedirWebViewRuntime", script)
         self.assertIn("Test-OnefileWebViewRuntime", script)
-        self.assertIn("win-arm64\\native\\WebView2Loader.dll", script)
+        self.assertIn('"PyInstaller.utils.cliutils.archive_viewer"', script)
+        self.assertNotIn("Get-PyInstallerArchiveViewer", script)
         self.assertIn("win-x64\\native\\WebView2Loader.dll", script)
-        self.assertIn("win-x86\\native\\WebView2Loader.dll", script)
+        self.assertIn('$UnsupportedWebViewRuntimes = @("win-arm64", "win-x86")', script)
+        self.assertIn("Remove-UnsupportedOnedirWebViewBinaries", script)
+        self.assertIn('"\\native\\WebView2Loader.dll")', script)
+        self.assertIn("Remove-UnusedOnedirFiles", script)
+        self.assertIn('"pythonnet\\runtime\\Python.Runtime.xml"', script)
+        self.assertIn('$EmbeddedOnedirTray = Join-Path $OneDirRoot "_internal\\PaperMonitorTray.exe"', script)
+        self.assertIn("Remove-Item -LiteralPath $EmbeddedOnedirTray -Force", script)
+        self.assertNotIn('Join-Path $Root "LICENSE"', script)
+        self.assertIn('$EmbeddedOnedirIcon = Join-Path $OneDirRoot "_internal\\windows\\assets\\PaperMonitor.ico"', script)
         self.assertIn("generate_windows_version_info.py", script)
         self.assertIn('"--version-file"', script)
         self.assertIn('".venv\\Scripts\\python.exe"', script)
         self.assertLess(script.index('@("python")'), script.index('@("py", "-3")'))
+
+        requirements = Path("requirements-windows.lock.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("win11toast", requirements)
+        self.assertIn("winrt-windows-data-xml-dom==", requirements)
+        self.assertIn("winrt-windows-ui-notifications==", requirements)
+        self.assertNotIn("winrt-windows-media-", requirements)
 
     def test_windows_version_info_supports_timestamp_release_versions(self):
         self.assertEqual(numeric_version("20260710-055055"), (2026, 7, 10, 550))

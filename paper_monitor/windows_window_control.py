@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,24 +125,6 @@ def send_window_control(
     if decoded.get("ok") is False:
         raise WindowControlError(str(decoded.get("error") or "Window control failed."))
     return decoded
-
-
-def send_window_control_with_retry(
-    config_path: Path,
-    action: str,
-    route: Optional[str] = None,
-    timeout: float = CONTROL_TIMEOUT_SECONDS,
-    ready_timeout: float = 5.0,
-    retry_interval: float = 0.1,
-) -> Dict[str, object]:
-    deadline = time.monotonic() + max(0.0, float(ready_timeout))
-    while True:
-        try:
-            return send_window_control(config_path, action, route=route, timeout=timeout)
-        except WindowControlError:
-            if time.monotonic() >= deadline:
-                raise
-            time.sleep(max(0.01, float(retry_interval)))
 
 
 def _is_loopback_url(value: str) -> bool:

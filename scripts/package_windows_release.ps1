@@ -199,6 +199,7 @@ if ($SigningEnabled) {
 
 if (-not $SkipBuild) {
   if ($SigningEnabled) {
+    & (Join-Path $Root "scripts\build_windows_app.ps1") -GenerateIconOnly
     & (Join-Path $Root "scripts\build_windows_native_tray.ps1") -OutputPath $DistNativeTray
     Invoke-CodeSign `
       -SignTool $ResolvedSignTool `
@@ -270,8 +271,6 @@ New-Item -ItemType Directory -Path $StagingDir | Out-Null
 
 Copy-Item -Path (Join-Path $DistAppDir "*") -Destination $StagingDir -Recurse -Force
 Copy-ReleaseFile -Source (Join-Path $Root "README_WINDOWS.md") -Destination (Join-Path $StagingDir "README_WINDOWS.md")
-Copy-ReleaseFile -Source (Join-Path $Root "config.example.json") -Destination (Join-Path $StagingDir "config.example.json")
-Copy-ReleaseFile -Source (Join-Path $Root "journal_metrics.json") -Destination (Join-Path $StagingDir "journal_metrics.json")
 
 $PackageHashes = Get-ChildItem -LiteralPath $StagingDir -File -Recurse |
   Sort-Object FullName |
