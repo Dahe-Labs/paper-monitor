@@ -1,5 +1,5 @@
 -r requirements-test.txt
 bandit==1.9.4
-coverage==7.15.0
+coverage==7.15.3
 pip-audit==2.10.1
 ruff==0.15.21
