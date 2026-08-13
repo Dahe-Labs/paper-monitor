@@ -4,7 +4,7 @@ altgraph==0.17.5
     # via pyinstaller
 bottle==0.13.4
     # via pywebview
-cffi==2.1.0 ; sys_platform == 'win32'
+cffi==2.1.1 ; sys_platform == 'win32'
     # via clr-loader
 clr-loader==0.3.1 ; sys_platform == 'win32'
     # via pythonnet
