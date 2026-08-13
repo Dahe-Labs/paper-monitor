@@ -30,7 +30,7 @@ pywebview==6.2.1
     # via -r requirements-windows.txt
 pywin32-ctypes==0.2.3 ; sys_platform == 'win32'
     # via pyinstaller
-setuptools==83.0.0
+setuptools==84.0.0
     # via pyinstaller
 typing-extensions==4.16.0
     # via
