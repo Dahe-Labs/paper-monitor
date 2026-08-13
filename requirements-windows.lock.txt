@@ -8,7 +8,7 @@ cffi==2.1.0 ; sys_platform == 'win32'
     # via clr-loader
 clr-loader==0.3.1 ; sys_platform == 'win32'
     # via pythonnet
-packaging==26.2
+packaging==26.3
     # via
     #   pyinstaller
     #   pyinstaller-hooks-contrib
